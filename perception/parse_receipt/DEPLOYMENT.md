@@ -1,0 +1,124 @@
+# 部署说明
+
+这份文档给服务器部署同事使用。当前服务的作用是：
+
+```text
+输入：一张 JPG/PNG 小票图片
+输出：商品结构化 JSON
+```
+
+它不是 Qwen/vLLM 本身，而是 Qwen/vLLM 外面的一层 HTTP 包装服务。
+
+## 1. 服务接口
+
+健康检查：
+
+```text
+GET /health
+```
+
+小票识别：
+
+```text
+POST /receipt/parse
+```
+
+请求使用 `multipart/form-data` 上传图片：
+
+```bash
+curl -F "file=@receipt.jpg" \
+  "http://<host>:<port>/receipt/parse"
+```
+
+默认成功响应：
+
+```json
+[
+  {
+    "name": "票面商品名称",
+    "specification": "70g"
+  }
+]
+```
+
+需要诊断信息时：
+
+```bash
+curl -F "file=@receipt.jpg" \
+  "http://<host>:<port>/receipt/parse?diagnostics=true"
+```
+
+## 2. 环境变量
+
+必须确认：
+
+```bash
+export QWEN_BASE_URL='http://<qwen-host>:<qwen-port>/v1'
+export QWEN_MODEL='Qwen3-VL-4B-Instruct'
+export QWEN_TIMEOUT_SECONDS='120'
+```
+
+如果 Qwen/vLLM 和本服务部署在同一台机器上，`<qwen-host>` 通常可以
+配置为 `127.0.0.1`；如果不在同一台机器上，请把 `QWEN_BASE_URL`
+改成部署机器可以访问到的 OpenAI-compatible `/v1` 地址。
+
+只有 Qwen 服务实际要求认证时才设置：
+
+```bash
+export QWEN_API_KEY='...'
+```
+
+不要把真实 key 写入代码、README、`.env.example` 或 Git。
+
+## 3. 安装
+
+推荐在已有 Python/conda 环境中安装当前仓库：
+
+```bash
+git clone <repo-url>
+cd T-Mates-Grocery/perception/parse_receipt
+python -m pip install -e .
+```
+
+如果需要单独创建 conda 环境：
+
+```bash
+conda env create --file environment.yml
+conda activate receipt-qwen-vl
+python -m pip install -e .
+```
+
+`python -m pip install -e .` 会安装 FastAPI、Pillow、python-multipart 和 uvicorn。
+
+## 4. 启动
+
+本地只给本机访问：
+
+```bash
+uvicorn receipt_recognizer.server:app \
+  --host 127.0.0.1 \
+  --port 18080
+```
+
+服务器部署给其他程序访问时，通常监听：
+
+```bash
+uvicorn receipt_recognizer.server:app \
+  --host 0.0.0.0 \
+  --port <port>
+```
+
+最终 `<port>`、公网入口、URL 前缀和进程管理方式需要由服务器维护者确认。
+
+## 5. 错误响应
+
+失败时服务返回统一结构：
+
+```json
+{
+  "error": {
+    "type": "upstream_response_error",
+    "message": "模型 API 返回 HTTP 502: 响应体为空",
+    "upstream_status_code": 502
+  }
+}

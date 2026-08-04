@@ -1,0 +1,16 @@
+.DS_Store
+.env
+*.local.md
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+data/
+output/
+tmp/
+小票照片/
+receipt-images/
+recepit-images/
+
+# Local printable receipt PDF drafts; keep generated test assets out of Git.
+商超购物小票_*.pdf

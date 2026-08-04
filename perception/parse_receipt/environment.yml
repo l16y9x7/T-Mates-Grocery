@@ -1,0 +1,7 @@
+name: receipt-qwen-vl
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+
