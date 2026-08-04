@@ -1,17 +1,20 @@
 # T-Mates-Grocery
 
-超市机器人相关能力聚合仓库。各子目录对应不同模块；其中 **pose** 通过 Git Submodule 引入 [GenPose2](https://github.com/chenwen0511/GenPose2)。
+超市机器人相关能力聚合仓库。各子目录对应不同模块；其中 **manipulation/pose_estimation** 通过 Git Submodule 引入 [GenPose2](https://github.com/chenwen0511/GenPose2)。
 
 ## 目录结构
 
 ```text
 T-Mates-Grocery/
 ├── agent/           # Agent 相关
-├── manipulation/    # 操作（抓取、放置、位姿估计对接等）
+├── manipulation/
+│   ├── grasp/
+│   ├── release/
+│   └── pose_estimation/
+│       └── GenPose2/   # submodule：6D 位姿估计（GenPose++）
 ├── navigation/      # 导航
 ├── perception/      # 感知（SKU、小票、pick/place 等）
-├── pose/
-│   └── GenPose2/    # submodule：6D 位姿估计（GenPose++）
+├── pose/            # 占位（仅 .gitkeep）
 ├── video_stream/    # 视频流
 └── .gitmodules      # submodule 配置
 ```
@@ -20,7 +23,7 @@ T-Mates-Grocery/
 
 | 路径 | 远程仓库 | 说明 |
 |------|----------|------|
-| `pose/GenPose2` | `git@github.com:chenwen0511/GenPose2.git` | Pose 估计实现 |
+| `manipulation/pose_estimation/GenPose2` | `git@github.com:chenwen0511/GenPose2.git` | Pose 估计实现 |
 
 配置见仓库根目录 `.gitmodules`。
 
@@ -42,13 +45,13 @@ git clone --recurse-submodules git@github.com:l16y9x7/T-Mates-Grocery.git
 cd T-Mates-Grocery
 ```
 
-克隆成功后应能看到 `pose/GenPose2` 内已有完整代码（非空目录）。
+克隆成功后应能看到 `manipulation/pose_estimation/GenPose2` 内已有完整代码（非空目录）。
 
 ---
 
 ## 二、已克隆主仓库、但 submodule 为空
 
-若之前用普通 `git clone`（未带 `--recurse-submodules`），`pose/GenPose2` 可能是空目录，按下面初始化：
+若之前用普通 `git clone`（未带 `--recurse-submodules`），`manipulation/pose_estimation/GenPose2` 可能是空目录，按下面初始化：
 
 ```bash
 cd T-Mates-Grocery
@@ -64,14 +67,14 @@ git submodule update --recursive
 
 ### 权限说明
 
-`pose/GenPose2` 的 URL 为 SSH（`git@github.com:chenwen0511/GenPose2.git`）。本机需要：
+`manipulation/pose_estimation/GenPose2` 的 URL 为 SSH（`git@github.com:chenwen0511/GenPose2.git`）。本机需要：
 
 1. 已配置 GitHub SSH 密钥，且对该仓库有读权限；或
 2. 临时改为 HTTPS（仅本机，一般不要提交改动的 `.gitmodules`）：
 
 ```bash
 # 仅本地调试时可用
-git config submodule.pose/GenPose2.url https://github.com/chenwen0511/GenPose2.git
+git config submodule.manipulation/pose_estimation/GenPose2.url https://github.com/chenwen0511/GenPose2.git
 git submodule sync
 git submodule update --init --recursive
 ```
@@ -104,23 +107,23 @@ git pull --recurse-submodules
 主仓库只锁定某个 **commit**，不会自动跟踪 GenPose2 的最新提交。若要拉 GenPose2 远端最新再记进主仓：
 
 ```bash
-cd pose/GenPose2
+cd manipulation/pose_estimation/GenPose2
 git fetch
 git checkout master          # 或目标分支
 git pull origin master
 cd ../..
 
-# 主仓库会显示 pose/GenPose2 有变更（指针变了）
+# 主仓库会显示 manipulation/pose_estimation/GenPose2 有变更（指针变了）
 git status
-git add pose/GenPose2
+git add manipulation/pose_estimation/GenPose2
 git commit -m "Bump GenPose2 submodule"
 ```
 
 也可用（需在 `.gitmodules` 中配置了 `branch`）：
 
 ```bash
-git submodule update --remote pose/GenPose2
-git add pose/GenPose2
+git submodule update --remote manipulation/pose_estimation/GenPose2
+git add manipulation/pose_estimation/GenPose2
 git commit -m "Bump GenPose2 submodule"
 ```
 
@@ -128,11 +131,11 @@ git commit -m "Bump GenPose2 submodule"
 
 ## 四、在 submodule 里改代码
 
-`pose/GenPose2` 是独立 git 仓库，改动流程建议：
+`manipulation/pose_estimation/GenPose2` 是独立 git 仓库，改动流程建议：
 
 ```bash
 # 1. 进入子模块
-cd pose/GenPose2
+cd manipulation/pose_estimation/GenPose2
 
 # 2. 确认分支（detached HEAD 时先切到分支）
 git status
@@ -145,7 +148,7 @@ git push origin master
 
 # 4. 回到主仓库，更新 submodule 指针并提交
 cd ../..
-git add pose/GenPose2
+git add manipulation/pose_estimation/GenPose2
 git commit -m "Update GenPose2 submodule pointer"
 git push
 ```
@@ -159,7 +162,7 @@ git push
 
 ## 五、新增 / 调整 submodule（维护者）
 
-当前已添加过 `pose/GenPose2`，一般无需重复。若以后要新增其他子模块：
+当前已添加过 `manipulation/pose_estimation/GenPose2`，一般无需重复。若以后要新增其他子模块：
 
 ```bash
 cd T-Mates-Grocery
@@ -185,9 +188,9 @@ git commit -m "Update submodule URL"
 
 | 现象 | 处理 |
 |------|------|
-| `pose/GenPose2` 是空目录 | `git submodule update --init --recursive` |
+| `manipulation/pose_estimation/GenPose2` 是空目录 | `git submodule update --init --recursive` |
 | `Permission denied (publickey)` | 配置 GitHub SSH，或确认对该 fork 有权限 |
-| `detached HEAD` 在子模块里 | `cd pose/GenPose2 && git checkout master` 再开发 |
+| `detached HEAD` 在子模块里 | `cd manipulation/pose_estimation/GenPose2 && git checkout master` 再开发 |
 | `git pull` 后子模块版本不对 | 再执行 `git submodule update --init --recursive` |
 | 子模块里有未提交修改 | 先在子模块内处理干净，再更新主仓指针 |
 
@@ -216,7 +219,7 @@ git submodule status
 conda activate genpose2
 
 # 在 submodule 目录下跑即可
-cd /home/ubuntu/stephen/01-code/T-Mates-Grocery/pose/GenPose2
+cd /home/ubuntu/stephen/01-code/T-Mates-Grocery/manipulation/pose_estimation/GenPose2
 python your_script.py
 ```
 
@@ -230,7 +233,7 @@ python your_script.py
 ### 仅当没有现成环境时：从零安装
 
 ```bash
-cd pose/GenPose2
+cd manipulation/pose_estimation/GenPose2
 
 conda create -n genpose2 python==3.10.14
 conda activate genpose2
@@ -249,7 +252,7 @@ sudo apt-get install openexr
 pip install cutoop
 ```
 
-更完整的依赖、数据集与模型下载说明见：`pose/GenPose2/README.md`。
+更完整的依赖、数据集与模型下载说明见：`manipulation/pose_estimation/GenPose2/README.md`。
 
 ---
 
@@ -268,12 +271,12 @@ GenPose2 HTTP / UI 启动时会加载 **三个** 网络权重（合计约 233 MB
 ```bash
 # 将独立仓权重挂到本工程 submodule（按你机器上的实际路径改左侧）
 ln -sfn /home/ubuntu/stephen/01-code/GenPose2/results \
-  /home/ubuntu/stephen/01-code/T-Mates-Grocery/pose/GenPose2/results
+  /home/ubuntu/stephen/01-code/T-Mates-Grocery/manipulation/pose_estimation/GenPose2/results
 
 # 校验三个文件可读
-ls -lh pose/GenPose2/results/ckpts/ScoreNet/scorenet.pth
-ls -lh pose/GenPose2/results/ckpts/EnergyNet/energynet.pth
-ls -lh pose/GenPose2/results/ckpts/ScaleNet/scalenet.pth
+ls -lh manipulation/pose_estimation/GenPose2/results/ckpts/ScoreNet/scorenet.pth
+ls -lh manipulation/pose_estimation/GenPose2/results/ckpts/EnergyNet/energynet.pth
+ls -lh manipulation/pose_estimation/GenPose2/results/ckpts/ScaleNet/scalenet.pth
 ```
 
 不方便做软链接时，任选其一：
@@ -288,7 +291,7 @@ export GENPOSE2_SCALE_CKPT=/home/ubuntu/stephen/01-code/GenPose2/results/ckpts/S
 
 **B. 解压微盘权重包到 submodule**
 
-按 `pose/GenPose2/doc/deploy.md`，将 `genpose2_weights_results.zip` 解压到 `pose/GenPose2/`，得到同结构 `results/ckpts/...`。
+按 `manipulation/pose_estimation/GenPose2/doc/deploy.md`，将 `genpose2_weights_results.zip` 解压到 `manipulation/pose_estimation/GenPose2/`，得到同结构 `results/ckpts/...`。
 
 默认分割还需 `segment/yolo_seg.pt`（一般已在仓库内；缺失需另行获取）。
 
@@ -300,7 +303,7 @@ export GENPOSE2_SCALE_CKPT=/home/ubuntu/stephen/01-code/GenPose2/results/ckpts/S
 
 ```bash
 conda activate genpose2
-cd /home/ubuntu/stephen/01-code/T-Mates-Grocery/pose/GenPose2
+cd /home/ubuntu/stephen/01-code/T-Mates-Grocery/manipulation/pose_estimation/GenPose2
 
 # 确认权重已就位（软链接或解压后）
 ls results/ckpts/ScoreNet/scorenet.pth \
@@ -335,7 +338,7 @@ bash start.sh start    # stop / restart / status
 # 浏览器: http://<host>:18090/
 ```
 
-更细的接口与排障见：`pose/GenPose2/doc/deploy.md`、`pose/GenPose2/doc/接口文档.md`。
+更细的接口与排障见：`manipulation/pose_estimation/GenPose2/doc/deploy.md`、`manipulation/pose_estimation/GenPose2/doc/接口文档.md`。
 
 ---
 
@@ -349,5 +352,5 @@ git submodule update --init --recursive
         │
         ├─► conda activate genpose2（复用已有环境）
         ├─► 挂载三个权重（软链接 results 或环境变量 / 解压）
-        └─► cd pose/GenPose2 → 启动 http_server.py 或 start.sh
+        └─► cd manipulation/pose_estimation/GenPose2 → 启动 http_server.py 或 start.sh
 ```
