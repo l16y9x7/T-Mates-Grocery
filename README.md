@@ -266,7 +266,7 @@ GenPose2 HTTP / UI 启动时会加载 **三个** 网络权重（合计约 233 MB
 | `GENPOSE2_ENERGY_CKPT` | `results/ckpts/EnergyNet/energynet.pth` |
 | `GENPOSE2_SCALE_CKPT` | `results/ckpts/ScaleNet/scalenet.pth` |
 
-权重在 `.gitignore` 中，**不会**随 git / submodule 拉取。本机独立仓若已有一份，推荐 **软链接复用**，避免再拷 233 MB：
+权重在 `.gitignore` 中（`/results`，含软链接），**不会**随 git / submodule 拉取，本地挂载也不会弄脏 `git status`。本机独立仓若已有一份，推荐 **软链接复用**，避免再拷 233 MB：
 
 ```bash
 # 将独立仓权重挂到本工程 submodule（按你机器上的实际路径改左侧）
