@@ -33,3 +33,15 @@ class ModelOutputError(ReceiptRecognizerError):
 
 class SchemaValidationError(ModelOutputError):
     """Structured receipt JSON failed strict validation."""
+
+
+class SKUConnectionError(ReceiptRecognizerError):
+    """The SKU lookup service could not be reached."""
+
+
+class SKUResponseError(ReceiptRecognizerError):
+    """The SKU lookup service returned an unexpected response."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code

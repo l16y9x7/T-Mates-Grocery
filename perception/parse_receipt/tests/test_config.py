@@ -18,6 +18,8 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.model, "Qwen3-VL-4B-Instruct")
         self.assertIsNone(settings.api_key)
         self.assertEqual(settings.timeout_seconds, 60.0)
+        self.assertEqual(settings.sku_base_url, "http://127.0.0.1:8080")
+        self.assertEqual(settings.sku_timeout_seconds, 3.0)
 
     def test_empty_api_key_is_none(self) -> None:
         with patch.dict(
@@ -36,7 +38,15 @@ class SettingsTests(unittest.TestCase):
             with self.assertRaises(ConfigurationError):
                 Settings.from_env()
 
+    def test_invalid_sku_timeout_is_rejected(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"SKU_TIMEOUT_SECONDS": "later"},
+            clear=True,
+        ):
+            with self.assertRaises(ConfigurationError):
+                Settings.from_env()
+
 
 if __name__ == "__main__":
     unittest.main()
-

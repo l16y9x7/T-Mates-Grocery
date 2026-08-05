@@ -24,6 +24,7 @@
   -> POST /receipt/parse
   -> 服务内部转成 JPEG data URL
   -> 部署环境配置的 Qwen3-VL 服务
+  -> SKU 服务校验商品名并返回标准货位
   -> 商品 JSON 返回调用方
 ```
 
@@ -69,6 +70,8 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
 export QWEN_BASE_URL='http://127.0.0.1:<local-port>/v1'
 export QWEN_MODEL='Qwen3-VL-4B-Instruct'
 export QWEN_TIMEOUT_SECONDS='120'
+export SKU_BASE_URL='http://127.0.0.1:8080'
+export SKU_TIMEOUT_SECONDS='3'
 ```
 
 只有接口明确返回认证错误时才设置：
@@ -113,15 +116,24 @@ qwen-probe receipt "/绝对路径/测试小票.pdf" --diagnostics
 receipt-recognizer "/绝对路径/测试小票.pdf"
 ```
 
-标准输出只有业务数组：
+标准输出包含 Qwen 识别出的商品数组，以及 SKU 服务校验结果：
 
 ```json
-[
-  {
-    "name": "乐事薯片番茄味",
-    "specification": "50g/袋"
-  }
-]
+{
+  "items": [
+    {
+      "name": "NFC桔汁",
+      "specification": "500ml"
+    }
+  ],
+  "sku_validation": [
+    {
+      "name": "NFC桔汁",
+      "matched": true,
+      "locations": ["H1_F_L1_C01"]
+    }
+  ]
+}
 ```
 
 查看行级原文、待复核项、token 使用量和是否触发 JSON 纠正：
@@ -169,6 +181,8 @@ max_edge      可选，发送给 Qwen 前的最长边，默认 2200
 export QWEN_BASE_URL='http://<qwen-host>:<qwen-port>/v1'
 export QWEN_MODEL='Qwen3-VL-4B-Instruct'
 export QWEN_TIMEOUT_SECONDS='120'
+export SKU_BASE_URL='http://127.0.0.1:8080'
+export SKU_TIMEOUT_SECONDS='3'
 
 uvicorn receipt_recognizer.server:app \
   --host 127.0.0.1 \
@@ -182,15 +196,24 @@ curl -F "file=@receipt-images/receipt1.jpg" \
   "http://127.0.0.1:18080/receipt/parse"
 ```
 
-返回默认是业务数组：
+返回默认包含业务数组和 SKU 校验结果：
 
 ```json
-[
-  {
-    "name": "好丽友土豆薯条番茄味",
-    "specification": "70g"
-  }
-]
+{
+  "items": [
+    {
+      "name": "NFC桔汁",
+      "specification": "500ml"
+    }
+  ],
+  "sku_validation": [
+    {
+      "name": "NFC桔汁",
+      "matched": true,
+      "locations": ["H1_F_L1_C01"]
+    }
+  ]
+}
 ```
 
 需要诊断信息时：
@@ -205,7 +228,14 @@ curl -F "file=@receipt-images/receipt1.jpg" \
 
 ```bash
 export QWEN_BASE_URL='http://127.0.0.1:8102/v1'
+export SKU_BASE_URL='http://127.0.0.1:8080'
 ```
+
+SKU 校验依赖组仓库的 `perception/sku/api.py` 服务。该服务可以用
+`python api.py --host 0.0.0.0 --port 8080` 启动；小票服务请求时使用
+`SKU_BASE_URL`，同机部署通常配置为 `http://127.0.0.1:8080`。
+如果商品名查不到，SKU 服务返回 404，小票服务会在 `sku_validation`
+中标记 `matched=false`，而不是让整张小票请求失败。
 
 ## 输出约束
 
@@ -213,7 +243,7 @@ export QWEN_BASE_URL='http://127.0.0.1:8102/v1'
 - 规格只保留重量、容量、尺寸或包装关系，例如 `70g/袋`、`60g*10`；只要字符清晰就原样复制。没有规格时为 `null`。
 - 不合并商品行；小票上识别到几条商品明细，业务数组就输出几条。
 - 第一版不输出数量字段；当前实验默认每条商品明细数量为 1。
-- 第一版不输出 `source_text`；库存校验只统计 `name` 能否和库表精确对上。
+- 第一版不输出 `source_text`；商品名通过 SKU 服务 `/sku/locations` 做精确校验。
 - 称重商品、小数数量或模糊内容进入 `review_items`，不进入业务数组。
 - 非法 JSON 只允许追加一次格式纠正请求；第二次仍失败就报错。
 - 不使用未经部署验证的 `response_format` 或服务专有参数。
@@ -301,7 +331,7 @@ done
 
 这样每张图会保存一个 `*.items.json`，内容就是最终业务输出，只含 `name` 和 `specification`。
 
-如果已经有 `*.items.json`，可以统计商品名命中率。当前库存 CSV 暂时没有规格字段，所以规格不参与评估指标。库存文件默认按本地数据处理，不提交真实商品库到 Git：
+如果已经有旧版 `*.items.json`，仍可以用本地 CSV 统计商品名命中率。当前接口已默认通过 SKU 服务做在线校验；CSV 评估仅保留为离线实验工具：
 
 ```bash
 receipt-evaluate output/某次实验目录 \
