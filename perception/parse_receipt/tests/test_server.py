@@ -37,6 +37,20 @@ class FakeRecognizer:
         )
 
 
+class FakeSkuClient:
+    def __init__(self, settings):
+        self.settings = settings
+
+    def validate_items(self, items):
+        return [
+            {
+                "name": items[0]["name"],
+                "matched": True,
+                "locations": ["H1_F_L1_C01"],
+            }
+        ]
+
+
 class ServerTests(unittest.TestCase):
     def test_receipt_parse_returns_business_items(self):
         with patch.object(
@@ -47,6 +61,10 @@ class ServerTests(unittest.TestCase):
             server,
             "ReceiptRecognizer",
             FakeRecognizer,
+        ), patch.object(
+            server,
+            "SkuLookupClient",
+            FakeSkuClient,
         ):
             response = asyncio.run(
                 server.parse_receipt(
@@ -57,11 +75,16 @@ class ServerTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            response,
+            response["items"],
+            [{"name": "好丽友土豆薯条番茄味", "specification": "70g"}],
+        )
+        self.assertEqual(
+            response["sku_validation"],
             [
                 {
                     "name": "好丽友土豆薯条番茄味",
-                    "specification": "70g",
+                    "matched": True,
+                    "locations": ["H1_F_L1_C01"],
                 }
             ],
         )
@@ -72,7 +95,15 @@ class ServerTests(unittest.TestCase):
             server,
             "image_bytes_to_data_url",
             return_value="data:image/jpeg;base64,abc",
-        ), patch.object(server, "ReceiptRecognizer", FakeRecognizer):
+        ), patch.object(
+            server,
+            "ReceiptRecognizer",
+            FakeRecognizer,
+        ), patch.object(
+            server,
+            "SkuLookupClient",
+            FakeSkuClient,
+        ):
             response = asyncio.run(
                 server.parse_receipt(
                     file=_upload_file(b"fake image"),
@@ -82,6 +113,7 @@ class ServerTests(unittest.TestCase):
             )
 
         self.assertEqual(response["items"][0]["specification"], "70g")
+        self.assertTrue(response["sku_validation"][0]["matched"])
         self.assertEqual(
             response["diagnostics"]["receipt_status"],
             "ok",

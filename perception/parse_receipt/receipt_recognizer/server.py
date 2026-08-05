@@ -15,9 +15,12 @@ from .errors import (
     InputFileError,
     ModelOutputError,
     ReceiptRecognizerError,
+    SKUConnectionError,
+    SKUResponseError,
 )
 from .media import image_bytes_to_data_url
 from .service import ReceiptRecognizer
+from .sku_client import SkuLookupClient
 
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -40,7 +43,7 @@ def health() -> dict[str, str]:
     }
 
 
-@app.post("/receipt/parse")
+@app.post("/receipt/parse", response_model=None)
 async def parse_receipt(
     file: UploadFile = File(...),
     diagnostics: bool = Query(
@@ -53,7 +56,7 @@ async def parse_receipt(
         le=4096,
         description="Resize longest image edge before sending to Qwen.",
     ),
-) -> list[dict[str, Any]] | dict[str, Any]:
+) -> dict[str, Any] | JSONResponse:
     raw = await file.read(MAX_UPLOAD_BYTES + 1)
     if not raw:
         return _error_response(
@@ -69,9 +72,13 @@ async def parse_receipt(
         )
 
     try:
+        settings = Settings.from_env()
         data_url = image_bytes_to_data_url(raw, max_edge=max_edge)
-        recognizer = ReceiptRecognizer(Settings.from_env())
+        recognizer = ReceiptRecognizer(settings)
         result = recognizer.recognize_data_urls([data_url])
+        sku_validation = SkuLookupClient(settings).validate_items(
+            result.business_items
+        )
     except InputFileError as exc:
         return _error_response(400, "invalid_input", str(exc))
     except ConfigurationError as exc:
@@ -87,15 +94,25 @@ async def parse_receipt(
         )
     except ModelOutputError as exc:
         return _error_response(502, "model_output_error", str(exc))
+    except SKUConnectionError as exc:
+        return _error_response(502, "sku_connection_error", str(exc))
+    except SKUResponseError as exc:
+        return _error_response(
+            502,
+            "sku_response_error",
+            str(exc),
+            upstream_status_code=exc.status_code,
+        )
     except ReceiptRecognizerError as exc:
         return _error_response(500, "internal_error", str(exc))
 
+    response: dict[str, Any] = {
+        "items": result.business_items,
+        "sku_validation": sku_validation,
+    }
     if diagnostics:
-        return {
-            "items": result.business_items,
-            "diagnostics": result.diagnostics,
-        }
-    return result.business_items
+        response["diagnostics"] = result.diagnostics
+    return response
 
 
 def _error_response(

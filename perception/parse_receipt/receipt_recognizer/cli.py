@@ -10,6 +10,7 @@ from pathlib import Path
 from .config import Settings
 from .errors import ReceiptRecognizerError
 from .service import ReceiptRecognizer
+from .sku_client import SkuLookupClient
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,6 +66,9 @@ def main(argv: list[str] | None = None) -> int:
             max_pdf_pages=args.max_pdf_pages,
             temperature=args.temperature,
         )
+        sku_validation = SkuLookupClient(settings).validate_items(
+            result.business_items
+        )
     except ReceiptRecognizerError as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 2
@@ -80,7 +84,10 @@ def main(argv: list[str] | None = None) -> int:
         )
     print(
         json.dumps(
-            result.business_items,
+            {
+                "items": result.business_items,
+                "sku_validation": sku_validation,
+            },
             ensure_ascii=False,
             indent=2,
         )

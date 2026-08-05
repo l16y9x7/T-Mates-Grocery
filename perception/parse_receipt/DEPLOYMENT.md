@@ -4,7 +4,7 @@
 
 ```text
 输入：一张 JPG/PNG 小票图片
-输出：商品结构化 JSON
+输出：商品结构化 JSON，并用 SKU 服务校验商品名是否存在
 ```
 
 它不是 Qwen/vLLM 本身，而是 Qwen/vLLM 外面的一层 HTTP 包装服务。
@@ -33,12 +33,21 @@ curl -F "file=@receipt.jpg" \
 默认成功响应：
 
 ```json
-[
-  {
-    "name": "票面商品名称",
-    "specification": "70g"
-  }
-]
+{
+  "items": [
+    {
+      "name": "票面商品名称",
+      "specification": "70g"
+    }
+  ],
+  "sku_validation": [
+    {
+      "name": "票面商品名称",
+      "matched": true,
+      "locations": ["H1_F_L1_C01"]
+    }
+  ]
+}
 ```
 
 需要诊断信息时：
@@ -56,6 +65,8 @@ curl -F "file=@receipt.jpg" \
 export QWEN_BASE_URL='http://<qwen-host>:<qwen-port>/v1'
 export QWEN_MODEL='Qwen3-VL-4B-Instruct'
 export QWEN_TIMEOUT_SECONDS='120'
+export SKU_BASE_URL='http://127.0.0.1:8080'
+export SKU_TIMEOUT_SECONDS='3'
 ```
 
 如果 Qwen/vLLM 和本服务部署在同一台机器上，`<qwen-host>` 通常可以
@@ -69,6 +80,20 @@ export QWEN_API_KEY='...'
 ```
 
 不要把真实 key 写入代码、README、`.env.example` 或 Git。
+
+`SKU_BASE_URL` 指向 `perception/sku/api.py` 提供的 SKU 查询服务。
+该服务启动时可以监听 `0.0.0.0:8080`，但客户端请求时应配置为
+可访问地址，例如同机部署用 `http://127.0.0.1:8080`。
+
+小票服务会对每个识别出的商品名请求：
+
+```text
+GET /sku/locations?name=<商品名>
+```
+
+商品不存在时 SKU 服务返回 404，小票服务不会把整张小票识别判为失败，
+而是在对应商品的 `sku_validation` 中返回 `matched=false`。
+如果 SKU 服务本身不可达，才返回 `sku_connection_error`。
 
 ## 3. 安装
 
