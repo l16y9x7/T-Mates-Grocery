@@ -12,7 +12,7 @@ T-Mates-Grocery/
 │   ├── release/
 │   └── pose_estimation/
 │       └── GenPose2/   # submodule：6D 位姿估计（GenPose++）
-├── navigation/      # 导航
+├── navigation/      # 导航（Agent：health / navigate）
 ├── perception/      # 感知（SKU、小票、pick/place 等）
 ├── pose/            # 占位（仅 .gitkeep）
 ├── video_stream/    # 视频流
@@ -26,6 +26,19 @@ T-Mates-Grocery/
 | `manipulation/pose_estimation/GenPose2` | `git@github.com:chenwen0511/GenPose2.git` | Pose 估计实现 |
 
 配置见仓库根目录 `.gitmodules`。
+
+---
+
+## 导航（Agent 调度）
+
+Agent 通过 HTTP 调用真机 TianJi 导航网关（默认 `http://127.0.0.1:8081`）：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/navigation/health` | 探活，仅 `READY` 可导航 |
+| `POST` | `/navigation/navigate` | `{"target_id":"..."}`，需头 `Idempotency-Key` |
+
+约定与 Python 客户端见 `navigation/README.md`。
 
 ---
 
