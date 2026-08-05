@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "record_id": "record_20260804_144500_761470",
+  "captured_at": "2026-08-04T14:45:00.761+00:00",
+  "camera": {
+    "device": "/camera/head/color/image_raw",
+    "image_file": "record_20260804_144500_761470_rgb.jpg",
+    "frame_serial": 85,
+    "frame_monotonic_s": 3147.952255631,
+    "width": 1280,
+    "height": 720
+  },
+  "depth": {
+    "topic": "/camera/head/depth/image_rect_raw",
+    "image_file": "record_20260804_144500_761470_depth_mm.png",
+    "encoding": "16UC1",
+    "unit": "millimeter",
+    "frame_serial": 80,
+    "frame_monotonic_s": 3147.821891402,
+    "rgb_time_delta_ms": -130.364,
+    "width": 1280,
+    "height": 720
+  },
+  "robot": {
+    "model": "GentoLuna",
+    "head": {
+      "joints_deg": [
+        -0.002,
+        -25.022
+      ]
+    },
+    "body": {
+      "joints_deg": [
+        0.001,
+        73.829,
+        -75.22,
+        -22.788,
+        -0.001,
+        -0.001
+      ],
+      "pose_frame": "world",
+      "left_shoulder_xyz_mm_abc_deg": [
+        -120.493,
+        99.991,
+        905.6164,
+        -0.0004,
+        24.179,
+        -0.0006
+      ],
+      "right_shoulder_xyz_mm_abc_deg": [
+        -120.4948,
+        -100.009,
+        905.6175,
+        -0.0004,
+        24.179,
+        -0.0006
+      ]
+    },
+    "left_arm": {
+      "joints_deg": [
+        114.134,
+        -82.177,
+        -90.456,
+        -86.415,
+        -3.557,
+        -30.288,
+        5.25
+      ],
+      "pose_frame": "left-arm-base",
+      "xyz_mm_abc_deg": [
+        221.7478,
+        379.7167,
+        207.3827,
+        -86.0708,
+        4.1198,
+        -92.6769
+      ]
+    },
+    "right_arm": {
+      "joints_deg": [
+        74.865,
+        86.113,
+        -92.802,
+        -83.184,
+        -6.328,
+        -16.185,
+        -4.784
+      ],
+      "pose_frame": "right-arm-base",
+      "xyz_mm_abc_deg": [
+        272.8213,
+        -383.1769,
+        165.6289,
+        90.4302,
+        9.4391,
+        84.6981
+      ]
+    }
+  }
+}

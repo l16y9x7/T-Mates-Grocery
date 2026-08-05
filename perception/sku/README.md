@@ -68,7 +68,6 @@ product_by_location: dict[str, Product]
 启动服务：
 
 ```powershell
-python -m pip install -r requirements.txt
 python api.py --host 0.0.0.0 --port 8080
 ```
 
