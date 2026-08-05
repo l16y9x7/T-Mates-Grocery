@@ -1,0 +1,5 @@
+fastapi
+httpx2
+Pillow
+python-docx
+uvicorn
