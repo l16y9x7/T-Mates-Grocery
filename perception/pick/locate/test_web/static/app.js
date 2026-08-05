@@ -4,9 +4,13 @@ const qwenSku = document.querySelector("#qwenSku");
 const samPrompt = document.querySelector("#samPrompt");
 const qwenCanvas = document.querySelector("#qwenCanvas");
 const samCanvas = document.querySelector("#samCanvas");
+const cropDetectionSelect = document.querySelector("#cropDetectionSelect");
 
 const colors = ["#2dd4bf", "#f59e0b", "#60a5fa", "#f472b6", "#a78bfa", "#fb7185"];
 const qwenSampleColors = ["#a78bfa", "#2dd4bf", "#f59e0b"];
+const cropPaddingRatio = 0.1;
+let cropChoices = [];
+let currentCrop = null;
 
 async function api(url, options = {}) {
   const response = await fetch(url, options);
@@ -28,7 +32,8 @@ async function loadImages() {
     imageSelect.append(option);
   });
   if (data.default) {
-    await Promise.all([drawBase(qwenCanvas), drawBase(samCanvas)]);
+    await drawBase(qwenCanvas);
+    resetCropPanel();
   }
 }
 
@@ -55,6 +60,110 @@ async function drawBase(canvas) {
   canvas.height = image.naturalHeight;
   canvas.getContext("2d").drawImage(image, 0, 0);
   return image;
+}
+
+function resetCropPanel(message = "先运行 Qwen3 获取 crop") {
+  cropChoices = [];
+  currentCrop = null;
+  cropDetectionSelect.replaceChildren();
+  const option = document.createElement("option");
+  option.value = "";
+  option.textContent = message;
+  cropDetectionSelect.append(option);
+  cropDetectionSelect.disabled = true;
+  document.querySelector("#runSam").disabled = true;
+  samCanvas.getContext("2d").clearRect(0, 0, samCanvas.width, samCanvas.height);
+  const empty = document.querySelector("#samEmpty");
+  empty.textContent = message;
+  empty.hidden = false;
+  document.querySelector("#samResult").textContent = "[]";
+  setStatus("#samStatus", "等待 Qwen3", "");
+}
+
+function populateCropChoices(samples) {
+  cropChoices = [];
+  cropDetectionSelect.replaceChildren();
+  samples.forEach((sample) => {
+    (sample.detections || []).forEach((detection, detectionIndex) => {
+      const choiceIndex = cropChoices.length;
+      cropChoices.push({
+        sampleIndex: sample.sample_index,
+        detectionIndex,
+        detection,
+      });
+      const option = document.createElement("option");
+      option.value = String(choiceIndex);
+      option.textContent = `S${sample.sample_index} · ${detection.name} #${detectionIndex + 1}`;
+      cropDetectionSelect.append(option);
+    });
+  });
+
+  const hasChoices = cropChoices.length > 0;
+  cropDetectionSelect.disabled = !hasChoices;
+  document.querySelector("#runSam").disabled = !hasChoices;
+  if (!hasChoices) {
+    resetCropPanel("Qwen3 没有返回可裁剪的 bbox");
+  }
+}
+
+function bboxToPixels(bbox, image) {
+  const normalized = document.querySelector("#qwenCoordinateMode").value === "normalized";
+  const converted = [...bbox];
+  if (normalized) {
+    converted[0] = (converted[0] / 1000) * image.naturalWidth;
+    converted[1] = (converted[1] / 1000) * image.naturalHeight;
+    converted[2] = (converted[2] / 1000) * image.naturalWidth;
+    converted[3] = (converted[3] / 1000) * image.naturalHeight;
+  }
+  const x1 = Math.min(converted[0], converted[2]);
+  const y1 = Math.min(converted[1], converted[3]);
+  const x2 = Math.max(converted[0], converted[2]);
+  const y2 = Math.max(converted[1], converted[3]);
+  const paddingX = (x2 - x1) * cropPaddingRatio;
+  const paddingY = (y2 - y1) * cropPaddingRatio;
+  return [
+    Math.max(0, Math.floor(x1 - paddingX)),
+    Math.max(0, Math.floor(y1 - paddingY)),
+    Math.min(image.naturalWidth, Math.ceil(x2 + paddingX)),
+    Math.min(image.naturalHeight, Math.ceil(y2 + paddingY)),
+  ];
+}
+
+async function drawSelectedCrop() {
+  const choice = cropChoices[Number(cropDetectionSelect.value)];
+  if (!choice) {
+    throw new Error("请先选择一个 Qwen 检测结果");
+  }
+
+  const image = new Image();
+  image.src = `${imageUrl()}?t=${Date.now()}`;
+  await image.decode();
+  const cropBox = bboxToPixels(choice.detection.bbox, image);
+  const [x1, y1, x2, y2] = cropBox;
+  const width = x2 - x1;
+  const height = y2 - y1;
+  if (width < 2 || height < 2) {
+    throw new Error("Qwen bbox 无法生成有效 crop");
+  }
+
+  samCanvas.width = width;
+  samCanvas.height = height;
+  samCanvas.getContext("2d").drawImage(
+    image,
+    x1,
+    y1,
+    width,
+    height,
+    0,
+    0,
+    width,
+    height,
+  );
+  currentCrop = { ...choice, cropBox };
+  document.querySelector("#samEmpty").hidden = true;
+  document.querySelector("#samResult").textContent = "[]";
+  setStatus("#samStatus", `crop ${width} × ${height}`, "success");
+  return currentCrop;
 }
 
 function setStatus(id, text, kind = "") {
@@ -199,6 +308,7 @@ async function runQwen() {
   const rawResult = document.querySelector("#qwenRawResult");
   button.disabled = true;
   rawResult.textContent = "等待模型返回…";
+  resetCropPanel("等待 Qwen3 检测结果");
   setStatus("#qwenStatus", "运行中…", "running");
   try {
     const result = await api("/api/qwen", {
@@ -233,6 +343,10 @@ async function runQwen() {
       });
     });
     document.querySelector("#qwenEmpty").hidden = true;
+    populateCropChoices(successfulSamples);
+    if (cropChoices.length) {
+      await drawSelectedCrop();
+    }
     const detectionCount = successfulSamples.reduce(
       (count, sample) => count + sample.detections.length,
       0,
@@ -286,14 +400,19 @@ async function drawMask(canvas, base64, color) {
 async function runSam() {
   const button = document.querySelector("#runSam");
   button.disabled = true;
-  setStatus("#samStatus", "运行中…", "running");
   try {
-    const result = await api("/api/sam3", {
+    const crop = await drawSelectedCrop();
+    setStatus("#samStatus", "运行中…", "running");
+    const imageBase64 = samCanvas.toDataURL("image/jpeg", 0.95).split(",")[1];
+    const result = await api("/api/sam3-crop", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image_name: imageSelect.value, prompt: samPrompt.value }),
+      body: JSON.stringify({
+        prompt: samPrompt.value,
+        image_base64: imageBase64,
+        crop_box_original: crop.cropBox,
+      }),
     });
-    await drawBase(samCanvas);
     const instances = result.instances || [];
     for (let index = 0; index < instances.length; index += 1) {
       const instance = instances[index];
@@ -307,15 +426,31 @@ async function runSam() {
     });
     document.querySelector("#samEmpty").hidden = true;
     document.querySelector("#samResult").textContent = JSON.stringify(
-      instances.map(({ instance_id, score, bbox_xyxy }) => ({ instance_id, score, bbox_xyxy })),
+      {
+        qwen_detection: {
+          sample_index: crop.sampleIndex,
+          target_index: crop.detectionIndex + 1,
+          name: crop.detection.name,
+          bbox: crop.detection.bbox,
+        },
+        crop_box_original: result.crop_box_original,
+        instances: instances.map(
+          ({ instance_id, score, bbox_xyxy, bbox_original_xyxy }) => ({
+            instance_id,
+            score,
+            bbox_crop_xyxy: bbox_xyxy,
+            bbox_original_xyxy,
+          }),
+        ),
+      },
       null,
       2,
     );
-    setStatus("#samStatus", `${instances.length} 个实例`, "success");
+    setStatus("#samStatus", `${instances.length} 个 crop 实例`, "success");
   } catch (error) {
     setStatus("#samStatus", error.message, "error");
   } finally {
-    button.disabled = false;
+    button.disabled = cropChoices.length === 0;
   }
 }
 
@@ -324,12 +459,20 @@ document.querySelector("#saveQwenPrompt").addEventListener("click", saveQwenProm
 document.querySelector("#runSam").addEventListener("click", runSam);
 qwenSku.addEventListener("input", () => setStatus("#savePromptStatus", "未保存"));
 qwenPrompt.addEventListener("input", () => setStatus("#savePromptStatus", "未保存"));
+cropDetectionSelect.addEventListener("change", () => {
+  drawSelectedCrop().catch((error) => setStatus("#samStatus", error.message, "error"));
+});
+document.querySelector("#qwenCoordinateMode").addEventListener("change", () => {
+  if (cropChoices.length) {
+    drawSelectedCrop().catch((error) => setStatus("#samStatus", error.message, "error"));
+  }
+});
 imageSelect.addEventListener("change", async () => {
-  await Promise.all([drawBase(qwenCanvas), drawBase(samCanvas)]);
+  await drawBase(qwenCanvas);
   document.querySelector("#qwenResult").textContent = "[]";
   document.querySelector("#qwenIouResult").textContent = "{}";
   document.querySelector("#qwenRawResult").textContent = "等待运行";
-  document.querySelector("#samResult").textContent = "[]";
+  resetCropPanel();
 });
 
 Promise.all([loadImages(), loadSkus()]).catch((error) => {

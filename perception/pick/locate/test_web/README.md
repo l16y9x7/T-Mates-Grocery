@@ -27,7 +27,8 @@ python server.py
 
   测试出满意的 Prompt 后，可选择对应 SKU 并点击“保存当前 Prompt”。结果按 `SKU名称: Prompt` 保存到 `perception/pick/locate/qwen_prompt_mapping.json`；再次保存同一 SKU 会覆盖旧值。
 
-- 右侧输入 SAM3 prompt。页面绘制所有实例的 mask、bbox 和置信度。
+- Qwen 完成后，右侧自动显示第一个检测结果向外扩张 10% 的 crop；也可以在下拉框中切换三次采样产生的其他检测框。
+- 右侧输入 SAM3 prompt 后，仅对当前 Qwen crop 进行分割。页面绘制 crop 内所有实例的 mask、bbox 和置信度，同时返回映射回原图的 `bbox_original_xyxy`。
 
 默认使用：
 

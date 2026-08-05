@@ -1,4 +1,5 @@
 import base64
+import binascii
 import json
 import mimetypes
 import os
@@ -43,6 +44,12 @@ class PromptRequest(BaseModel):
 class SaveQwenPromptRequest(BaseModel):
     sku_name: str
     prompt: str
+
+
+class SamCropRequest(BaseModel):
+    prompt: str
+    image_base64: str
+    crop_box_original: list[float]
 
 
 class QwenDetection(BaseModel):
@@ -228,6 +235,73 @@ def run_sam3(request: PromptRequest) -> dict:
 
     if not isinstance(result, dict) or not isinstance(result.get("instances"), list):
         raise HTTPException(status_code=502, detail="SAM3 响应缺少 instances")
+    return result
+
+
+@app.post("/api/sam3-crop")
+def run_sam3_crop(request: SamCropRequest) -> dict:
+    prompt = request.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="SAM3 prompt 不能为空")
+    if (
+        len(request.crop_box_original) != 4
+        or not all(
+            isinstance(value, (int, float)) for value in request.crop_box_original
+        )
+    ):
+        raise HTTPException(status_code=400, detail="crop_box_original 格式错误")
+
+    try:
+        image_bytes = base64.b64decode(request.image_base64, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="crop 图片 Base64 格式错误") from error
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="crop 图片不能为空")
+    if len(image_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="crop 图片不能超过 20 MB")
+
+    try:
+        response = requests.post(
+            SAM3_URL,
+            files={"image": ("qwen_crop.jpg", image_bytes, "image/jpeg")},
+            data={
+                "prompt": prompt,
+                "threshold": 0.5,
+                "mask_threshold": 0.5,
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except requests.RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"SAM3 crop 请求失败: {error}",
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"SAM3 crop 返回格式错误: {error}",
+        ) from error
+
+    if not isinstance(result, dict) or not isinstance(result.get("instances"), list):
+        raise HTTPException(status_code=502, detail="SAM3 crop 响应缺少 instances")
+
+    crop_x1, crop_y1, _, _ = request.crop_box_original
+    for instance in result["instances"]:
+        bbox = instance.get("bbox_xyxy") if isinstance(instance, dict) else None
+        if (
+            isinstance(bbox, list)
+            and len(bbox) == 4
+            and all(isinstance(value, (int, float)) for value in bbox)
+        ):
+            instance["bbox_original_xyxy"] = [
+                bbox[0] + crop_x1,
+                bbox[1] + crop_y1,
+                bbox[2] + crop_x1,
+                bbox[3] + crop_y1,
+            ]
+    result["crop_box_original"] = request.crop_box_original
     return result
 
 

@@ -176,6 +176,11 @@ textarea:focus {
   margin-top: 20px;
 }
 
+.crop-field select {
+  width: 100%;
+  min-width: 0;
+}
+
 .prompt-save-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
