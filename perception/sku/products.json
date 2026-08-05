@@ -5,7 +5,9 @@
     {
       "sku_id": "SKU_001",
       "name": "NFC桔汁",
-      "images": [],
+      "images": [
+        "images/SKU_001.jpg"
+      ],
       "locations": [
         "H1_F_L1_C01"
       ]
@@ -13,7 +15,9 @@
     {
       "sku_id": "SKU_002",
       "name": "蒙牛纯牛奶",
-      "images": [],
+      "images": [
+        "images/SKU_002.jpg"
+      ],
       "locations": [
         "H1_F_L1_C02"
       ]
@@ -21,7 +25,9 @@
     {
       "sku_id": "SKU_003",
       "name": "纯甄酸奶",
-      "images": [],
+      "images": [
+        "images/SKU_003.jpg"
+      ],
       "locations": [
         "H1_F_L1_C03"
       ]
@@ -29,7 +35,9 @@
     {
       "sku_id": "SKU_004",
       "name": "百草味海苔肉松蛋卷",
-      "images": [],
+      "images": [
+        "images/SKU_004.jpg"
+      ],
       "locations": [
         "H1_F_L1_C04"
       ]
@@ -37,7 +45,9 @@
     {
       "sku_id": "SKU_005",
       "name": "三只松鼠每日坚果",
-      "images": [],
+      "images": [
+        "images/SKU_005.jpg"
+      ],
       "locations": [
         "H1_F_L1_C05"
       ]
@@ -45,7 +55,9 @@
     {
       "sku_id": "SKU_006",
       "name": "费列罗巧克力",
-      "images": [],
+      "images": [
+        "images/SKU_006.jpg"
+      ],
       "locations": [
         "H1_F_L1_C06"
       ]
@@ -53,7 +65,9 @@
     {
       "sku_id": "SKU_007",
       "name": "双汇王中王火腿肠",
-      "images": [],
+      "images": [
+        "images/SKU_007.jpg"
+      ],
       "locations": [
         "H1_F_L1_C07"
       ]
@@ -61,7 +75,9 @@
     {
       "sku_id": "SKU_008",
       "name": "妙芙香芋牛奶味",
-      "images": [],
+      "images": [
+        "images/SKU_008.jpg"
+      ],
       "locations": [
         "H1_F_L2_C01"
       ]
@@ -69,7 +85,9 @@
     {
       "sku_id": "SKU_009",
       "name": "妙芙绵醇奶油味",
-      "images": [],
+      "images": [
+        "images/SKU_009.jpg"
+      ],
       "locations": [
         "H1_F_L2_C02"
       ]
@@ -77,7 +95,9 @@
     {
       "sku_id": "SKU_010",
       "name": "妙芙巧克力味",
-      "images": [],
+      "images": [
+        "images/SKU_010.jpg"
+      ],
       "locations": [
         "H1_F_L2_C03"
       ]
@@ -85,7 +105,9 @@
     {
       "sku_id": "SKU_011",
       "name": "薯愿非油炸清新番茄味",
-      "images": [],
+      "images": [
+        "images/SKU_011.jpg"
+      ],
       "locations": [
         "H1_F_L2_C04"
       ]
@@ -93,7 +115,9 @@
     {
       "sku_id": "SKU_012",
       "name": "薯愿非油炸韩国泡菜味",
-      "images": [],
+      "images": [
+        "images/SKU_012.jpg"
+      ],
       "locations": [
         "H1_F_L2_C05"
       ]
@@ -101,7 +125,9 @@
     {
       "sku_id": "SKU_013",
       "name": "薯愿非油炸香烤原味",
-      "images": [],
+      "images": [
+        "images/SKU_013.jpg"
+      ],
       "locations": [
         "H1_F_L2_C06"
       ]
@@ -109,7 +135,9 @@
     {
       "sku_id": "SKU_014",
       "name": "品客薯片烧烤牛排味",
-      "images": [],
+      "images": [
+        "images/SKU_014.jpg"
+      ],
       "locations": [
         "H1_F_L2_C07"
       ]
@@ -117,7 +145,9 @@
     {
       "sku_id": "SKU_015",
       "name": "品客原味",
-      "images": [],
+      "images": [
+        "images/SKU_015.jpg"
+      ],
       "locations": [
         "H1_F_L2_C08"
       ]
@@ -125,7 +155,9 @@
     {
       "sku_id": "SKU_016",
       "name": "品客酸乳酪洋葱味",
-      "images": [],
+      "images": [
+        "images/SKU_016.jpg"
+      ],
       "locations": [
         "H1_F_L2_C09"
       ]
@@ -133,7 +165,9 @@
     {
       "sku_id": "SKU_017",
       "name": "奥利奥香甜不腻",
-      "images": [],
+      "images": [
+        "images/SKU_017.jpg"
+      ],
       "locations": [
         "H1_F_L2_C10"
       ]
@@ -141,7 +175,9 @@
     {
       "sku_id": "SKU_018",
       "name": "奥利奥冰淇淋抹茶味",
-      "images": [],
+      "images": [
+        "images/SKU_018.jpg"
+      ],
       "locations": [
         "H1_F_L2_C11"
       ]
@@ -149,7 +185,9 @@
     {
       "sku_id": "SKU_019",
       "name": "奥利奥浓醇巧克力味",
-      "images": [],
+      "images": [
+        "images/SKU_019.jpg"
+      ],
       "locations": [
         "H1_F_L2_C12"
       ]
@@ -157,7 +195,9 @@
     {
       "sku_id": "SKU_020",
       "name": "奥利奥白桃乌龙味",
-      "images": [],
+      "images": [
+        "images/SKU_020.jpg"
+      ],
       "locations": [
         "H1_F_L2_C13"
       ]
@@ -165,7 +205,9 @@
     {
       "sku_id": "SKU_021",
       "name": "Lays乐事薯片墨西哥鸡汁番茄味",
-      "images": [],
+      "images": [
+        "images/SKU_021.jpg"
+      ],
       "locations": [
         "H1_F_L3_C01"
       ]
@@ -173,7 +215,9 @@
     {
       "sku_id": "SKU_022",
       "name": "Lays乐事薯片经典原味",
-      "images": [],
+      "images": [
+        "images/SKU_022.jpg"
+      ],
       "locations": [
         "H1_F_L3_C02"
       ]
@@ -181,7 +225,9 @@
     {
       "sku_id": "SKU_023",
       "name": "Lays乐事薯片黄瓜味",
-      "images": [],
+      "images": [
+        "images/SKU_023.jpg"
+      ],
       "locations": [
         "H1_F_L3_C03"
       ]
@@ -189,7 +235,9 @@
     {
       "sku_id": "SKU_024",
       "name": "Lays乐事薯片意大利香浓红烩味",
-      "images": [],
+      "images": [
+        "images/SKU_024.jpg"
+      ],
       "locations": [
         "H1_F_L3_C04"
       ]
@@ -197,7 +245,9 @@
     {
       "sku_id": "SKU_025",
       "name": "Lays乐事薯片青柠味",
-      "images": [],
+      "images": [
+        "images/SKU_025.jpg"
+      ],
       "locations": [
         "H1_F_L3_C05"
       ]
@@ -205,7 +255,9 @@
     {
       "sku_id": "SKU_026",
       "name": "呀！土豆番茄酱味",
-      "images": [],
+      "images": [
+        "images/SKU_026.jpg"
+      ],
       "locations": [
         "H1_F_L3_C06"
       ]
@@ -213,7 +265,9 @@
     {
       "sku_id": "SKU_027",
       "name": "好友趣韩国泡菜味",
-      "images": [],
+      "images": [
+        "images/SKU_027.jpg"
+      ],
       "locations": [
         "H1_F_L3_C07"
       ]
@@ -221,7 +275,9 @@
     {
       "sku_id": "SKU_028",
       "name": "卫龙辣条",
-      "images": [],
+      "images": [
+        "images/SKU_028.jpg"
+      ],
       "locations": [
         "H1_F_L4_C01"
       ]
@@ -229,7 +285,9 @@
     {
       "sku_id": "SKU_029",
       "name": "百醇草莓香草味",
-      "images": [],
+      "images": [
+        "images/SKU_029.jpg"
+      ],
       "locations": [
         "H1_F_L4_C02"
       ]
@@ -237,7 +295,9 @@
     {
       "sku_id": "SKU_030",
       "name": "百醇巧克力味",
-      "images": [],
+      "images": [
+        "images/SKU_030.jpg"
+      ],
       "locations": [
         "H1_F_L4_C03"
       ]
@@ -245,7 +305,9 @@
     {
       "sku_id": "SKU_031",
       "name": "上好佳鲜虾条",
-      "images": [],
+      "images": [
+        "images/SKU_031.jpg"
+      ],
       "locations": [
         "H1_F_L4_C04",
         "H1_F_L5_C04"
@@ -254,7 +316,9 @@
     {
       "sku_id": "SKU_032",
       "name": "浪味仙",
-      "images": [],
+      "images": [
+        "images/SKU_032.jpg"
+      ],
       "locations": [
         "H1_F_L4_C05",
         "H1_F_L5_C05"
@@ -263,7 +327,9 @@
     {
       "sku_id": "SKU_033",
       "name": "好丽友派",
-      "images": [],
+      "images": [
+        "images/SKU_033.jpg"
+      ],
       "locations": [
         "H1_F_L5_C01"
       ]
@@ -271,7 +337,9 @@
     {
       "sku_id": "SKU_034",
       "name": "吐司方方原味",
-      "images": [],
+      "images": [
+        "images/SKU_034.jpg"
+      ],
       "locations": [
         "H1_F_L5_C02"
       ]
@@ -279,7 +347,9 @@
     {
       "sku_id": "SKU_035",
       "name": "好友趣蜂蜜黄油味",
-      "images": [],
+      "images": [
+        "images/SKU_035.jpg"
+      ],
       "locations": [
         "H1_F_L5_C03"
       ]
@@ -287,7 +357,9 @@
     {
       "sku_id": "SKU_036",
       "name": "可孚棉签",
-      "images": [],
+      "images": [
+        "images/SKU_036.jpg"
+      ],
       "locations": [
         "H1_B_L1_C01"
       ]
@@ -295,7 +367,9 @@
     {
       "sku_id": "SKU_037",
       "name": "小鹿妈妈牙线",
-      "images": [],
+      "images": [
+        "images/SKU_037.jpg"
+      ],
       "locations": [
         "H1_B_L1_C02"
       ]
@@ -303,7 +377,9 @@
     {
       "sku_id": "SKU_038",
       "name": "得宝纸巾",
-      "images": [],
+      "images": [
+        "images/SKU_038.jpg"
+      ],
       "locations": [
         "H1_B_L1_C03"
       ]
@@ -311,7 +387,9 @@
     {
       "sku_id": "SKU_039",
       "name": "草原红太阳烧烤料原味",
-      "images": [],
+      "images": [
+        "images/SKU_039.jpg"
+      ],
       "locations": [
         "H1_B_L1_C04"
       ]
@@ -319,7 +397,9 @@
     {
       "sku_id": "SKU_040",
       "name": "草原红太阳烧烤料香辣味",
-      "images": [],
+      "images": [
+        "images/SKU_040.jpg"
+      ],
       "locations": [
         "H1_B_L1_C05"
       ]
@@ -327,7 +407,9 @@
     {
       "sku_id": "SKU_041",
       "name": "草原红太阳烧烤酱香辣",
-      "images": [],
+      "images": [
+        "images/SKU_041.jpg"
+      ],
       "locations": [
         "H1_B_L1_C06"
       ]
@@ -335,7 +417,9 @@
     {
       "sku_id": "SKU_042",
       "name": "草原红太阳烧烤酱原味",
-      "images": [],
+      "images": [
+        "images/SKU_042.jpg"
+      ],
       "locations": [
         "H1_B_L1_C07"
       ]
@@ -343,7 +427,9 @@
     {
       "sku_id": "SKU_043",
       "name": "海氏海诺创口贴",
-      "images": [],
+      "images": [
+        "images/SKU_043.jpg"
+      ],
       "locations": [
         "H1_B_L2_C01"
       ]
@@ -351,7 +437,9 @@
     {
       "sku_id": "SKU_044",
       "name": "德佑湿巾",
-      "images": [],
+      "images": [
+        "images/SKU_044.jpg"
+      ],
       "locations": [
         "H1_B_L2_C02"
       ]
@@ -359,7 +447,9 @@
     {
       "sku_id": "SKU_045",
       "name": "心相印纸巾",
-      "images": [],
+      "images": [
+        "images/SKU_045.jpg"
+      ],
       "locations": [
         "H1_B_L2_C03",
         "H1_B_L3_C02"
@@ -368,7 +458,9 @@
     {
       "sku_id": "SKU_046",
       "name": "合味道海鲜味",
-      "images": [],
+      "images": [
+        "images/SKU_046.jpg"
+      ],
       "locations": [
         "H1_B_L2_C04"
       ]
@@ -376,7 +468,9 @@
     {
       "sku_id": "SKU_047",
       "name": "合味道五香牛肉味",
-      "images": [],
+      "images": [
+        "images/SKU_047.jpg"
+      ],
       "locations": [
         "H1_B_L2_C05"
       ]
@@ -384,7 +478,9 @@
     {
       "sku_id": "SKU_048",
       "name": "农心碗面",
-      "images": [],
+      "images": [
+        "images/SKU_048.jpg"
+      ],
       "locations": [
         "H1_B_L2_C06"
       ]
@@ -392,7 +488,9 @@
     {
       "sku_id": "SKU_049",
       "name": "健食力低脂香肠",
-      "images": [],
+      "images": [
+        "images/SKU_049.jpg"
+      ],
       "locations": [
         "H1_B_L2_C07"
       ]
@@ -400,7 +498,9 @@
     {
       "sku_id": "SKU_050",
       "name": "妙洁海绵百洁布",
-      "images": [],
+      "images": [
+        "images/SKU_050.jpg"
+      ],
       "locations": [
         "H1_B_L3_C01"
       ]
@@ -408,7 +508,9 @@
     {
       "sku_id": "SKU_051",
       "name": "康师傅香辣牛肉面",
-      "images": [],
+      "images": [
+        "images/SKU_051.jpg"
+      ],
       "locations": [
         "H1_B_L3_C03"
       ]
@@ -416,7 +518,9 @@
     {
       "sku_id": "SKU_052",
       "name": "康师傅鲜虾鱼板面",
-      "images": [],
+      "images": [
+        "images/SKU_052.jpg"
+      ],
       "locations": [
         "H1_B_L3_C04"
       ]
@@ -424,7 +528,9 @@
     {
       "sku_id": "SKU_053",
       "name": "康师傅老坛酸菜牛肉面",
-      "images": [],
+      "images": [
+        "images/SKU_053.jpg"
+      ],
       "locations": [
         "H1_B_L3_C05"
       ]
@@ -432,7 +538,9 @@
     {
       "sku_id": "SKU_054",
       "name": "好人家火锅底料",
-      "images": [],
+      "images": [
+        "images/SKU_054.jpg"
+      ],
       "locations": [
         "H1_B_L3_C06"
       ]
@@ -440,7 +548,9 @@
     {
       "sku_id": "SKU_055",
       "name": "纯棉酒店大毛巾",
-      "images": [],
+      "images": [
+        "images/SKU_055.jpg"
+      ],
       "locations": [
         "H1_B_L4_C01"
       ]
@@ -448,7 +558,9 @@
     {
       "sku_id": "SKU_056",
       "name": "京东京造毛巾",
-      "images": [],
+      "images": [
+        "images/SKU_056.jpg"
+      ],
       "locations": [
         "H1_B_L4_C02"
       ]
@@ -456,7 +568,9 @@
     {
       "sku_id": "SKU_057",
       "name": "三色藜麦",
-      "images": [],
+      "images": [
+        "images/SKU_057.png"
+      ],
       "locations": [
         "H1_B_L4_C03"
       ]
@@ -464,7 +578,9 @@
     {
       "sku_id": "SKU_058",
       "name": "慢碳十色糙米",
-      "images": [],
+      "images": [
+        "images/SKU_058.png"
+      ],
       "locations": [
         "H1_B_L4_C04"
       ]
@@ -472,7 +588,9 @@
     {
       "sku_id": "SKU_059",
       "name": "高纤七色糙米",
-      "images": [],
+      "images": [
+        "images/SKU_059.png"
+      ],
       "locations": [
         "H1_B_L4_C05"
       ]
@@ -480,7 +598,9 @@
     {
       "sku_id": "SKU_060",
       "name": "山西黄小米",
-      "images": [],
+      "images": [
+        "images/SKU_060.jpg"
+      ],
       "locations": [
         "H1_B_L4_C06"
       ]
@@ -488,7 +608,9 @@
     {
       "sku_id": "SKU_061",
       "name": "界面医疗医用外科口罩",
-      "images": [],
+      "images": [
+        "images/SKU_061.jpg"
+      ],
       "locations": [
         "H1_B_L5_C01"
       ]
@@ -496,7 +618,9 @@
     {
       "sku_id": "SKU_062",
       "name": "中盐精制盐",
-      "images": [],
+      "images": [
+        "images/SKU_062.jpg"
+      ],
       "locations": [
         "H1_B_L5_C02"
       ]
@@ -504,7 +628,9 @@
     {
       "sku_id": "SKU_063",
       "name": "小苏打",
-      "images": [],
+      "images": [
+        "images/SKU_063.jpg"
+      ],
       "locations": [
         "H1_B_L5_C03"
       ]
@@ -512,7 +638,9 @@
     {
       "sku_id": "SKU_064",
       "name": "镇江香醋",
-      "images": [],
+      "images": [
+        "images/SKU_064.jpg"
+      ],
       "locations": [
         "H1_B_L5_C04"
       ]
@@ -520,7 +648,9 @@
     {
       "sku_id": "SKU_065",
       "name": "蒸鱼豉油",
-      "images": [],
+      "images": [
+        "images/SKU_065.jpg"
+      ],
       "locations": [
         "H1_B_L5_C05"
       ]
@@ -528,7 +658,9 @@
     {
       "sku_id": "SKU_066",
       "name": "薄盐生抽",
-      "images": [],
+      "images": [
+        "images/SKU_066.jpg"
+      ],
       "locations": [
         "H1_B_L5_C06"
       ]
@@ -536,7 +668,9 @@
     {
       "sku_id": "SKU_067",
       "name": "可口可乐罐装",
-      "images": [],
+      "images": [
+        "images/SKU_067.jpg"
+      ],
       "locations": [
         "H2_F_L1_C01"
       ]
@@ -544,7 +678,9 @@
     {
       "sku_id": "SKU_068",
       "name": "雪碧罐装",
-      "images": [],
+      "images": [
+        "images/SKU_068.jpg"
+      ],
       "locations": [
         "H2_F_L1_C02"
       ]
@@ -552,7 +688,9 @@
     {
       "sku_id": "SKU_069",
       "name": "芬达罐装",
-      "images": [],
+      "images": [
+        "images/SKU_069.jpg"
+      ],
       "locations": [
         "H2_F_L1_C03"
       ]
@@ -560,7 +698,9 @@
     {
       "sku_id": "SKU_070",
       "name": "百事可乐瓶装",
-      "images": [],
+      "images": [
+        "images/SKU_070.jpg"
+      ],
       "locations": [
         "H2_F_L1_C04"
       ]
@@ -568,7 +708,9 @@
     {
       "sku_id": "SKU_071",
       "name": "7喜瓶装",
-      "images": [],
+      "images": [
+        "images/SKU_071.jpg"
+      ],
       "locations": [
         "H2_F_L1_C05"
       ]
@@ -576,7 +718,9 @@
     {
       "sku_id": "SKU_072",
       "name": "水溶C100瓶装",
-      "images": [],
+      "images": [
+        "images/SKU_072.jpg"
+      ],
       "locations": [
         "H2_F_L1_C06"
       ]
@@ -584,7 +728,9 @@
     {
       "sku_id": "SKU_073",
       "name": "小青柠汁饮料",
-      "images": [],
+      "images": [
+        "images/SKU_073.jpg"
+      ],
       "locations": [
         "H2_F_L2_C01"
       ]
@@ -592,7 +738,9 @@
     {
       "sku_id": "SKU_074",
       "name": "美年达瓶装",
-      "images": [],
+      "images": [
+        "images/SKU_074.jpg"
+      ],
       "locations": [
         "H2_F_L2_C02"
       ]
@@ -600,7 +748,9 @@
     {
       "sku_id": "SKU_075",
       "name": "名仁苏打水饮料",
-      "images": [],
+      "images": [
+        "images/SKU_075.jpg"
+      ],
       "locations": [
         "H2_F_L2_C03"
       ]
@@ -608,7 +758,9 @@
     {
       "sku_id": "SKU_076",
       "name": "东方树叶茉莉花茶",
-      "images": [],
+      "images": [
+        "images/SKU_076.jpg"
+      ],
       "locations": [
         "H2_F_L2_C04"
       ]
@@ -616,7 +768,9 @@
     {
       "sku_id": "SKU_077",
       "name": "绿豆冰沙",
-      "images": [],
+      "images": [
+        "images/SKU_077.jpg"
+      ],
       "locations": [
         "H2_F_L2_C05"
       ]
@@ -624,7 +778,9 @@
     {
       "sku_id": "SKU_078",
       "name": "外星人电解质水椰子口味",
-      "images": [],
+      "images": [
+        "images/SKU_078.jpg"
+      ],
       "locations": [
         "H2_F_L3_C01"
       ]
@@ -632,7 +788,9 @@
     {
       "sku_id": "SKU_079",
       "name": "外星人电解质水青柠口味",
-      "images": [],
+      "images": [
+        "images/SKU_079.jpg"
+      ],
       "locations": [
         "H2_F_L3_C02",
         "H2_F_L4_C06"
@@ -641,7 +799,9 @@
     {
       "sku_id": "SKU_080",
       "name": "外星人电解质水白桃口味0糖",
-      "images": [],
+      "images": [
+        "images/SKU_080.jpg"
+      ],
       "locations": [
         "H2_F_L3_C03",
         "H2_F_L5_C05"
@@ -650,7 +810,9 @@
     {
       "sku_id": "SKU_081",
       "name": "外星人电解质水西柚口味",
-      "images": [],
+      "images": [
+        "images/SKU_081.jpg"
+      ],
       "locations": [
         "H2_F_L3_C04"
       ]
@@ -658,7 +820,9 @@
     {
       "sku_id": "SKU_082",
       "name": "尖叫",
-      "images": [],
+      "images": [
+        "images/SKU_082.jpg"
+      ],
       "locations": [
         "H2_F_L3_C05"
       ]
@@ -666,7 +830,9 @@
     {
       "sku_id": "SKU_083",
       "name": "百岁山矿泉水",
-      "images": [],
+      "images": [
+        "images/SKU_083.png"
+      ],
       "locations": [
         "H2_F_L3_C06",
         "H2_F_L4_C08",
@@ -676,7 +842,9 @@
     {
       "sku_id": "SKU_084",
       "name": "脉动观梅止渴饮",
-      "images": [],
+      "images": [
+        "images/SKU_084.jpg"
+      ],
       "locations": [
         "H2_F_L4_C01",
         "H2_F_L5_C01"
@@ -685,7 +853,9 @@
     {
       "sku_id": "SKU_085",
       "name": "脉动芒果口味",
-      "images": [],
+      "images": [
+        "images/SKU_085.jpg"
+      ],
       "locations": [
         "H2_F_L4_C02",
         "H2_F_L5_C02"
@@ -694,7 +864,9 @@
     {
       "sku_id": "SKU_086",
       "name": "脉动菠萝口味",
-      "images": [],
+      "images": [
+        "images/SKU_086.jpg"
+      ],
       "locations": [
         "H2_F_L4_C03",
         "H2_F_L5_C03"
@@ -703,7 +875,9 @@
     {
       "sku_id": "SKU_087",
       "name": "脉动猫薄荷瓶",
-      "images": [],
+      "images": [
+        "images/SKU_087.jpg"
+      ],
       "locations": [
         "H2_F_L4_C04",
         "H2_F_L5_C04"
@@ -712,7 +886,9 @@
     {
       "sku_id": "SKU_088",
       "name": "外星人电解质水青柠口味0糖",
-      "images": [],
+      "images": [
+        "images/SKU_088.jpg"
+      ],
       "locations": [
         "H2_F_L4_C05"
       ]
@@ -720,7 +896,9 @@
     {
       "sku_id": "SKU_089",
       "name": "宝矿力水特",
-      "images": [],
+      "images": [
+        "images/SKU_089.jpg"
+      ],
       "locations": [
         "H2_F_L4_C07",
         "H2_F_L5_C06"
@@ -729,7 +907,9 @@
     {
       "sku_id": "SKU_090",
       "name": "舒肤佳香皂纯白清香型",
-      "images": [],
+      "images": [
+        "images/SKU_090.jpg"
+      ],
       "locations": [
         "H2_B_L1_C01"
       ]
@@ -737,7 +917,9 @@
     {
       "sku_id": "SKU_091",
       "name": "舒肤佳香皂芦荟呵护香型",
-      "images": [],
+      "images": [
+        "images/SKU_091.jpg"
+      ],
       "locations": [
         "H2_B_L1_C02"
       ]
@@ -745,7 +927,9 @@
     {
       "sku_id": "SKU_092",
       "name": "舒肤佳香皂柠檬清新香型",
-      "images": [],
+      "images": [
+        "images/SKU_092.jpg"
+      ],
       "locations": [
         "H2_B_L1_C03"
       ]
@@ -753,7 +937,9 @@
     {
       "sku_id": "SKU_093",
       "name": "汰渍肥皂",
-      "images": [],
+      "images": [
+        "images/SKU_093.jpg"
+      ],
       "locations": [
         "H2_B_L1_C04"
       ]
@@ -761,7 +947,9 @@
     {
       "sku_id": "SKU_094",
       "name": "杯子",
-      "images": [],
+      "images": [
+        "images/SKU_094.jpg"
+      ],
       "locations": [
         "H2_B_L1_C05",
         "H2_B_L2_C05"
@@ -770,7 +958,9 @@
     {
       "sku_id": "SKU_095",
       "name": "舒克牙膏竹炭薄荷",
-      "images": [],
+      "images": [
+        "images/SKU_095.jpg"
+      ],
       "locations": [
         "H2_B_L2_C01"
       ]
@@ -778,7 +968,9 @@
     {
       "sku_id": "SKU_096",
       "name": "舒克牙膏柠檬百香果",
-      "images": [],
+      "images": [
+        "images/SKU_096.jpg"
+      ],
       "locations": [
         "H2_B_L2_C02"
       ]
@@ -786,7 +978,9 @@
     {
       "sku_id": "SKU_097",
       "name": "舒克牙膏海盐薄荷",
-      "images": [],
+      "images": [
+        "images/SKU_097.jpg"
+      ],
       "locations": [
         "H2_B_L2_C03"
       ]
@@ -794,7 +988,9 @@
     {
       "sku_id": "SKU_098",
       "name": "冷酸灵云感觉牙刷",
-      "images": [],
+      "images": [
+        "images/SKU_098.jpg"
+      ],
       "locations": [
         "H2_B_L2_C04"
       ]
@@ -802,7 +998,9 @@
     {
       "sku_id": "SKU_099",
       "name": "Dove沐浴泡泡樱花甜香",
-      "images": [],
+      "images": [
+        "images/SKU_099.jpg"
+      ],
       "locations": [
         "H2_B_L3_C01"
       ]
@@ -810,7 +1008,9 @@
     {
       "sku_id": "SKU_100",
       "name": "Dove沐浴泡泡白桃果香",
-      "images": [],
+      "images": [
+        "images/SKU_100.jpg"
+      ],
       "locations": [
         "H2_B_L3_C02"
       ]
@@ -818,7 +1018,9 @@
     {
       "sku_id": "SKU_101",
       "name": "Dove沐浴泡泡清甜奶香",
-      "images": [],
+      "images": [
+        "images/SKU_101.jpg"
+      ],
       "locations": [
         "H2_B_L3_C03"
       ]
@@ -826,7 +1028,9 @@
     {
       "sku_id": "SKU_102",
       "name": "威露士",
-      "images": [],
+      "images": [
+        "images/SKU_102.jpg"
+      ],
       "locations": [
         "H2_B_L3_C04"
       ]
@@ -834,7 +1038,9 @@
     {
       "sku_id": "SKU_103",
       "name": "Dove沐浴乳",
-      "images": [],
+      "images": [
+        "images/SKU_103.jpg"
+      ],
       "locations": [
         "H2_B_L3_C05"
       ]
@@ -842,7 +1048,9 @@
     {
       "sku_id": "SKU_104",
       "name": "拖鞋",
-      "images": [],
+      "images": [
+        "images/SKU_104.jpg"
+      ],
       "locations": [
         "H2_B_L3_C06",
         "H2_B_L5_C01"
@@ -851,7 +1059,9 @@
     {
       "sku_id": "SKU_105",
       "name": "Dove沐浴泡泡樱花甜香袋装",
-      "images": [],
+      "images": [
+        "images/SKU_105.jpg"
+      ],
       "locations": [
         "H2_B_L4_C01"
       ]
@@ -859,7 +1069,9 @@
     {
       "sku_id": "SKU_106",
       "name": "半亩花田洗发水",
-      "images": [],
+      "images": [
+        "images/SKU_106.jpg"
+      ],
       "locations": [
         "H2_B_L4_C02"
       ]
@@ -867,7 +1079,9 @@
     {
       "sku_id": "SKU_107",
       "name": "心相印厨房纸巾",
-      "images": [],
+      "images": [
+        "images/SKU_107.jpg"
+      ],
       "locations": [
         "H2_B_L4_C03",
         "H2_B_L5_C02"

@@ -28,7 +28,16 @@ class SkuApiTest(unittest.TestCase):
     def test_query_images_by_name(self) -> None:
         response = self.client.get("/sku/images", params={"name": "NFC桔汁"})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"name": "NFC桔汁", "images": []})
+        self.assertEqual(
+            response.json(),
+            {"name": "NFC桔汁", "images": ["/images/SKU_001.jpg"]},
+        )
+
+    def test_get_image(self) -> None:
+        response = self.client.get("/images/SKU_001.jpg")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/jpeg")
+        self.assertGreater(len(response.content), 0)
 
     def test_query_name_by_location(self) -> None:
         response = self.client.get(

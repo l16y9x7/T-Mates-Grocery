@@ -5,6 +5,8 @@ import re
 from collections import Counter
 from pathlib import Path, PurePosixPath
 
+from PIL import Image, UnidentifiedImageError
+
 
 ROOT = Path(__file__).resolve().parent
 SKU_PATTERN = re.compile(r"^SKU_\d{3}$")
@@ -35,12 +37,17 @@ def main() -> None:
     require(len(names) == len(set(names)), "存在重复商品名称")
 
     all_locations: list[str] = []
+    image_count = 0
+    image_sizes: list[tuple[int, int]] = []
     repeated_product_count = 0
     for product in products:
         require(set(product) == PRODUCT_FIELDS, f"{product.get('sku_id')} 包含非精简字段")
         images = product["images"]
         locations = product["locations"]
-        require(isinstance(images, list), f"{product['sku_id']} 的 images 必须是数组")
+        require(
+            isinstance(images, list) and images,
+            f"{product['sku_id']} 必须至少有一张图片",
+        )
         require(
             all(isinstance(image, str) and image for image in images),
             f"{product['sku_id']} 存在无效图片路径",
@@ -54,6 +61,25 @@ def main() -> None:
                 and ".." not in image_path.parts,
                 f"{product['sku_id']} 的图片必须是 images/ 下的相对路径",
             )
+            resolved_image = ROOT.joinpath(*image_path.parts)
+            require(
+                resolved_image.is_file() and resolved_image.stat().st_size > 0,
+                f"{product['sku_id']} 的图片不存在或为空: {image}",
+            )
+            try:
+                with Image.open(resolved_image) as source_image:
+                    width, height = source_image.size
+                    source_image.verify()
+            except (OSError, UnidentifiedImageError) as error:
+                raise ValueError(
+                    f"{product['sku_id']} 的图片无法读取: {image}"
+                ) from error
+            require(
+                width >= 64 and height >= 64,
+                f"{product['sku_id']} 的图片分辨率过低: {image}",
+            )
+            image_count += 1
+            image_sizes.append((width, height))
         require(
             isinstance(locations, list) and locations,
             f"{product['sku_id']} 必须至少有一个位置",
@@ -72,8 +98,15 @@ def main() -> None:
     require(not duplicate_locations, f"位置被多个 SKU 占用: {duplicate_locations}")
 
     print(
-        f"校验通过：{len(products)} 个 SKU，{len(all_locations)} 个位置，"
+        f"校验通过：{len(products)} 个 SKU，{image_count} 张图片，"
+        f"{len(all_locations)} 个位置，"
         f"{repeated_product_count} 个 SKU 具有多个标准货位。"
+    )
+    smallest_image = min(image_sizes, key=lambda size: size[0] * size[1])
+    largest_image = max(image_sizes, key=lambda size: size[0] * size[1])
+    print(
+        f"最小/最大图片：{smallest_image[0]}x{smallest_image[1]} / "
+        f"{largest_image[0]}x{largest_image[1]}。"
     )
 
 

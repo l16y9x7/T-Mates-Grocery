@@ -190,6 +190,18 @@ def write_json(path: Path, payload: object) -> None:
     )
 
 
+def load_existing_images() -> dict[str, list[str]]:
+    catalog_path = ROOT / "products.json"
+    if not catalog_path.exists():
+        return {}
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    return {
+        product["name"]: list(product.get("images", []))
+        for product in catalog.get("products", [])
+        if isinstance(product, dict) and isinstance(product.get("name"), str)
+    }
+
+
 def build() -> dict[str, object]:
     ordered_names: list[str] = []
     for levels in LAYOUT.values():
@@ -211,11 +223,12 @@ def build() -> dict[str, object]:
                     f"{shelf_id}_{face}_L{level}_C{column:02d}"
                 )
 
+    existing_images = load_existing_images()
     products = [
         {
             "sku_id": sku_by_name[name],
             "name": name,
-            "images": [],
+            "images": existing_images.get(name, []),
             "locations": locations_by_name[name],
         }
         for name in ordered_names

@@ -56,7 +56,7 @@ class ApiError(Exception):
 
 
 class SkuCatalog:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: dict[str, Any], catalog_root: Path = ROOT) -> None:
         products = payload.get("products")
         if not isinstance(products, list):
             raise ValueError("products.json 中的 products 必须是数组")
@@ -91,6 +91,9 @@ class SkuCatalog:
                     raise ValueError(
                         f"商品 {name!r} 的图片必须是 images/ 下的相对路径"
                     )
+                resolved_image = catalog_root.joinpath(*image_path.parts)
+                if not resolved_image.is_file() or resolved_image.stat().st_size == 0:
+                    raise ValueError(f"商品 {name!r} 的图片不存在: {image}")
 
             normalized_name = name.strip()
             if normalized_name in self._by_name:
@@ -108,7 +111,7 @@ class SkuCatalog:
     @classmethod
     def load(cls, path: Path) -> "SkuCatalog":
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return cls(payload)
+        return cls(payload, path.resolve().parent)
 
     def locations_for_name(self, name: str) -> list[str] | None:
         product = self._by_name.get(name.strip())

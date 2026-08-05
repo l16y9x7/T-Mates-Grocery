@@ -7,6 +7,7 @@
 - `products.json`：每个 SKU 一条记录。
 - `images/`：保存商品参考图片；`images` 字段使用相对此目录的路径。
 - `build_catalog.py`：从标准摆放清单重新生成 `products.json`。
+- `extract_images.py`：从标准摆放 DOCX 按商品单元格及裁剪参数提取参考图片。
 - `validate_catalog.py`：检查字段、重复编号和位置冲突。
 
 ## 当前状态
@@ -17,7 +18,7 @@
 {
   "sku_id": "SKU_001",
   "name": "NFC桔汁",
-  "images": [],
+  "images": ["images/SKU_001.jpg"],
   "locations": ["H1_F_L1_C01"]
 }
 ```
@@ -37,6 +38,14 @@
 ```powershell
 python build_catalog.py
 ```
+
+从标准摆放 DOCX 提取全部商品图片并更新 `images` 字段：
+
+```powershell
+python extract_images.py
+```
+
+`build_catalog.py` 会保留现有 `images` 字段，不会在刷新货位时清空图片。
 
 修改后运行校验：
 
@@ -67,7 +76,7 @@ python api.py --host 0.0.0.0 --port 8080
 
 | 方法 | 路径 | 查询参数 | 用途 |
 |---|---|---|---|
-| `GET` | `/health` | 无 | 健康检查 |
+| `GET` | `/sku/health` | 无 | 健康检查 |
 | `GET` | `/sku/locations` | `name` | 根据商品名查询全部标准位置 |
 | `GET` | `/sku/images` | `name` | 根据商品名查询图片 URL |
 | `GET` | `/sku/name` | `location` | 根据位置查询商品名 |
