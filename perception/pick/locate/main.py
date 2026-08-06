@@ -23,10 +23,19 @@ from pydantic import BaseModel, Field
 
 
 ROOT = Path(__file__).resolve().parent
-RGB_DIR = ROOT.parents[1] / "test_data" / "2026-08-04"
 PROMPT_MAPPING_PATH = ROOT / "qwen_sam_prompt_mapping.json"
 MONITOR_IMAGE_DIR = Path(
     os.getenv("LOCATE_MONITOR_IMAGE_DIR", str(ROOT / "monitor_images"))
+)
+CAMERA_SNAPSHOT_URL = os.getenv(
+    "CAMERA_SNAPSHOT_URL",
+    "http://192.168.130.59:8085/camera/snapshot",
+)
+CAMERA_SNAPSHOT_TIMEOUT_SECONDS = float(
+    os.getenv("CAMERA_SNAPSHOT_TIMEOUT_SECONDS", "5")
+)
+CAMERA_SNAPSHOT_CACHE_DIR = Path(
+    os.getenv("CAMERA_SNAPSHOT_CACHE_DIR", str(ROOT / "camera_snapshots"))
 )
 
 SKU_API_URL = os.getenv("SKU_API_URL", "http://127.0.0.1:25540").rstrip("/")
@@ -98,11 +107,49 @@ class LocateResponse(BaseModel):
 
 
 def get_latest_rgb() -> Path:
-    """从本地测试目录取得最新 RGB；后续可替换成视频流取帧。"""
-    images = sorted(RGB_DIR.glob("*_rgb.*"))
-    if not images:
-        raise HTTPException(status_code=404, detail="没有找到 RGB 图片")
-    return images[-1]
+    """只读取相机快照接口；不可用或内容无效时返回 HTTP 400。"""
+    camera_snapshot = fetch_camera_snapshot()
+    if camera_snapshot is not None:
+        return camera_snapshot
+    raise HTTPException(
+        status_code=400,
+        detail="未提供图片，且相机快照接口读取失败或未返回有效 JPG/PNG",
+    )
+
+
+def fetch_camera_snapshot() -> Path | None:
+    """获取并验证相机快照；任何读取错误都返回 None。"""
+    try:
+        response = requests.get(
+            CAMERA_SNAPSHOT_URL,
+            timeout=CAMERA_SNAPSHOT_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        image_bytes = response.content
+    except requests.RequestException:
+        return None
+
+    if not image_bytes or len(image_bytes) > 20 * 1024 * 1024:
+        return None
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as source_image:
+            image_format = (source_image.format or "").upper()
+            source_image.verify()
+    except (UnidentifiedImageError, OSError, ValueError):
+        return None
+
+    suffix = {"JPEG": ".jpg", "PNG": ".png"}.get(image_format)
+    if suffix is None:
+        return None
+    snapshot_path = CAMERA_SNAPSHOT_CACHE_DIR / f"latest_camera_rgb{suffix}"
+    temporary_path = snapshot_path.with_suffix(f"{suffix}.tmp")
+    try:
+        CAMERA_SNAPSHOT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        temporary_path.write_bytes(image_bytes)
+        temporary_path.replace(snapshot_path)
+    except OSError:
+        return None
+    return snapshot_path
 
 
 def store_monitor_image(image_path: Path) -> str:

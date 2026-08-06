@@ -26,11 +26,13 @@ python main.py
 
 可使用 `SKU_API_URL`、`QWEN3_URL`、`QWEN3_MODEL`、`SAM3_URL` 环境变量覆盖。
 
+未随请求上传图片时，只从 `http://192.168.130.59:8085/camera/snapshot` 获取当前 RGB，不读取本地测试图片。可通过 `CAMERA_SNAPSHOT_URL` 和 `CAMERA_SNAPSHOT_TIMEOUT_SECONDS` 覆盖地址与超时，通过 `CAMERA_SNAPSHOT_CACHE_DIR` 指定快照缓存目录。
+
 ## 接口
 
 ### `GET /video/frame`
 
-返回当前 RGB 图片。本地测试阶段使用 `perception/test_data/2026-08-04` 中最新的 RGB 图片。
+返回当前 RGB 图片。服务只请求 `CAMERA_SNAPSHOT_URL` 并验证响应是有效 JPG/PNG；连接失败、非 2xx、空响应、图片无效或缓存失败时返回 HTTP 400，不读取本地图片。
 
 ### `POST /visual/pick/locate`
 
@@ -118,6 +120,24 @@ python -m unittest -v test_main.py
 ```
 
 ### 使用标注图片运行真实推理
+
+#### 正式接口测试
+
+`test_formal_api.py` 的命令行只接收 `name`、`product_name`、`hand` 三个必填输入：
+
+```powershell
+python test_formal_api.py SORTING "可口可乐" left
+```
+
+脚本会用 `product_name` 请求 SKU API，再通过 `image_name_mapping.json` 和 SKU ID 自动找到 `2026-08-04` 下的所有对应本地图片。随后由脚本内部补充 `image_name` 和 `image_base64`，逐张调用正式 `/visual/pick/locate`，并校验响应只包含 `product_name`、`bbox`、`mask`、`image_path`，bbox 坐标均在 `[1,1000]` 内。
+
+可选保存测试结果：
+
+```powershell
+python test_formal_api.py SORTING "可口可乐" left --output formal_result.json
+```
+
+#### Debug 推理与结果图
 
 `test_inference.py` 会按以下顺序查找测试图片：
 

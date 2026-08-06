@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 from PIL import Image
 
 import main
+import test_formal_api
 import test_inference
 
 
@@ -31,6 +32,117 @@ def mask_base64_with_pixel_count(size: tuple[int, int], count: int) -> str:
 
 
 class LocateLogicTest(unittest.TestCase):
+    def test_get_latest_rgb_prefers_camera_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            image_buffer = io.BytesIO()
+            Image.new("RGB", (16, 12), "blue").save(image_buffer, format="JPEG")
+            response = Mock(content=image_buffer.getvalue())
+            response.raise_for_status.return_value = None
+            with (
+                patch.object(main.requests, "get", return_value=response) as get_mock,
+                patch.object(main, "CAMERA_SNAPSHOT_CACHE_DIR", directory / "camera"),
+            ):
+                image_path = main.get_latest_rgb()
+
+            self.assertTrue(image_path.is_file())
+            self.assertEqual(image_path.name, "latest_camera_rgb.jpg")
+            with Image.open(image_path) as image:
+                self.assertEqual(image.size, (16, 12))
+            get_mock.assert_called_once_with(
+                main.CAMERA_SNAPSHOT_URL,
+                timeout=main.CAMERA_SNAPSHOT_TIMEOUT_SECONDS,
+            )
+
+    def test_get_latest_rgb_returns_400_without_local_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            (directory / "002_rgb.jpg").touch()
+            with (
+                patch.object(
+                    main.requests,
+                    "get",
+                    side_effect=main.requests.RequestException("camera offline"),
+                ),
+                patch.object(main, "CAMERA_SNAPSHOT_CACHE_DIR", directory / "camera"),
+                self.assertRaises(main.HTTPException) as raised,
+            ):
+                main.get_latest_rgb()
+
+            self.assertEqual(raised.exception.status_code, 400)
+
+    def test_formal_request_without_image_returns_400_when_camera_fails(self) -> None:
+        request = main.LocateRequest(
+            name="SORTING",
+            product_name="可口可乐",
+            hand="left",
+        )
+        with (
+            patch.object(
+                main,
+                "lookup_sku_by_name",
+                return_value={"sku_id": "SKU_001", "name": "可口可乐"},
+            ),
+            patch.object(main, "fetch_camera_snapshot", return_value=None),
+            self.assertRaises(main.HTTPException) as raised,
+        ):
+            main.locate_product(request)
+
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_formal_api_automatically_uploads_matched_local_image(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            image_path = Path(temporary_directory) / "matched_rgb.jpg"
+            image_path.write_bytes(b"local image")
+            response = Mock(ok=True, status_code=200)
+            response.json.return_value = {
+                "product_name": "可口可乐",
+                "bbox": [100, 200, 300, 400],
+                "mask": base64.b64encode(b"mask").decode("ascii"),
+                "image_path": "C:/monitor/stored.jpg",
+            }
+            with patch.object(
+                test_formal_api.requests,
+                "post",
+                return_value=response,
+            ) as request_mock:
+                result = test_formal_api.call_formal_locate(
+                    "SORTING",
+                    "可口可乐",
+                    "left",
+                    image_path,
+                )
+
+            self.assertEqual(result["bbox"], [100, 200, 300, 400])
+            request_payload = request_mock.call_args.kwargs["json"]
+            self.assertEqual(request_payload["name"], "SORTING")
+            self.assertEqual(request_payload["product_name"], "可口可乐")
+            self.assertEqual(request_payload["hand"], "left")
+            self.assertEqual(request_payload["image_name"], image_path.name)
+            self.assertEqual(
+                base64.b64decode(request_payload["image_base64"]),
+                b"local image",
+            )
+
+    def test_formal_api_finds_local_image_by_sku_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            image_path = directory / "mapped_rgb.jpg"
+            image_path.touch()
+            mapping_path = directory / "image_name_mapping.json"
+            mapping_path.write_text(
+                json.dumps({image_path.name: ["SKU_076"]}),
+                encoding="utf-8",
+            )
+
+            images = test_formal_api.find_local_images(
+                "sku_076",
+                mapping_path=mapping_path,
+                image_directory=directory,
+            )
+
+            self.assertEqual(images, [image_path])
+
     def test_inference_client_does_not_import_main(self) -> None:
         self.assertNotIn("main", test_inference.__dict__)
 
