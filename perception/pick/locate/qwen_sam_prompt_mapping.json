@@ -84,7 +84,7 @@
     "sam3_prompt": "topmost sausage package"
   },
   "可口可乐罐装": {
-    "qwen3_prompt": "找到图中顶层货架上所有可口可乐排的bbox，返回一个完整的大bbox。最终返回格式：{\"name\": \"可口可乐排\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图中顶层货架上所有的可口可乐堆，返回一个完整包含所有可口可乐堆的大bbox。最终返回格式：{\"name\": \"可口可乐堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost coke"
   },
   "可孚棉签": {
