@@ -29,7 +29,7 @@ MONITOR_IMAGE_DIR = Path(
 )
 CAMERA_SNAPSHOT_URL = os.getenv(
     "CAMERA_SNAPSHOT_URL",
-    "http://192.168.130.50:8085/camera/snapshot",
+    "http://192.168.130.50:8085/camera/snapshot?camera=head&type=color",
 )
 CAMERA_SNAPSHOT_TIMEOUT_SECONDS = float(
     os.getenv("CAMERA_SNAPSHOT_TIMEOUT_SECONDS", "5")
