@@ -398,6 +398,8 @@ async function runQwen() {
         name: requestName.value,
         product_name: qwenSku.value,
         hand: requestHand.value,
+        qwen3_prompt: qwenPrompt.value,
+        sam3_prompt: samPrompt.value,
       }),
     });
     latestImageBase64 = result.image_base64;

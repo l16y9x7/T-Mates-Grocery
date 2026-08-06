@@ -75,6 +75,8 @@ class LocateRequest(BaseModel):
     hand: str
     image_name: str | None = None
     image_base64: str | None = None
+    qwen3_prompt: str | None = None
+    sam3_prompt: str | None = None
 
 
 class LocatedInstance(BaseModel):
@@ -728,14 +730,23 @@ def drop_smallest_mask_area_outlier(
 
 
 def locate_product_in_image(
-    product: dict[str, Any], image_path: Path
+    product: dict[str, Any],
+    image_path: Path,
+    *,
+    qwen_prompt_override: str | None = None,
+    sam_prompt_override: str | None = None,
 ) -> LocateDebugResponse:
     """使用已查询的 SKU 信息，在指定 RGB 图片上运行完整定位流程。"""
     if not image_path.is_file():
         raise HTTPException(status_code=404, detail=f"测试图片不存在: {image_path.name}")
     monitor_image_path = store_monitor_image(image_path)
     canonical_name = product["name"].strip()
-    qwen_prompt, sam_prompt = load_prompt_pair(canonical_name)
+    qwen_prompt = (qwen_prompt_override or "").strip()
+    sam_prompt = (sam_prompt_override or "").strip()
+    if not qwen_prompt or not sam_prompt:
+        stored_qwen_prompt, stored_sam_prompt = load_prompt_pair(canonical_name)
+        qwen_prompt = qwen_prompt or stored_qwen_prompt
+        sam_prompt = sam_prompt or stored_sam_prompt
     qwen_bboxes = get_stable_qwen_bboxes(qwen_prompt, image_path)
 
     try:
@@ -823,12 +834,23 @@ def make_locate_debug_error_response(
 
 
 def locate_product_debug(
-    request: LocateRequest, *, capture_inference_errors: bool = False
+    request: LocateRequest,
+    *,
+    capture_inference_errors: bool = False,
+    allow_prompt_overrides: bool = False,
 ) -> LocateDebugResponse:
     product_name = request.product_name.strip()
     if not product_name:
         raise HTTPException(status_code=400, detail="product_name 不能为空")
     product = lookup_sku_by_name(product_name)
+    prompt_overrides = (
+        {
+            "qwen_prompt_override": request.qwen3_prompt,
+            "sam_prompt_override": request.sam3_prompt,
+        }
+        if allow_prompt_overrides
+        else {}
+    )
     if request.image_base64 is None:
         if request.image_name is not None:
             raise HTTPException(
@@ -837,7 +859,7 @@ def locate_product_debug(
             )
         image_path = get_latest_rgb()
         try:
-            return locate_product_in_image(product, image_path)
+            return locate_product_in_image(product, image_path, **prompt_overrides)
         except HTTPException as error:
             if not capture_inference_errors:
                 raise
@@ -849,7 +871,7 @@ def locate_product_debug(
         image_path = Path(temporary_directory) / image_name
         image_path.write_bytes(image_bytes)
         try:
-            return locate_product_in_image(product, image_path)
+            return locate_product_in_image(product, image_path, **prompt_overrides)
         except HTTPException as error:
             if not capture_inference_errors:
                 raise
@@ -895,7 +917,11 @@ def locate_product(request: LocateRequest) -> LocateResponse:
 
 @app.post("/perception/pick/locate/debug", response_model=LocateDebugResponse)
 def locate_product_debug_api(request: LocateRequest) -> LocateDebugResponse:
-    return locate_product_debug(request, capture_inference_errors=True)
+    return locate_product_debug(
+        request,
+        capture_inference_errors=True,
+        allow_prompt_overrides=True,
+    )
 
 
 if __name__ == "__main__":

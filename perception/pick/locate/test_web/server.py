@@ -60,6 +60,8 @@ class LocateDebugProxyRequest(BaseModel):
     name: str
     product_name: str
     hand: str
+    qwen3_prompt: str | None = None
+    sam3_prompt: str | None = None
 
 
 class SamCropRequest(BaseModel):
@@ -192,6 +194,10 @@ def run_locate_debug(request: LocateDebugProxyRequest) -> dict:
     }
     if not all(payload.values()):
         raise HTTPException(status_code=400, detail="name、product_name、hand 都不能为空")
+    if request.qwen3_prompt is not None:
+        payload["qwen3_prompt"] = request.qwen3_prompt
+    if request.sam3_prompt is not None:
+        payload["sam3_prompt"] = request.sam3_prompt
     try:
         response = requests.post(
             LOCATE_DEBUG_URL,
