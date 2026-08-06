@@ -203,6 +203,29 @@ textarea:focus {
   padding: 11px 12px;
 }
 
+.paired-sku-field {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.paired-sku-field strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paired-sku-field small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .save-prompt-button {
   padding: 11px 15px;
   border: 1px solid #6d5cab;
@@ -215,6 +238,16 @@ textarea:focus {
 
 .save-prompt-button:hover {
   background: #302553;
+}
+
+.sam-save-prompt-button {
+  border-color: #247d75;
+  background: #123630;
+  color: #99f6e4;
+}
+
+.sam-save-prompt-button:hover {
+  background: #184b43;
 }
 
 .save-prompt-button:disabled {

@@ -303,6 +303,37 @@ async function saveQwenPrompt() {
   }
 }
 
+function syncSamPairedSku() {
+  const skuName = qwenSku.value.trim();
+  document.querySelector("#samPairedSku").textContent = skuName || "请在左侧选择 SKU";
+}
+
+async function saveSamPromptPair() {
+  const button = document.querySelector("#saveSamPrompt");
+  button.disabled = true;
+  setStatus("#saveSamPromptStatus", "保存中…", "running");
+  try {
+    const result = await api("/api/prompt-pairs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sku_name: qwenSku.value,
+        qwen3_prompt: qwenPrompt.value,
+        sam3_prompt: samPrompt.value,
+      }),
+    });
+    setStatus(
+      "#saveSamPromptStatus",
+      result.overwritten ? "已覆盖该 SKU 的配对 Prompt" : "配对 Prompt 已保存",
+      "success",
+    );
+  } catch (error) {
+    setStatus("#saveSamPromptStatus", error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function runQwen() {
   const button = document.querySelector("#runQwen");
   const rawResult = document.querySelector("#qwenRawResult");
@@ -456,9 +487,18 @@ async function runSam() {
 
 document.querySelector("#runQwen").addEventListener("click", runQwen);
 document.querySelector("#saveQwenPrompt").addEventListener("click", saveQwenPrompt);
+document.querySelector("#saveSamPrompt").addEventListener("click", saveSamPromptPair);
 document.querySelector("#runSam").addEventListener("click", runSam);
-qwenSku.addEventListener("input", () => setStatus("#savePromptStatus", "未保存"));
-qwenPrompt.addEventListener("input", () => setStatus("#savePromptStatus", "未保存"));
+qwenSku.addEventListener("input", () => {
+  syncSamPairedSku();
+  setStatus("#savePromptStatus", "未保存");
+  setStatus("#saveSamPromptStatus", "未保存");
+});
+qwenPrompt.addEventListener("input", () => {
+  setStatus("#savePromptStatus", "未保存");
+  setStatus("#saveSamPromptStatus", "未保存");
+});
+samPrompt.addEventListener("input", () => setStatus("#saveSamPromptStatus", "未保存"));
 cropDetectionSelect.addEventListener("change", () => {
   drawSelectedCrop().catch((error) => setStatus("#samStatus", error.message, "error"));
 });
@@ -478,5 +518,8 @@ imageSelect.addEventListener("change", async () => {
 Promise.all([loadImages(), loadSkus()]).catch((error) => {
   setStatus("#qwenStatus", error.message, "error");
   setStatus("#savePromptStatus", error.message, "error");
+  setStatus("#saveSamPromptStatus", error.message, "error");
   setStatus("#samStatus", error.message, "error");
 });
+
+syncSamPairedSku();

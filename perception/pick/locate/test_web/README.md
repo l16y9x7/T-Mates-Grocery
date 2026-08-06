@@ -29,6 +29,7 @@ python server.py
 
 - Qwen 完成后，右侧自动显示第一个检测结果向外扩张 10% 的 crop；也可以在下拉框中切换三次采样产生的其他检测框。
 - 右侧输入 SAM3 prompt 后，仅对当前 Qwen crop 进行分割。页面绘制 crop 内所有实例的 mask、bbox 和置信度，同时返回映射回原图的 `bbox_original_xyxy`。
+- 右侧的“保存 SAM3 Prompt 范式”会将左侧当前选择的 SKU、Qwen3 Prompt 和右侧 SAM3 Prompt 作为一条完整记录保存到 `perception/pick/locate/qwen_sam_prompt_mapping.json`。同一 SKU 再次保存会整体覆盖该条配对记录。
 
 默认使用：
 

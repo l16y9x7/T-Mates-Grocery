@@ -19,6 +19,7 @@ STATIC_DIR = ROOT / "static"
 RGB_DIR = ROOT.parents[2] / "test_data" / "2026-08-04"
 SKU_CATALOG_PATH = ROOT.parents[2] / "sku" / "products.json"
 QWEN_PROMPT_MAPPING_PATH = ROOT.parent / "qwen_prompt_mapping.json"
+PROMPT_PAIR_MAPPING_PATH = ROOT.parent / "qwen_sam_prompt_mapping.json"
 
 QWEN3_URL = os.getenv(
     "QWEN3_URL",
@@ -30,7 +31,7 @@ SAM3_URL = os.getenv(
     "http://211.137.21.33:25541/api/v1/segment",
 )
 QWEN_SAMPLE_COUNT = 3
-QWEN_TEMPERATURE = 0.5
+QWEN_TEMPERATURE = 0.7
 
 app = FastAPI(title="Qwen3 / SAM3 Prompt Test Web")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -44,6 +45,12 @@ class PromptRequest(BaseModel):
 class SaveQwenPromptRequest(BaseModel):
     sku_name: str
     prompt: str
+
+
+class SavePromptPairRequest(BaseModel):
+    sku_name: str
+    qwen3_prompt: str
+    sam3_prompt: str
 
 
 class SamCropRequest(BaseModel):
@@ -117,6 +124,37 @@ def save_qwen_prompt(request: SaveQwenPromptRequest) -> dict:
     return {
         "sku_name": sku_name,
         "prompt": prompt,
+        "overwritten": overwritten,
+    }
+
+
+@app.post("/api/prompt-pairs")
+def save_prompt_pair(request: SavePromptPairRequest) -> dict:
+    sku_name = request.sku_name.strip()
+    qwen3_prompt = request.qwen3_prompt.strip()
+    sam3_prompt = request.sam3_prompt.strip()
+    if not sku_name:
+        raise HTTPException(status_code=400, detail="SKU 不能为空")
+    if not qwen3_prompt:
+        raise HTTPException(status_code=400, detail="左侧 Qwen3 Prompt 不能为空")
+    if not sam3_prompt:
+        raise HTTPException(status_code=400, detail="SAM3 Prompt 不能为空")
+
+    valid_names = {sku["name"] for sku in load_skus()}
+    if sku_name not in valid_names:
+        raise HTTPException(status_code=400, detail=f"商品库中不存在 SKU：{sku_name}")
+
+    mapping = load_prompt_pair_mapping()
+    overwritten = sku_name in mapping
+    mapping[sku_name] = {
+        "qwen3_prompt": qwen3_prompt,
+        "sam3_prompt": sam3_prompt,
+    }
+    write_json_mapping(PROMPT_PAIR_MAPPING_PATH, mapping, "配对 Prompt")
+    return {
+        "sku_name": sku_name,
+        "qwen3_prompt": qwen3_prompt,
+        "sam3_prompt": sam3_prompt,
         "overwritten": overwritten,
     }
 
@@ -356,6 +394,46 @@ def load_qwen_prompt_mapping() -> dict[str, str]:
             detail="Qwen Prompt 映射必须是 SKU 名称到 Prompt 的字符串映射",
         )
     return mapping
+
+
+def load_prompt_pair_mapping() -> dict[str, dict[str, str]]:
+    if not PROMPT_PAIR_MAPPING_PATH.exists():
+        return {}
+    try:
+        mapping = json.loads(PROMPT_PAIR_MAPPING_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"读取配对 Prompt 映射失败: {error}",
+        ) from error
+    if not isinstance(mapping, dict) or not all(
+        isinstance(name, str)
+        and isinstance(prompts, dict)
+        and isinstance(prompts.get("qwen3_prompt"), str)
+        and isinstance(prompts.get("sam3_prompt"), str)
+        for name, prompts in mapping.items()
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail="配对 Prompt 映射必须是 SKU 到 Qwen3/SAM3 Prompt 的映射",
+        )
+    return mapping
+
+
+def write_json_mapping(path: Path, mapping: dict, label: str) -> None:
+    ordered_mapping = dict(sorted(mapping.items(), key=lambda item: item[0]))
+    temporary_path = path.with_suffix(".json.tmp")
+    try:
+        temporary_path.write_text(
+            json.dumps(ordered_mapping, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(path)
+    except OSError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"保存 {label} 失败: {error}",
+        ) from error
 
 
 def parse_qwen_json(content: str) -> list[dict]:

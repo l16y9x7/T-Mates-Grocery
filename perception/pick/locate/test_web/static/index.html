@@ -122,6 +122,17 @@
               placeholder="例如：beverage bottle"
             ></textarea>
           </label>
+          <div class="prompt-save-row sam-prompt-save-row">
+            <div class="paired-sku-field">
+              <span>配对 SKU</span>
+              <strong id="samPairedSku">请在左侧选择 SKU</strong>
+              <small>保存时会同时记录左侧当前的 Qwen3 Prompt</small>
+            </div>
+            <button id="saveSamPrompt" class="save-prompt-button sam-save-prompt-button">
+              保存 SAM3 Prompt 范式
+            </button>
+            <span id="saveSamPromptStatus" class="status">未保存</span>
+          </div>
           <button id="runSam" class="run-button sam-button" disabled>
             在 Qwen Crop 上运行 SAM3
           </button>

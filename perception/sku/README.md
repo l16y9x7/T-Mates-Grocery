@@ -53,12 +53,12 @@ python extract_images.py
 python validate_catalog.py
 ```
 
-感知服务启动时加载 `products.json`，建议建立以下索引：
+感知服务启动时加载 `products.json`，并建立以下索引：
 
 ```python
 products_by_id: dict[str, Product]
 products_by_name: dict[str, Product]
-product_by_location: dict[str, Product]
+products_by_location: dict[str, Product]
 ```
 
 正式比赛前应冻结 `catalog_version`，并把版本号写入运行日志。
@@ -73,23 +73,53 @@ python api.py --host 0.0.0.0 --port 8080
 
 服务使用 FastAPI。启动后可以通过 `/docs` 查看 Swagger UI，通过 `/openapi.json` 获取接口定义。商品数据在进程启动时加载，修改 `products.json` 后需要重启服务。
 
-| 方法 | 路径 | 查询参数 | 用途 |
+| 方法 | 路径 | 查询参数 | 返回值 |
 |---|---|---|---|
-| `GET` | `/sku/health` | 无 | 健康检查 |
-| `GET` | `/sku/locations` | `name` | 根据商品名查询全部标准位置 |
-| `GET` | `/sku/images` | `name` | 根据商品名查询图片 URL |
-| `GET` | `/sku/name` | `location` | 根据位置查询商品名 |
+| `GET` | `/sku/health` | 无 | `{"status": "READY"}` |
+| `GET` | `/sku/search_by_SKU` | `sku`，例如 `SKU_088` | 完整 SKU 商品对象 |
+| `GET` | `/sku/search_by_name` | `name` | 完整 SKU 商品对象 |
+| `GET` | `/sku/search_by_location` | `location` | 完整 SKU 商品对象 |
+| `GET` | `/sku/get_image` | `name` | 商品图片相对路径列表 |
 | `GET` | `/images/...` | 无 | 获取图片文件 |
 | `GET` | `/docs` | 无 | FastAPI 自动接口文档 |
 
-示例响应：
+按 SKU 查询：
+
+```text
+GET /sku/search_by_SKU?sku=SKU_088
+```
+
+按商品名查询：
+
+```text
+GET /sku/search_by_name?name=外星人电解质水青柠口味0糖
+```
+
+按货位查询：
+
+```text
+GET /sku/search_by_location?location=H2_F_L4_C05
+```
+
+以上三个查询接口均返回完整商品对象：
 
 ```json
-{"name": "NFC桔汁", "locations": ["H1_F_L1_C01"]}
+{
+  "sku_id": "SKU_088",
+  "name": "外星人电解质水青柠口味0糖",
+  "images": ["images/SKU_088.jpg"],
+  "locations": ["H2_F_L4_C05"]
+}
+```
+
+按商品名获取图片路径：
+
+```text
+GET /sku/get_image?name=外星人电解质水青柠口味0糖
 ```
 
 ```json
-{"location": "H1_F_L1_C01", "name": "NFC桔汁"}
+["images/SKU_088.jpg"]
 ```
 
 商品不存在时返回 `404`：

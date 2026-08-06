@@ -24,19 +24,11 @@ class HealthResponse(BaseModel):
     status: Literal["READY"]
 
 
-class LocationsResponse(BaseModel):
-    name: str
-    locations: list[str]
-
-
-class ImagesResponse(BaseModel):
+class ProductResponse(BaseModel):
+    sku_id: str
     name: str
     images: list[str]
-
-
-class NameResponse(BaseModel):
-    location: str
-    name: str
+    locations: list[str]
 
 
 class ErrorResponse(BaseModel):
@@ -62,15 +54,19 @@ class SkuCatalog:
             raise ValueError("products.json 中的 products 必须是数组")
 
         self._by_name: dict[str, dict[str, Any]] = {}
-        self._name_by_location: dict[str, str] = {}
+        self._by_sku: dict[str, dict[str, Any]] = {}
+        self._by_location: dict[str, dict[str, Any]] = {}
 
         for product in products:
             if not isinstance(product, dict):
                 raise ValueError("products 中存在非对象元素")
 
             name = product.get("name")
+            sku_id = product.get("sku_id")
             locations = product.get("locations")
             images = product.get("images")
+            if not isinstance(sku_id, str) or not sku_id.strip():
+                raise ValueError("存在无效 SKU ID")
             if not isinstance(name, str) or not name.strip():
                 raise ValueError("存在无效商品名称")
             if not isinstance(locations, list) or not locations:
@@ -96,50 +92,60 @@ class SkuCatalog:
                     raise ValueError(f"商品 {name!r} 的图片不存在: {image}")
 
             normalized_name = name.strip()
+            normalized_sku = sku_id.strip().upper()
+            if normalized_sku in self._by_sku:
+                raise ValueError(f"SKU ID 重复: {normalized_sku}")
             if normalized_name in self._by_name:
                 raise ValueError(f"商品名称重复: {normalized_name}")
+            self._by_sku[normalized_sku] = product
             self._by_name[normalized_name] = product
 
             for location in locations:
                 if not isinstance(location, str) or not location.strip():
                     raise ValueError(f"商品 {normalized_name!r} 存在无效位置")
                 normalized_location = location.strip().upper()
-                if normalized_location in self._name_by_location:
+                if normalized_location in self._by_location:
                     raise ValueError(f"位置重复: {normalized_location}")
-                self._name_by_location[normalized_location] = normalized_name
+                self._by_location[normalized_location] = product
 
     @classmethod
     def load(cls, path: Path) -> "SkuCatalog":
         payload = json.loads(path.read_text(encoding="utf-8"))
         return cls(payload, path.resolve().parent)
 
-    def locations_for_name(self, name: str) -> list[str] | None:
-        product = self._by_name.get(name.strip())
-        if product is None:
-            return None
-        return list(product["locations"])
+    def product_for_sku(self, sku: str) -> dict[str, Any] | None:
+        return self._copy_product(self._by_sku.get(sku.strip().upper()))
+
+    def product_for_name(self, name: str) -> dict[str, Any] | None:
+        return self._copy_product(self._by_name.get(name.strip()))
+
+    def product_for_location(self, location: str) -> dict[str, Any] | None:
+        return self._copy_product(self._by_location.get(location.strip().upper()))
 
     def images_for_name(self, name: str) -> list[str] | None:
         product = self._by_name.get(name.strip())
         if product is None:
             return None
-        return [self._image_url(path) for path in product["images"]]
-
-    def name_for_location(self, location: str) -> str | None:
-        return self._name_by_location.get(location.strip().upper())
+        return list(product["images"])
 
     @staticmethod
-    def _image_url(path: str) -> str:
-        normalized = path.replace("\\", "/").lstrip("/")
-        return f"/{normalized}"
+    def _copy_product(product: dict[str, Any] | None) -> dict[str, Any] | None:
+        if product is None:
+            return None
+        return {
+            "sku_id": product["sku_id"],
+            "name": product["name"],
+            "images": list(product["images"]),
+            "locations": list(product["locations"]),
+        }
 
 
 def create_app(catalog_path: Path = DEFAULT_CATALOG_PATH) -> FastAPI:
     catalog = SkuCatalog.load(catalog_path)
     app = FastAPI(
         title="感知模块 SKU 查询服务",
-        version="1.0.0",
-        description="按商品名称或标准货位查询 SKU 信息。",
+        version="2.0.0",
+        description="按 SKU ID、商品名称或标准货位查询完整 SKU 信息。",
     )
 
     @app.exception_handler(ApiError)
@@ -173,40 +179,48 @@ def create_app(catalog_path: Path = DEFAULT_CATALOG_PATH) -> FastAPI:
         return HealthResponse(status="READY")
 
     @app.get(
-        "/sku/locations",
-        response_model=LocationsResponse,
+        "/sku/search_by_SKU",
+        response_model=ProductResponse,
         responses=ERROR_RESPONSES,
     )
-    def get_locations(name: str = Query(min_length=1)) -> LocationsResponse:
-        normalized_name = name.strip()
-        locations = catalog.locations_for_name(normalized_name)
-        if locations is None:
+    def search_by_sku(sku: str = Query(min_length=1)) -> ProductResponse:
+        product = catalog.product_for_sku(sku)
+        if product is None:
             raise ApiError(404, "SKU_NOT_FOUND")
-        return LocationsResponse(name=normalized_name, locations=locations)
+        return ProductResponse(**product)
 
     @app.get(
-        "/sku/images",
-        response_model=ImagesResponse,
+        "/sku/search_by_name",
+        response_model=ProductResponse,
         responses=ERROR_RESPONSES,
     )
-    def get_images(name: str = Query(min_length=1)) -> ImagesResponse:
-        normalized_name = name.strip()
-        images = catalog.images_for_name(normalized_name)
+    def search_by_name(name: str = Query(min_length=1)) -> ProductResponse:
+        product = catalog.product_for_name(name)
+        if product is None:
+            raise ApiError(404, "SKU_NOT_FOUND")
+        return ProductResponse(**product)
+
+    @app.get(
+        "/sku/search_by_location",
+        response_model=ProductResponse,
+        responses=ERROR_RESPONSES,
+    )
+    def search_by_location(location: str = Query(min_length=1)) -> ProductResponse:
+        product = catalog.product_for_location(location)
+        if product is None:
+            raise ApiError(404, "LOCATION_NOT_FOUND")
+        return ProductResponse(**product)
+
+    @app.get(
+        "/sku/get_image",
+        response_model=list[str],
+        responses=ERROR_RESPONSES,
+    )
+    def get_image_paths(name: str = Query(min_length=1)) -> list[str]:
+        images = catalog.images_for_name(name)
         if images is None:
             raise ApiError(404, "SKU_NOT_FOUND")
-        return ImagesResponse(name=normalized_name, images=images)
-
-    @app.get(
-        "/sku/name",
-        response_model=NameResponse,
-        responses=ERROR_RESPONSES,
-    )
-    def get_name(location: str = Query(min_length=1)) -> NameResponse:
-        normalized_location = location.strip().upper()
-        name = catalog.name_for_location(normalized_location)
-        if name is None:
-            raise ApiError(404, "LOCATION_NOT_FOUND")
-        return NameResponse(location=normalized_location, name=name)
+        return images
 
     @app.get(
         "/images/{image_path:path}",
