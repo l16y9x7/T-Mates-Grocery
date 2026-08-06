@@ -267,6 +267,47 @@ class LocateLogicTest(unittest.TestCase):
 
         self.assertEqual(filtered, [first, second])
 
+    def test_smallest_mask_under_half_of_second_smallest_is_removed(self) -> None:
+        instances = [
+            main.LocatedInstance(
+                bbox=[0, 0, 10, 10],
+                mask=mask_base64_with_pixel_count((30, 10), 100),
+                score=0.8,
+            ),
+            main.LocatedInstance(
+                bbox=[10, 0, 20, 10],
+                mask=mask_base64_with_pixel_count((30, 10), 40),
+                score=0.8,
+            ),
+            main.LocatedInstance(
+                bbox=[20, 0, 30, 10],
+                mask=mask_base64_with_pixel_count((30, 10), 10),
+                score=0.8,
+            ),
+        ]
+
+        filtered = main.drop_smallest_mask_area_outlier(instances)
+
+        self.assertEqual(filtered, instances[:2])
+
+    def test_smallest_mask_over_half_of_second_smallest_is_kept(self) -> None:
+        instances = [
+            main.LocatedInstance(
+                bbox=[0, 0, 10, 10],
+                mask=mask_base64_with_pixel_count((20, 10), 100),
+                score=0.8,
+            ),
+            main.LocatedInstance(
+                bbox=[10, 0, 20, 10],
+                mask=mask_base64_with_pixel_count((20, 10), 60),
+                score=0.8,
+            ),
+        ]
+
+        filtered = main.drop_smallest_mask_area_outlier(instances)
+
+        self.assertEqual(filtered, instances)
+
     def test_locate_returns_multiple_original_instances(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             image_path = Path(temporary_directory) / "frame_rgb.jpg"

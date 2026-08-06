@@ -19,11 +19,14 @@ overlap_ratio = intersection_area / min(bbox_area_1, bbox_area_2)
 3. 否则计算 `mask_density = mask_area / bbox_area`，保留密度最大的实例。
 4. 密度相同时，依次比较 mask 面积、SAM3 score、bbox 面积。
 
+完成所有重叠链过滤后，再执行一次全局最小面积离群过滤：将剩余实例按 mask 前景像素面积从大到小排序；如果最小 mask 面积不超过第二小 mask 面积的 50%，删除最小实例。该规则只执行一次，不循环删除，避免连续误删多个正常商品。
+
 可通过环境变量调节：
 
 ```text
 SAM_BBOX_OVERLAP_MIN_RATIO=0.2
 SAM_FRONT_AREA_DOMINANCE_RATIO=2.0
+SAM_SMALLEST_MASK_MAX_RATIO=0.5
 ```
 
 这里使用“交集占较小框比例”而不是 IoU，是因为同一商品的重复检测框可能一大一小或互相嵌套，此时 IoU 可能偏低，但较小框实际上大部分位于较大框内。

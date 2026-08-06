@@ -97,6 +97,7 @@ python main.py
 - `instances` 可以包含多个目标，每个 bbox 与同一对象的 mask 一一对应。
 - `qwen_bboxes` 记录经过三次采样共识去重、实际送给 SAM3 的 Qwen bbox，包括模型的 `[0,1000]` 坐标、原图像素坐标和外扩后的 crop 坐标。
 - bbox 交集默认覆盖较小框至少 20% 才组成重叠链；链内最大 mask 达到第二名 2 倍时直接保留最大 mask，否则保留 `mask前景像素数 / bbox面积` 最大者。可通过 `SAM_BBOX_OVERLAP_MIN_RATIO` 和 `SAM_FRONT_AREA_DOMINANCE_RATIO` 调节阈值。
+- 重叠链过滤后，若最小 mask 面积不超过第二小 mask 的 50%，会再删除这个最小面积离群项一次；通过 `SAM_SMALLEST_MASK_MAX_RATIO` 调节阈值。
 
 ## Prompt 文件
 

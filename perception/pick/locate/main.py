@@ -48,6 +48,9 @@ SAM_BBOX_OVERLAP_MIN_RATIO = float(
 SAM_FRONT_AREA_DOMINANCE_RATIO = float(
     os.getenv("SAM_FRONT_AREA_DOMINANCE_RATIO", "2.0")
 )
+SAM_SMALLEST_MASK_MAX_RATIO = float(
+    os.getenv("SAM_SMALLEST_MASK_MAX_RATIO", "0.5")
+)
 REQUEST_TIMEOUT_SECONDS = 120
 
 app = FastAPI(title="Sorting Pick Locate", version="2.0.0")
@@ -584,6 +587,36 @@ def keep_frontmost_in_overlap_chains(
     return [instance for _, instance in sorted(selected, key=lambda item: item[0])]
 
 
+def drop_smallest_mask_area_outlier(
+    instances: list[LocatedInstance],
+) -> list[LocatedInstance]:
+    """最小 mask 不超过第二小 mask 的指定比例时，只删除该最小离群项一次。"""
+    if len(instances) < 2:
+        return instances
+
+    by_mask_area = sorted(
+        (
+            (index, mask_foreground_pixel_count(instance.mask))
+            for index, instance in enumerate(instances)
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    smallest_index, smallest_area = by_mask_area[-1]
+    second_smallest_area = by_mask_area[-2][1]
+    if (
+        second_smallest_area > 0
+        and smallest_area
+        <= SAM_SMALLEST_MASK_MAX_RATIO * second_smallest_area
+    ):
+        return [
+            instance
+            for index, instance in enumerate(instances)
+            if index != smallest_index
+        ]
+    return instances
+
+
 def locate_product_in_image(
     product: dict[str, Any], image_path: Path
 ) -> LocateResponse:
@@ -625,6 +658,7 @@ def locate_product_in_image(
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
 
     located_instances = keep_frontmost_in_overlap_chains(located_instances)
+    located_instances = drop_smallest_mask_area_outlier(located_instances)
 
     return LocateResponse(
         sku_id=product["sku_id"],
