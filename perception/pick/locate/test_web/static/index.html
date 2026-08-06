@@ -56,12 +56,12 @@
 
           <div class="prompt-save-row">
             <label class="sku-field">
-              <span>对应 SKU</span>
+              <span>目标商品名称</span>
               <input
                 id="qwenSku"
                 list="qwenSkuOptions"
                 autocomplete="off"
-                placeholder="输入或选择商品名称"
+                placeholder="输入目标商品名称"
               />
               <datalist id="qwenSkuOptions"></datalist>
             </label>
@@ -78,6 +78,18 @@
             <strong>temperature 0.5</strong>
           </div>
 
+          <div class="result-title canvas-title">
+            <span>Qwen 原始 bbox（过滤前）</span>
+            <span class="coordinate-note">三次采样使用不同颜色</span>
+          </div>
+          <div class="canvas-frame">
+            <canvas id="rawQwenCanvas"></canvas>
+            <div id="rawQwenEmpty" class="canvas-empty">运行 Locate Debug 获取原始 bbox</div>
+          </div>
+
+          <div class="result-title canvas-title">
+            <span>Qwen 共识 bbox（过滤后）</span>
+          </div>
           <div class="canvas-frame">
             <canvas id="qwenCanvas"></canvas>
             <div id="qwenEmpty" class="canvas-empty">运行 Locate Debug 获取相机原图与 Qwen bbox</div>
@@ -133,8 +145,8 @@
           </label>
           <div class="prompt-save-row sam-prompt-save-row">
             <div class="paired-sku-field">
-              <span>配对 SKU</span>
-              <strong id="samPairedSku">请在左侧选择 SKU</strong>
+              <span>目标商品名称</span>
+              <strong id="samPairedSku">请在左侧输入商品名称</strong>
               <small>保存时会同时记录左侧当前的 Qwen3 Prompt</small>
             </div>
             <button id="saveSamPrompt" class="save-prompt-button sam-save-prompt-button">

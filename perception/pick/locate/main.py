@@ -29,7 +29,7 @@ MONITOR_IMAGE_DIR = Path(
 )
 CAMERA_SNAPSHOT_URL = os.getenv(
     "CAMERA_SNAPSHOT_URL",
-    "http://192.168.130.50:8085/camera/snapshot?camera=head&type=color",
+    "http://192.168.130.50:8085/camera/snapshot?camera=left_wrist&type=color",
 )
 CAMERA_SNAPSHOT_TIMEOUT_SECONDS = float(
     os.getenv("CAMERA_SNAPSHOT_TIMEOUT_SECONDS", "5")
@@ -89,6 +89,13 @@ class QwenBBoxRecord(BaseModel):
     crop_box_original: list[int]
 
 
+class RawQwenBBoxRecord(BaseModel):
+    sample_index: int
+    name: str
+    bbox_normalized: list[float]
+    bbox_original: list[float]
+
+
 class LocateDebugResponse(BaseModel):
     sku_id: str
     product_name: str
@@ -97,6 +104,7 @@ class LocateDebugResponse(BaseModel):
     image_base64: str
     image_media_type: str
     image_size: list[int]
+    raw_qwen_bboxes: list[RawQwenBBoxRecord] = Field(default_factory=list)
     qwen_bboxes: list[QwenBBoxRecord] = Field(default_factory=list)
     instances: list[LocatedInstance] = Field(default_factory=list)
     error: str | None = None
@@ -418,6 +426,16 @@ def consensus_qwen_bboxes(
     return sorted(consensus, key=lambda box: (box[1], box[0], box[3], box[2]))
 
 
+class QwenConsensusBBoxes(list[list[float]]):
+    def __init__(
+        self,
+        bboxes: list[list[float]],
+        samples: list[tuple[int, list[dict[str, Any]]]],
+    ) -> None:
+        super().__init__(bboxes)
+        self.samples = samples
+
+
 def get_stable_qwen_bboxes(prompt: str, image_path: Path) -> list[list[float]]:
     samples: list[tuple[int, list[dict[str, Any]]]] = []
     errors: list[str] = []
@@ -438,7 +456,7 @@ def get_stable_qwen_bboxes(prompt: str, image_path: Path) -> list[list[float]]:
             status_code=404,
             detail=f"Qwen3 没有产生跨采样 IoU > {QWEN_CONSENSUS_IOU} 的稳定 bbox",
         )
-    return bboxes
+    return QwenConsensusBBoxes(bboxes, samples)
 
 
 def qwen_bbox_to_crop(
@@ -726,6 +744,16 @@ def locate_product_in_image(
     except (UnidentifiedImageError, OSError) as error:
         raise HTTPException(status_code=500, detail=f"读取 RGB 图片失败: {error}") from error
 
+    raw_qwen_bbox_records = [
+        RawQwenBBoxRecord(
+            sample_index=sample_index,
+            name=detection["name"],
+            bbox_normalized=detection["bbox"],
+            bbox_original=qwen_bbox_to_original(detection["bbox"], original_image.size),
+        )
+        for sample_index, detections in getattr(qwen_bboxes, "samples", [])
+        for detection in detections
+    ]
     qwen_bbox_records: list[QwenBBoxRecord] = []
     located_instances: list[LocatedInstance] = []
     for qwen_bbox in qwen_bboxes:
@@ -761,6 +789,7 @@ def locate_product_in_image(
         image_base64=base64.b64encode(image_path.read_bytes()).decode("ascii"),
         image_media_type=mimetypes.guess_type(image_path.name)[0] or "image/jpeg",
         image_size=list(original_image.size),
+        raw_qwen_bboxes=raw_qwen_bbox_records,
         qwen_bboxes=qwen_bbox_records,
         instances=located_instances,
     )

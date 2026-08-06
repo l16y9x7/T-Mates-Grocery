@@ -4,6 +4,7 @@ const requestHand = document.querySelector("#requestHand");
 const qwenPrompt = document.querySelector("#qwenPrompt");
 const qwenSku = document.querySelector("#qwenSku");
 const samPrompt = document.querySelector("#samPrompt");
+const rawQwenCanvas = document.querySelector("#rawQwenCanvas");
 const qwenCanvas = document.querySelector("#qwenCanvas");
 const samCanvas = document.querySelector("#samCanvas");
 const cropDetectionSelect = document.querySelector("#cropDetectionSelect");
@@ -65,7 +66,12 @@ function loadPromptPairForSelectedSku() {
   const skuName = qwenSku.value.trim();
   const promptPair = promptPairsBySku.get(skuName);
   if (!promptPair) {
-    loadedPromptSku = "";
+    loadedPromptSku = skuName;
+    qwenPrompt.value = "";
+    samPrompt.value = "";
+    const message = skuName ? "该商品尚未配置 Prompt，可直接编辑" : "请输入目标商品名称";
+    setStatus("#savePromptStatus", message, "");
+    setStatus("#saveSamPromptStatus", message, "");
     return;
   }
   if (loadedPromptSku === skuName) {
@@ -343,7 +349,7 @@ async function saveQwenPrompt() {
 
 function syncSamPairedSku() {
   const skuName = qwenSku.value.trim();
-  document.querySelector("#samPairedSku").textContent = skuName || "请在左侧选择 SKU";
+  document.querySelector("#samPairedSku").textContent = skuName || "请在左侧输入商品名称";
 }
 
 async function saveSamPromptPair() {
@@ -396,8 +402,22 @@ async function runQwen() {
     });
     latestImageBase64 = result.image_base64;
     latestImageMediaType = result.image_media_type || "image/jpeg";
+    const rawQwenBboxes = result.raw_qwen_bboxes || [];
     const qwenBboxes = result.qwen_bboxes || [];
     const instances = result.instances || [];
+
+    await drawBase(rawQwenCanvas);
+    const rawQwenContext = rawQwenCanvas.getContext("2d");
+    rawQwenBboxes.forEach((record, index) => {
+      const sampleIndex = Number(record.sample_index || 1);
+      drawBox(
+        rawQwenContext,
+        record.bbox_original,
+        `S${sampleIndex} #${index + 1}`,
+        qwenSampleColors[(sampleIndex - 1) % qwenSampleColors.length],
+      );
+    });
+    document.querySelector("#rawQwenEmpty").hidden = true;
 
     await drawBase(qwenCanvas);
     const qwenContext = qwenCanvas.getContext("2d");
