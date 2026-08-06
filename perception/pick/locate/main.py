@@ -18,7 +18,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from PIL import Image, UnidentifiedImageError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 ROOT = Path(__file__).resolve().parent
@@ -65,10 +65,17 @@ class LocatedInstance(BaseModel):
     score: float | None = None
 
 
+class QwenBBoxRecord(BaseModel):
+    bbox_normalized: list[float]
+    bbox_original: list[float]
+    crop_box_original: list[int]
+
+
 class LocateResponse(BaseModel):
     sku_id: str
     name: str
     image_name: str
+    qwen_bboxes: list[QwenBBoxRecord] = Field(default_factory=list)
     instances: list[LocatedInstance]
 
 
@@ -344,10 +351,7 @@ def qwen_bbox_to_crop(
 ) -> tuple[int, int, int, int]:
     """按网页默认规则将 [0,1000] Qwen 坐标转为像素并外扩 10%。"""
     image_width, image_height = image_size
-    x1 = min(1000.0, max(0.0, bbox[0])) / 1000.0 * image_width
-    y1 = min(1000.0, max(0.0, bbox[1])) / 1000.0 * image_height
-    x2 = min(1000.0, max(0.0, bbox[2])) / 1000.0 * image_width
-    y2 = min(1000.0, max(0.0, bbox[3])) / 1000.0 * image_height
+    x1, y1, x2, y2 = qwen_bbox_to_original(bbox, image_size)
     padding_x = (x2 - x1) * CROP_PADDING_RATIO
     padding_y = (y2 - y1) * CROP_PADDING_RATIO
     crop_box = (
@@ -359,6 +363,19 @@ def qwen_bbox_to_crop(
     if crop_box[2] - crop_box[0] < 2 or crop_box[3] - crop_box[1] < 2:
         raise ValueError("Qwen3 bbox 无法生成有效 crop")
     return crop_box
+
+
+def qwen_bbox_to_original(
+    bbox: list[float], image_size: tuple[int, int]
+) -> list[float]:
+    """将 Qwen [0,1000] bbox 转换为未外扩的原图像素坐标。"""
+    image_width, image_height = image_size
+    return [
+        round(min(1000.0, max(0.0, bbox[0])) / 1000.0 * image_width, 6),
+        round(min(1000.0, max(0.0, bbox[1])) / 1000.0 * image_height, 6),
+        round(min(1000.0, max(0.0, bbox[2])) / 1000.0 * image_width, 6),
+        round(min(1000.0, max(0.0, bbox[3])) / 1000.0 * image_height, 6),
+    ]
 
 
 def call_sam3(prompt: str, crop_image: Image.Image) -> list[dict[str, Any]]:
@@ -583,12 +600,20 @@ def locate_product_in_image(
     except (UnidentifiedImageError, OSError) as error:
         raise HTTPException(status_code=500, detail=f"读取 RGB 图片失败: {error}") from error
 
+    qwen_bbox_records: list[QwenBBoxRecord] = []
     located_instances: list[LocatedInstance] = []
     for qwen_bbox in qwen_bboxes:
         try:
             crop_box = qwen_bbox_to_crop(qwen_bbox, original_image.size)
         except ValueError:
             continue
+        qwen_bbox_records.append(
+            QwenBBoxRecord(
+                bbox_normalized=qwen_bbox,
+                bbox_original=qwen_bbox_to_original(qwen_bbox, original_image.size),
+                crop_box_original=list(crop_box),
+            )
+        )
         crop_image = original_image.crop(crop_box)
         for instance in call_sam3(sam_prompt, crop_image):
             if isinstance(instance, dict):
@@ -605,6 +630,7 @@ def locate_product_in_image(
         sku_id=product["sku_id"],
         name=canonical_name,
         image_name=image_path.name,
+        qwen_bboxes=qwen_bbox_records,
         instances=located_instances,
     )
 

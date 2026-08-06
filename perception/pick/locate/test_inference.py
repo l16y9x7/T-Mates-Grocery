@@ -29,6 +29,12 @@ MASK_COLORS = [
     (167, 139, 250),
     (251, 113, 133),
 ]
+QWEN_BOX_COLORS = [
+    (239, 68, 68),
+    (37, 99, 235),
+    (234, 88, 12),
+    (147, 51, 234),
+]
 
 
 def load_image_mapping(path: Path = DEFAULT_IMAGE_MAPPING_PATH) -> dict[str, list[str]]:
@@ -167,6 +173,51 @@ def save_result_visualization(
     return output_path
 
 
+def save_qwen_visualization(
+    image_path: Path,
+    response_payload: dict[str, Any],
+    output_directory: Path,
+    sku_id: str,
+) -> Path:
+    qwen_bboxes = response_payload.get("qwen_bboxes")
+    if not isinstance(qwen_bboxes, list):
+        raise RuntimeError("Locate 响应缺少 qwen_bboxes 数组，请更新远端 Locate API")
+    try:
+        with Image.open(image_path) as source_image:
+            canvas = source_image.convert("RGB")
+    except (UnidentifiedImageError, OSError) as error:
+        raise RuntimeError(f"读取 Qwen 结果原图失败: {error}") from error
+
+    draw = ImageDraw.Draw(canvas)
+    line_width = max(3, round(canvas.width / 420))
+    for index, record in enumerate(qwen_bboxes, start=1):
+        bbox = record.get("bbox_original") if isinstance(record, dict) else None
+        if (
+            not isinstance(bbox, list)
+            or len(bbox) != 4
+            or not all(isinstance(value, (int, float)) for value in bbox)
+        ):
+            continue
+        x1, y1, x2, y2 = (round(float(value)) for value in bbox)
+        color = QWEN_BOX_COLORS[(index - 1) % len(QWEN_BOX_COLORS)]
+        draw.rectangle((x1, y1, x2, y2), outline=color, width=line_width)
+        label = f"Qwen #{index}"
+        text_box = draw.textbbox((x1, y1), label)
+        label_height = text_box[3] - text_box[1] + 6
+        label_width = text_box[2] - text_box[0] + 8
+        label_y = max(0, y1 - label_height)
+        draw.rectangle(
+            (x1, label_y, x1 + label_width, label_y + label_height),
+            fill=color,
+        )
+        draw.text((x1 + 4, label_y + 3), label, fill=(255, 255, 255))
+
+    output_directory.mkdir(parents=True, exist_ok=True)
+    output_path = output_directory / f"{image_path.stem}_{sku_id}_qwen.png"
+    canvas.save(output_path, format="PNG")
+    return output_path
+
+
 def run_test_inference(
     name: str,
     output_directory: Path = DEFAULT_RESULT_DIRECTORY,
@@ -193,11 +244,22 @@ def run_test_inference(
             )
             payload = response.json()
             if response.ok:
+                result_directory = output_directory / product["sku_id"]
+                try:
+                    qwen_result_image = save_qwen_visualization(
+                        image_path,
+                        payload,
+                        result_directory,
+                        product["sku_id"],
+                    )
+                    payload["qwen_result_image"] = str(qwen_result_image.resolve())
+                except RuntimeError as error:
+                    payload["qwen_visualization_error"] = str(error)
                 try:
                     result_image = save_result_visualization(
                         image_path,
                         payload,
-                        output_directory / product["sku_id"],
+                        result_directory,
                         product["sku_id"],
                     )
                     payload["result_image"] = str(result_image.resolve())

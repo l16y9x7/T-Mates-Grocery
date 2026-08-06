@@ -75,6 +75,13 @@ python main.py
   "sku_id": "SKU_002",
   "name": "蒙牛纯牛奶",
   "image_name": "record_20260804_150039_346733_rgb.jpg",
+  "qwen_bboxes": [
+    {
+      "bbox_normalized": [467.3, 101.7, 524.8, 346.7],
+      "bbox_original": [598.1, 73.2, 671.8, 249.6],
+      "crop_box_original": [590, 55, 680, 268]
+    }
+  ],
   "instances": [
     {
       "bbox": [598.1, 73.2, 671.8, 249.6],
@@ -88,6 +95,7 @@ python main.py
 - `bbox` 是原图像素坐标 `[x1, y1, x2, y2]`。
 - `mask` 是原图尺寸的单通道 PNG base64，不包含 data-URL 前缀。
 - `instances` 可以包含多个目标，每个 bbox 与同一对象的 mask 一一对应。
+- `qwen_bboxes` 记录经过三次采样共识去重、实际送给 SAM3 的 Qwen bbox，包括模型的 `[0,1000]` 坐标、原图像素坐标和外扩后的 crop 坐标。
 - bbox 交集默认覆盖较小框至少 20% 才组成重叠链；链内最大 mask 达到第二名 2 倍时直接保留最大 mask，否则保留 `mask前景像素数 / bbox面积` 最大者。可通过 `SAM_BBOX_OVERLAP_MIN_RATIO` 和 `SAM_FRONT_AREA_DOMINANCE_RATIO` 调节阈值。
 
 ## Prompt 文件
@@ -143,13 +151,13 @@ Locate API: http://192.168.130.59:8081
 python test_inference.py "蒙牛纯牛奶"
 ```
 
-如果同一个 SKU 出现在多张测试图片中，脚本会逐张推理，并以图片名作为结果 key。每张成功结果都会叠加半透明 mask、bbox、实例编号和置信度，默认保存到：
+如果同一个 SKU 出现在多张测试图片中，脚本会逐张推理，并以图片名作为结果 key。每张成功结果会保存两张图：`*_qwen.png` 绘制共识去重后的 Qwen bbox，`*_locate.png` 绘制 SAM3 半透明 mask、bbox、实例编号和置信度。默认保存到：
 
 ```text
 perception/test_data/2026-08-04/locate_results/<SKU_ID>/
 ```
 
-结果 JSON 中的 `result_image` 字段会记录对应图片的绝对路径。JSON 默认打印到终端，也可以保存到文件：
+结果 JSON 会保留 `qwen_bboxes`，并通过 `qwen_result_image` 和 `result_image` 分别记录 Qwen 图与 SAM3 图的绝对路径。JSON 默认打印到终端，也可以保存到文件：
 
 ```powershell
 python test_inference.py "蒙牛纯牛奶" --output result.json

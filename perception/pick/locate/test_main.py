@@ -103,6 +103,32 @@ class LocateLogicTest(unittest.TestCase):
                 self.assertEqual(result_image.size, (20, 20))
                 self.assertNotEqual(result_image.getpixel((10, 10)), (255, 255, 255))
 
+    def test_save_qwen_visualization_draws_original_bbox(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            image_path = directory / "source_rgb.jpg"
+            Image.new("RGB", (30, 20), "white").save(image_path)
+            result_path = test_inference.save_qwen_visualization(
+                image_path,
+                {
+                    "qwen_bboxes": [
+                        {
+                            "bbox_normalized": [100, 200, 500, 800],
+                            "bbox_original": [4, 5, 24, 16],
+                            "crop_box_original": [2, 3, 26, 18],
+                        }
+                    ]
+                },
+                directory / "results",
+                "SKU_001",
+            )
+
+            self.assertTrue(result_path.is_file())
+            self.assertEqual(result_path.name, "source_rgb_SKU_001_qwen.png")
+            with Image.open(result_path) as result_image:
+                self.assertEqual(result_image.size, (30, 20))
+                self.assertNotEqual(result_image.getpixel((4, 10)), (255, 255, 255))
+
     def test_parse_qwen_json_from_code_fence(self) -> None:
         detections = main.parse_qwen_detections(
             '结果如下：```json\n[{"name":"商品","bbox":[10,20,30,40]}]\n```'
@@ -148,6 +174,13 @@ class LocateLogicTest(unittest.TestCase):
             (1280, 720),
         )
         self.assertEqual(crop_box, (789, 480, 1225, 663))
+        self.assertEqual(
+            main.qwen_bbox_to_original(
+                [645.0, 689.0, 928.0, 899.0],
+                (1280, 720),
+            ),
+            [825.6, 496.08, 1187.84, 647.28],
+        )
 
     def test_decode_uploaded_image(self) -> None:
         encoded = base64.b64encode(b"image bytes").decode("ascii")
@@ -278,6 +311,11 @@ class LocateLogicTest(unittest.TestCase):
             self.assertEqual(result.sku_id, "SKU_001")
             self.assertEqual(result.name, "NFC桔汁")
             self.assertEqual(result.image_name, "frame_rgb.jpg")
+            self.assertEqual(len(result.qwen_bboxes), 1)
+            self.assertEqual(
+                result.qwen_bboxes[0].bbox_original,
+                [10.0, 8.0, 50.0, 40.0],
+            )
             self.assertEqual(len(result.instances), 2)
             for instance in result.instances:
                 with Image.open(io.BytesIO(base64.b64decode(instance.mask))) as mask:
