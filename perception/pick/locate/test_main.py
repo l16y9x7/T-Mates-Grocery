@@ -6,7 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
@@ -21,7 +21,36 @@ def png_base64(size: tuple[int, int], value: int = 255) -> str:
     return base64.b64encode(output.getvalue()).decode("ascii")
 
 
+def mask_base64_with_pixel_count(size: tuple[int, int], count: int) -> str:
+    image = Image.new("L", size, 0)
+    pixels = [255] * count + [0] * (size[0] * size[1] - count)
+    image.putdata(pixels)
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return base64.b64encode(output.getvalue()).decode("ascii")
+
+
 class LocateLogicTest(unittest.TestCase):
+    def test_inference_client_does_not_import_main(self) -> None:
+        self.assertNotIn("main", test_inference.__dict__)
+
+    def test_inference_sku_lookup_uses_remote_http_api(self) -> None:
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {"sku_id": "SKU_001", "name": "NFC橙汁"}
+        with patch.object(
+            test_inference.requests,
+            "get",
+            return_value=response,
+        ) as request_mock:
+            product = test_inference.lookup_sku_by_name("NFC橙汁")
+
+        self.assertEqual(product["sku_id"], "SKU_001")
+        request_mock.assert_called_once_with(
+            "http://192.168.130.59:25540/sku/search_by_name",
+            params={"name": "NFC橙汁"},
+            timeout=test_inference.SKU_REQUEST_TIMEOUT_SECONDS,
+        )
+
     def test_find_test_images_by_sku_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)
@@ -142,6 +171,68 @@ class LocateLogicTest(unittest.TestCase):
             self.assertEqual(mask.size, (30, 40))
             self.assertEqual(mask.getpixel((10, 20)), 255)
             self.assertEqual(mask.getpixel((0, 0)), 0)
+
+    def test_overlap_chain_keeps_highest_mask_density(self) -> None:
+        instances = [
+            main.LocatedInstance(
+                bbox=[0, 0, 10, 10],
+                mask=mask_base64_with_pixel_count((40, 10), 60),
+                score=0.6,
+            ),
+            main.LocatedInstance(
+                bbox=[5, 0, 15, 10],
+                mask=mask_base64_with_pixel_count((40, 10), 70),
+                score=0.7,
+            ),
+            main.LocatedInstance(
+                bbox=[10, 0, 20, 10],
+                mask=mask_base64_with_pixel_count((40, 10), 50),
+                score=0.9,
+            ),
+            main.LocatedInstance(
+                bbox=[30, 0, 40, 10],
+                mask=mask_base64_with_pixel_count((40, 10), 80),
+                score=0.8,
+            ),
+        ]
+
+        filtered = main.keep_frontmost_in_overlap_chains(instances)
+
+        self.assertEqual(filtered, [instances[1], instances[3]])
+
+    def test_overlap_chain_uses_two_times_mask_area_shortcut(self) -> None:
+        large_mask = main.LocatedInstance(
+            bbox=[0, 0, 20, 20],
+            mask=mask_base64_with_pixel_count((20, 20), 120),
+            score=0.5,
+        )
+        denser_small_mask = main.LocatedInstance(
+            bbox=[5, 5, 15, 15],
+            mask=mask_base64_with_pixel_count((20, 20), 50),
+            score=0.99,
+        )
+
+        filtered = main.keep_frontmost_in_overlap_chains(
+            [large_mask, denser_small_mask]
+        )
+
+        self.assertEqual(filtered, [large_mask])
+
+    def test_small_bbox_overlap_does_not_merge_neighbors(self) -> None:
+        first = main.LocatedInstance(
+            bbox=[0, 0, 10, 10],
+            mask=mask_base64_with_pixel_count((20, 10), 80),
+            score=0.8,
+        )
+        second = main.LocatedInstance(
+            bbox=[9, 0, 19, 10],
+            mask=mask_base64_with_pixel_count((20, 10), 80),
+            score=0.8,
+        )
+
+        filtered = main.keep_frontmost_in_overlap_chains([first, second])
+
+        self.assertEqual(filtered, [first, second])
 
     def test_locate_returns_multiple_original_instances(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

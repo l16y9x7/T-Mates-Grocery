@@ -1,5 +1,33 @@
 # 最前方 Mask 判断方案
 
+## 当前实现：重叠 bbox 链过滤
+
+Locate API 在把所有 SAM3 bbox 和 mask 映射回原图后，会对结果执行一次全局过滤。该步骤可以处理同一个 Qwen crop 内的重复实例，也可以处理来自不同 Qwen crop、映射后互相重叠的重复实例。
+
+两个 bbox 的重叠程度定义为：
+
+```text
+overlap_ratio = intersection_area / min(bbox_area_1, bbox_area_2)
+```
+
+默认 `overlap_ratio >= 0.2` 时建立一条重叠边。使用连通分量合并整条链，因此 A 与 B 重叠、B 与 C 重叠时，即使 A 与 C 不直接重叠，也会把 A、B、C 作为同一组，最终只保留一个实例。小于 20% 的轻微擦边不会合并，避免误删并排商品。
+
+每条重叠链按以下顺序选择最前方实例：
+
+1. 统计每个 mask 中灰度值不小于 128 的前景像素数量。
+2. 如果最大 mask 面积至少是第二名的 2 倍，直接保留最大 mask。
+3. 否则计算 `mask_density = mask_area / bbox_area`，保留密度最大的实例。
+4. 密度相同时，依次比较 mask 面积、SAM3 score、bbox 面积。
+
+可通过环境变量调节：
+
+```text
+SAM_BBOX_OVERLAP_MIN_RATIO=0.2
+SAM_FRONT_AREA_DOMINANCE_RATIO=2.0
+```
+
+这里使用“交集占较小框比例”而不是 IoU，是因为同一商品的重复检测框可能一大一小或互相嵌套，此时 IoU 可能偏低，但较小框实际上大部分位于较大框内。
+
 ## 目标
 
 当 SAM3 返回多个候选 mask 时，可以结合 **mask 点密度** 和 **bbox 大小**，估计哪个实例更靠近相机、处于最前方。

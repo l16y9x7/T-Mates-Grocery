@@ -42,6 +42,12 @@ QWEN_CONSENSUS_IOU = 0.85
 CROP_PADDING_RATIO = 0.1
 SAM3_THRESHOLD = 0.5
 SAM3_MASK_THRESHOLD = 0.5
+SAM_BBOX_OVERLAP_MIN_RATIO = float(
+    os.getenv("SAM_BBOX_OVERLAP_MIN_RATIO", "0.2")
+)
+SAM_FRONT_AREA_DOMINANCE_RATIO = float(
+    os.getenv("SAM_FRONT_AREA_DOMINANCE_RATIO", "2.0")
+)
 REQUEST_TIMEOUT_SECONDS = 120
 
 app = FastAPI(title="Sorting Pick Locate", version="2.0.0")
@@ -443,6 +449,124 @@ def map_sam_instance_to_original(
     )
 
 
+def bbox_overlap_by_smaller_area(
+    first_bbox: list[float], second_bbox: list[float]
+) -> float:
+    """返回交集占较小 bbox 的比例，适合发现嵌套或大小不同的重复框。"""
+    first_area = max(0.0, first_bbox[2] - first_bbox[0]) * max(
+        0.0, first_bbox[3] - first_bbox[1]
+    )
+    second_area = max(0.0, second_bbox[2] - second_bbox[0]) * max(
+        0.0, second_bbox[3] - second_bbox[1]
+    )
+    smaller_area = min(first_area, second_area)
+    if smaller_area <= 0:
+        return 0.0
+
+    intersection_width = max(
+        0.0,
+        min(first_bbox[2], second_bbox[2]) - max(first_bbox[0], second_bbox[0]),
+    )
+    intersection_height = max(
+        0.0,
+        min(first_bbox[3], second_bbox[3]) - max(first_bbox[1], second_bbox[1]),
+    )
+    return intersection_width * intersection_height / smaller_area
+
+
+def mask_foreground_pixel_count(mask_base64: str) -> int:
+    encoded = mask_base64.split(",", 1)[-1]
+    try:
+        mask_bytes = base64.b64decode(encoded, validate=True)
+        with Image.open(io.BytesIO(mask_bytes)) as source_mask:
+            histogram = source_mask.convert("L").histogram()
+    except (ValueError, binascii.Error, UnidentifiedImageError, OSError) as error:
+        raise HTTPException(status_code=502, detail=f"SAM3 mask PNG 无效: {error}") from error
+    return sum(histogram[128:])
+
+
+def select_frontmost_instance(
+    instances: list[LocatedInstance],
+) -> LocatedInstance:
+    """从一条重叠链中按 mask 面积悬殊规则和 mask 密度选出最前方实例。"""
+    if len(instances) == 1:
+        return instances[0]
+
+    metrics: list[tuple[LocatedInstance, int, float, float]] = []
+    for instance in instances:
+        bbox_width = max(0.0, instance.bbox[2] - instance.bbox[0])
+        bbox_height = max(0.0, instance.bbox[3] - instance.bbox[1])
+        bbox_area = bbox_width * bbox_height
+        mask_area = mask_foreground_pixel_count(instance.mask)
+        mask_density = mask_area / bbox_area if bbox_area > 0 else 0.0
+        metrics.append((instance, mask_area, mask_density, bbox_area))
+
+    by_mask_area = sorted(metrics, key=lambda item: item[1], reverse=True)
+    if (
+        by_mask_area[0][1] > 0
+        and by_mask_area[0][1]
+        >= SAM_FRONT_AREA_DOMINANCE_RATIO * by_mask_area[1][1]
+    ):
+        return by_mask_area[0][0]
+
+    return max(
+        metrics,
+        key=lambda item: (
+            item[2],
+            item[1],
+            item[0].score if item[0].score is not None else -1.0,
+            item[3],
+        ),
+    )[0]
+
+
+def keep_frontmost_in_overlap_chains(
+    instances: list[LocatedInstance],
+) -> list[LocatedInstance]:
+    """每个 bbox 重叠连通分量只保留一个最前方实例。"""
+    if len(instances) < 2:
+        return instances
+
+    parents = list(range(len(instances)))
+
+    def find(index: int) -> int:
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    def union(first_index: int, second_index: int) -> None:
+        first_root = find(first_index)
+        second_root = find(second_index)
+        if first_root != second_root:
+            parents[second_root] = first_root
+
+    for first_index, first in enumerate(instances):
+        for second_index in range(first_index + 1, len(instances)):
+            overlap = bbox_overlap_by_smaller_area(
+                first.bbox,
+                instances[second_index].bbox,
+            )
+            if overlap >= SAM_BBOX_OVERLAP_MIN_RATIO:
+                union(first_index, second_index)
+
+    components: dict[int, list[int]] = defaultdict(list)
+    for index in range(len(instances)):
+        components[find(index)].append(index)
+
+    selected: list[tuple[int, LocatedInstance]] = []
+    for indices in components.values():
+        component_instances = [instances[index] for index in indices]
+        frontmost = select_frontmost_instance(component_instances)
+        selected_index = next(
+            index
+            for index in indices
+            if instances[index] is frontmost
+        )
+        selected.append((selected_index, frontmost))
+    return [instance for _, instance in sorted(selected, key=lambda item: item[0])]
+
+
 def locate_product_in_image(
     product: dict[str, Any], image_path: Path
 ) -> LocateResponse:
@@ -474,6 +598,8 @@ def locate_product_in_image(
 
     if not located_instances:
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
+
+    located_instances = keep_frontmost_in_overlap_chains(located_instances)
 
     return LocateResponse(
         sku_id=product["sku_id"],

@@ -8,7 +8,7 @@
 
 ### 当前已存储的 Prompt
 
-当前 `qwen_prompt_mapping.json` 中存储的是 **2F（从下往上第二层货架）** 的 Prompt：
+当前 `qwen_sam_prompt_mapping.json` 中存储的是 **2F（从下往上第二层货架）** 的 Qwen3 Prompt：
 
 ```text
 找到图片中从下往上第二排货架的所有黄色虾条包装袋，输出满足条件的所有黄色虾条包装袋的bbox。返回格式：{"name": "黄色虾条包装袋", "bbox": [x1, y1, x2, y2]}
@@ -57,7 +57,7 @@
 
 ### 当前已存储的 Prompt
 
-当前 `qwen_prompt_mapping.json` 中存储的是 **2F（从下往上第二层货架）** 的 Prompt：
+当前 `qwen_sam_prompt_mapping.json` 中存储的是 **2F（从下往上第二层货架）** 的 Qwen3 Prompt：
 
 ```text
 找到图片中从下往上第二排货架的所有黄色虾条包装袋右边的蓝色浪味仙包装袋，输出满足条件的所有蓝色浪味仙包装袋的bbox。返回格式：{"name": "蓝色浪味仙包装袋", "bbox": [x1, y1, x2, y2]}
@@ -95,7 +95,7 @@
 
 当前 Qwen3 prompt 能够识别疑似“京东京造毛巾堆”的候选 bbox，但仅凭现有检测结果无法可靠确认候选区域确实是京东京造毛巾。因此，该 SKU 目前需要额外的二次确认策略，不能将 Qwen3 首次返回的 bbox 直接作为最终抓取目标。
 
-当前 `qwen_prompt_mapping.json` 中存储的 Prompt 为：
+当前 `qwen_sam_prompt_mapping.json` 中存储的 Qwen3 Prompt 为：
 
 ```text
 找到图片中从上往下第二层货架的京东京造毛巾堆，处于这一层的右半部分，输出满足条件的所有京东京造毛巾堆的bbox，每一堆分开。返回格式：{"name": "京东京造毛巾堆", "bbox": [x1, y1, x2, y2]}

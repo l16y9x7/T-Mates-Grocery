@@ -11,6 +11,8 @@ const qwenSampleColors = ["#a78bfa", "#2dd4bf", "#f59e0b"];
 const cropPaddingRatio = 0.1;
 let cropChoices = [];
 let currentCrop = null;
+const promptPairsBySku = new Map();
+let loadedPromptSku = "";
 
 async function api(url, options = {}) {
   const response = await fetch(url, options);
@@ -41,11 +43,35 @@ async function loadSkus() {
   const data = await api("/api/skus");
   const options = document.querySelector("#qwenSkuOptions");
   options.replaceChildren();
-  data.skus.forEach(({ name }) => {
+  promptPairsBySku.clear();
+  data.skus.forEach(({ name, qwen3_prompt: qwen3Prompt, sam3_prompt: sam3Prompt }) => {
     const option = document.createElement("option");
     option.value = name;
     options.append(option);
+    if (typeof qwen3Prompt === "string" && typeof sam3Prompt === "string") {
+      promptPairsBySku.set(name, {
+        qwen3_prompt: qwen3Prompt,
+        sam3_prompt: sam3Prompt,
+      });
+    }
   });
+}
+
+function loadPromptPairForSelectedSku() {
+  const skuName = qwenSku.value.trim();
+  const promptPair = promptPairsBySku.get(skuName);
+  if (!promptPair) {
+    loadedPromptSku = "";
+    return;
+  }
+  if (loadedPromptSku === skuName) {
+    return;
+  }
+  loadedPromptSku = skuName;
+  qwenPrompt.value = promptPair.qwen3_prompt;
+  samPrompt.value = promptPair.sam3_prompt;
+  setStatus("#savePromptStatus", "已加载配对 Prompt", "success");
+  setStatus("#saveSamPromptStatus", "已加载配对 Prompt", "success");
 }
 
 function imageUrl() {
@@ -291,6 +317,11 @@ async function saveQwenPrompt() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sku_name: qwenSku.value, prompt: qwenPrompt.value }),
     });
+    promptPairsBySku.set(result.sku_name, {
+      qwen3_prompt: result.qwen3_prompt,
+      sam3_prompt: result.sam3_prompt,
+    });
+    loadedPromptSku = result.sku_name;
     setStatus(
       "#savePromptStatus",
       result.overwritten ? "已覆盖原 Prompt" : "已保存",
@@ -322,6 +353,11 @@ async function saveSamPromptPair() {
         sam3_prompt: samPrompt.value,
       }),
     });
+    promptPairsBySku.set(result.sku_name, {
+      qwen3_prompt: result.qwen3_prompt,
+      sam3_prompt: result.sam3_prompt,
+    });
+    loadedPromptSku = result.sku_name;
     setStatus(
       "#saveSamPromptStatus",
       result.overwritten ? "已覆盖该 SKU 的配对 Prompt" : "配对 Prompt 已保存",
@@ -493,6 +529,7 @@ qwenSku.addEventListener("input", () => {
   syncSamPairedSku();
   setStatus("#savePromptStatus", "未保存");
   setStatus("#saveSamPromptStatus", "未保存");
+  loadPromptPairForSelectedSku();
 });
 qwenPrompt.addEventListener("input", () => {
   setStatus("#savePromptStatus", "未保存");

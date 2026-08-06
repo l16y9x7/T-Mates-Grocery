@@ -25,11 +25,13 @@ python server.py
 
   IoU 会在三组结果之间两两计算。多个同名目标使用“最大 IoU 一对一匹配”，同时显示未匹配目标数量和总体平均 IoU。
 
-  测试出满意的 Prompt 后，可选择对应 SKU 并点击“保存当前 Prompt”。结果按 `SKU名称: Prompt` 保存到 `perception/pick/locate/qwen_prompt_mapping.json`；再次保存同一 SKU 会覆盖旧值。
+  测试出满意的 Prompt 后，可选择对应 SKU 并点击“保存当前 Prompt”。该按钮只更新 `perception/pick/locate/qwen_sam_prompt_mapping.json` 中对应 SKU 的 `qwen3_prompt`，并保留已经保存的 `sam3_prompt`。如果该 SKU 尚未建立完整配对，需要先在右侧填写 SAM3 Prompt 并点击“保存 SAM3 Prompt 范式”。
 
 - Qwen 完成后，右侧自动显示第一个检测结果向外扩张 10% 的 crop；也可以在下拉框中切换三次采样产生的其他检测框。
 - 右侧输入 SAM3 prompt 后，仅对当前 Qwen crop 进行分割。页面绘制 crop 内所有实例的 mask、bbox 和置信度，同时返回映射回原图的 `bbox_original_xyxy`。
-- 右侧的“保存 SAM3 Prompt 范式”会将左侧当前选择的 SKU、Qwen3 Prompt 和右侧 SAM3 Prompt 作为一条完整记录保存到 `perception/pick/locate/qwen_sam_prompt_mapping.json`。同一 SKU 再次保存会整体覆盖该条配对记录。
+- 右侧的“保存 SAM3 Prompt 范式”会将左侧当前选择的 SKU、Qwen3 Prompt 和右侧 SAM3 Prompt 作为一条完整记录保存到 `perception/pick/locate/qwen_sam_prompt_mapping.json`。同一 SKU 再次保存会整体覆盖该条配对记录。选择已有 SKU 时，网页也会从这份文件同时载入两个 Prompt。
+
+`qwen_sam_prompt_mapping.json` 是网页和正式 Locate API 的唯一 Prompt 数据源；旧的 `qwen_prompt_mapping.json` 已停用并移除。
 
 默认使用：
 

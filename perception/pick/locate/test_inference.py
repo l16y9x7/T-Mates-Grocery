@@ -11,12 +11,16 @@ from typing import Any
 import requests
 from PIL import Image, ImageDraw, UnidentifiedImageError
 
-import main
-
-
-DEFAULT_IMAGE_MAPPING_PATH = main.RGB_DIR / "image_name_mapping.json"
-DEFAULT_RESULT_DIRECTORY = main.RGB_DIR / "locate_results"
-LOCATE_API_URL = os.getenv("LOCATE_API_URL", "http://127.0.0.1:8081").rstrip("/")
+ROOT = Path(__file__).resolve().parent
+DEFAULT_IMAGE_DIRECTORY = ROOT.parents[1] / "test_data" / "2026-08-04"
+DEFAULT_IMAGE_MAPPING_PATH = DEFAULT_IMAGE_DIRECTORY / "image_name_mapping.json"
+DEFAULT_RESULT_DIRECTORY = DEFAULT_IMAGE_DIRECTORY / "locate_results"
+SKU_API_URL = os.getenv("SKU_API_URL", "http://192.168.130.59:25540").rstrip("/")
+LOCATE_API_URL = os.getenv("LOCATE_API_URL", "http://192.168.130.59:8081").rstrip("/")
+SKU_REQUEST_TIMEOUT_SECONDS = float(os.getenv("SKU_REQUEST_TIMEOUT_SECONDS", "120"))
+LOCATE_REQUEST_TIMEOUT_SECONDS = float(
+    os.getenv("LOCATE_REQUEST_TIMEOUT_SECONDS", "600")
+)
 MASK_COLORS = [
     (45, 212, 191),
     (245, 158, 11),
@@ -53,7 +57,7 @@ def load_image_mapping(path: Path = DEFAULT_IMAGE_MAPPING_PATH) -> dict[str, lis
 def find_test_images(
     sku_id: str,
     mapping_path: Path = DEFAULT_IMAGE_MAPPING_PATH,
-    image_directory: Path = main.RGB_DIR,
+    image_directory: Path = DEFAULT_IMAGE_DIRECTORY,
 ) -> list[Path]:
     normalized_sku_id = sku_id.strip().upper()
     mapping = load_image_mapping(mapping_path)
@@ -69,6 +73,33 @@ def find_test_images(
     if missing_images:
         raise RuntimeError(f"映射中的 RGB 图片不存在: {', '.join(missing_images)}")
     return image_paths
+
+
+def lookup_sku_by_name(name: str) -> dict[str, Any]:
+    try:
+        response = requests.get(
+            f"{SKU_API_URL}/sku/search_by_name",
+            params={"name": name},
+            timeout=SKU_REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as error:
+        raise RuntimeError(f"SKU API 请求失败: {error}") from error
+
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise RuntimeError("SKU API 响应不是有效 JSON") from error
+
+    if not response.ok:
+        detail = payload.get("detail", payload) if isinstance(payload, dict) else payload
+        raise RuntimeError(f"SKU API 返回 {response.status_code}: {detail}")
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("sku_id"), str)
+        or not isinstance(payload.get("name"), str)
+    ):
+        raise RuntimeError("SKU API 响应缺少 sku_id 或 name")
+    return payload
 
 
 def save_result_visualization(
@@ -144,7 +175,7 @@ def run_test_inference(
     if not normalized_name:
         raise RuntimeError("name 不能为空")
 
-    product = main.lookup_sku_by_name(normalized_name)
+    product = lookup_sku_by_name(normalized_name)
     image_paths = find_test_images(product["sku_id"])
     results: dict[str, dict[str, Any]] = {}
     for image_path in image_paths:
@@ -158,7 +189,7 @@ def run_test_inference(
                         "ascii"
                     ),
                 },
-                timeout=main.REQUEST_TIMEOUT_SECONDS * (main.QWEN_SAMPLE_COUNT + 2),
+                timeout=LOCATE_REQUEST_TIMEOUT_SECONDS,
             )
             payload = response.json()
             if response.ok:

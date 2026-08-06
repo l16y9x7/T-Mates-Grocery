@@ -328,7 +328,7 @@
     "sam3_prompt": "frontmost red package"
   },
   "蒙牛纯牛奶": {
-    "qwen3_prompt": "找到图片中最上排最前方排的纯牛奶，输出他们的bbox。返回格式：{\"name\": \"纯牛奶\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中最上层货架的绿白纯牛奶堆，输出满足条件的所有纯牛奶堆的bbox，每一堆都分开。返回格式：{\"name\": \"纯牛奶堆\", \"bbox\": [x1, y1, x2, y2]",
     "sam3_prompt": "frontmost carton"
   },
   "薯愿非油炸清新番茄味": {

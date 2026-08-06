@@ -18,7 +18,6 @@ ROOT = Path(__file__).resolve().parent
 STATIC_DIR = ROOT / "static"
 RGB_DIR = ROOT.parents[2] / "test_data" / "2026-08-04"
 SKU_CATALOG_PATH = ROOT.parents[2] / "sku" / "products.json"
-QWEN_PROMPT_MAPPING_PATH = ROOT.parent / "qwen_prompt_mapping.json"
 PROMPT_PAIR_MAPPING_PATH = ROOT.parent / "qwen_sam_prompt_mapping.json"
 
 QWEN3_URL = os.getenv(
@@ -89,7 +88,22 @@ def list_images() -> dict:
 
 @app.get("/api/skus")
 def list_skus() -> dict:
-    return {"skus": load_skus()}
+    prompt_mapping = load_prompt_pair_mapping()
+    skus = []
+    for sku in load_skus():
+        prompt_pair = prompt_mapping.get(sku["name"])
+        skus.append(
+            {
+                "name": sku["name"],
+                "qwen3_prompt": (
+                    prompt_pair["qwen3_prompt"] if prompt_pair is not None else None
+                ),
+                "sam3_prompt": (
+                    prompt_pair["sam3_prompt"] if prompt_pair is not None else None
+                ),
+            }
+        )
+    return {"skus": skus}
 
 
 @app.post("/api/qwen-prompts")
@@ -105,25 +119,25 @@ def save_qwen_prompt(request: SaveQwenPromptRequest) -> dict:
     if sku_name not in valid_names:
         raise HTTPException(status_code=400, detail=f"商品库中不存在 SKU：{sku_name}")
 
-    mapping = load_qwen_prompt_mapping()
-    overwritten = sku_name in mapping
-    mapping[sku_name] = prompt
-    ordered_mapping = dict(sorted(mapping.items(), key=lambda item: item[0]))
-    temporary_path = QWEN_PROMPT_MAPPING_PATH.with_suffix(".json.tmp")
-    try:
-        temporary_path.write_text(
-            json.dumps(ordered_mapping, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        temporary_path.replace(QWEN_PROMPT_MAPPING_PATH)
-    except OSError as error:
+    mapping = load_prompt_pair_mapping()
+    current_pair = mapping.get(sku_name)
+    if current_pair is None or not current_pair["sam3_prompt"].strip():
         raise HTTPException(
-            status_code=500,
-            detail=f"保存 Qwen Prompt 失败: {error}",
-        ) from error
+            status_code=409,
+            detail="该 SKU 尚未保存 SAM3 Prompt，请填写右侧 Prompt 后保存完整配对",
+        )
+
+    overwritten = bool(current_pair["qwen3_prompt"].strip())
+    mapping[sku_name] = {
+        "qwen3_prompt": prompt,
+        "sam3_prompt": current_pair["sam3_prompt"],
+    }
+    write_json_mapping(PROMPT_PAIR_MAPPING_PATH, mapping, "配对 Prompt")
     return {
         "sku_name": sku_name,
         "prompt": prompt,
+        "qwen3_prompt": prompt,
+        "sam3_prompt": current_pair["sam3_prompt"],
         "overwritten": overwritten,
     }
 
@@ -373,27 +387,6 @@ def load_skus() -> list[dict]:
         if isinstance(name, str) and name.strip():
             skus.append({"name": name.strip()})
     return skus
-
-
-def load_qwen_prompt_mapping() -> dict[str, str]:
-    if not QWEN_PROMPT_MAPPING_PATH.exists():
-        return {}
-    try:
-        mapping = json.loads(QWEN_PROMPT_MAPPING_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise HTTPException(
-            status_code=500,
-            detail=f"读取 Qwen Prompt 映射失败: {error}",
-        ) from error
-    if not isinstance(mapping, dict) or not all(
-        isinstance(name, str) and isinstance(prompt, str)
-        for name, prompt in mapping.items()
-    ):
-        raise HTTPException(
-            status_code=500,
-            detail="Qwen Prompt 映射必须是 SKU 名称到 Prompt 的字符串映射",
-        )
-    return mapping
 
 
 def load_prompt_pair_mapping() -> dict[str, dict[str, str]]:

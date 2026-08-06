@@ -66,6 +66,7 @@ python main.py
 5. 将 Qwen `[0,1000]` 归一化 bbox 转为原图像素坐标，向外扩张 10% 后裁图。
 6. 在每个去重后的 Qwen crop 上调用 SAM3。
 7. 将 SAM3 bbox 和 mask 映射回原始 RGB 图片。
+8. 对映射后的 SAM3 bbox 构建重叠链，每条链只保留按 mask 面积与密度判断最靠前的一个实例。
 
 成功响应：
 
@@ -87,6 +88,7 @@ python main.py
 - `bbox` 是原图像素坐标 `[x1, y1, x2, y2]`。
 - `mask` 是原图尺寸的单通道 PNG base64，不包含 data-URL 前缀。
 - `instances` 可以包含多个目标，每个 bbox 与同一对象的 mask 一一对应。
+- bbox 交集默认覆盖较小框至少 20% 才组成重叠链；链内最大 mask 达到第二名 2 倍时直接保留最大 mask，否则保留 `mask前景像素数 / bbox面积` 最大者。可通过 `SAM_BBOX_OVERLAP_MIN_RATIO` 和 `SAM_FRONT_AREA_DOMINANCE_RATIO` 调节阈值。
 
 ## Prompt 文件
 
@@ -126,9 +128,16 @@ python -m unittest -v test_main.py
     → Qwen3/SAM3 完整推理
 ```
 
-`image_name_mapping.json` 和 `2026-08-04` 目录只属于测试脚本；Locate API 本身不依赖这两个路径。
+`image_name_mapping.json` 和 `2026-08-04` 目录只属于测试脚本；Locate API 本身不依赖这两个路径。测试脚本也是独立的 HTTP 客户端，不导入或调用本地 `main.py`。
 
-先启动 SKU API 和 Locate API，然后执行：
+默认请求 `192.168.130.59` 上的两个服务：
+
+```text
+SKU API:    http://192.168.130.59:25540
+Locate API: http://192.168.130.59:8081
+```
+
+确认远端服务已启动后执行：
 
 ```powershell
 python test_inference.py "蒙牛纯牛奶"
@@ -151,3 +160,5 @@ python test_inference.py "蒙牛纯牛奶" --output result.json
 ```powershell
 python test_inference.py "蒙牛纯牛奶" --output result.json --output-dir D:/locate-results
 ```
+
+如端口或地址调整，可通过 `SKU_API_URL` 和 `LOCATE_API_URL` 环境变量覆盖；超时时间可通过 `SKU_REQUEST_TIMEOUT_SECONDS` 和 `LOCATE_REQUEST_TIMEOUT_SECONDS` 覆盖。
