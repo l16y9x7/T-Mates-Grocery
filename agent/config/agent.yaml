@@ -1,0 +1,43 @@
+# 四个能力模块的 HTTP 基础地址。当前使用本机回环地址和独立端口；
+# 跨主机实机联调时应替换成各模块实际监听地址。
+services:
+  navigation: http://127.0.0.1:8101
+  perception: http://127.0.0.1:8102
+  pose: http://127.0.0.1:8103
+  manipulation: http://127.0.0.1:8104
+
+# 巡检导航点的数量、名称和顺序均可按现场修改，但至少一个且不能重复。
+# 第一轮按列表从上到下，第二轮从下到上；第二轮首点只识别，不重复导航和位姿。
+inspection_points:
+  - H1_F_INSPECT
+  - H1_B_INSPECT
+  - H2_F_INSPECT
+  - H2_B_INSPECT
+
+# 各接口的秒级超时。连接阶段单独使用较短阈值，读取阶段按动作耗时分别配置；
+# 实机值应依据最长观测耗时再预留 30%-50%，不要把长动作统一压缩成短超时。
+timeouts:
+  connect_seconds: 3
+  health_seconds: 5
+  receipt_seconds: 120
+  inspection_seconds: 180
+  navigation_seconds: 600
+  pose_seconds: 300
+  pick_seconds: 600
+  place_seconds: 600
+
+# 标准商品摆放表。键是 H(货架)_F/B(面)_L(层)_C(列) 格式的货位编号。
+# product_name 传给抓放模块；route_order 决定商品拣选任务的取货先后且必须唯一。
+product_slots:
+  H1_F_L1_C01:
+    product_name: 可口可乐
+    route_order: 1
+  H1_F_L1_C02:
+    product_name: 矿泉水
+    route_order: 2
+  H1_F_L2_C01:
+    product_name: 薯片
+    route_order: 3
+  H2_B_L3_C02:
+    product_name: 牛奶
+    route_order: 4
