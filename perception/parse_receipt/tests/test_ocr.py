@@ -1,9 +1,23 @@
 import unittest
+from unittest.mock import patch
 
-from receipt_recognizer.ocr import OCRResult, extract_ocr_lines
+from receipt_recognizer.ocr import OCRResult, build_parser, extract_ocr_lines
 
 
 class OCRParsingTests(unittest.TestCase):
+    def test_cli_accepts_explicit_gpu_device(self) -> None:
+        args = build_parser().parse_args(["receipt.jpg", "--device", "gpu:0"])
+        self.assertEqual(args.device, "gpu:0")
+
+    def test_cli_reads_default_device_from_environment(self) -> None:
+        with patch.dict("os.environ", {"RECEIPT_OCR_DEVICE": "gpu:0"}):
+            args = build_parser().parse_args(["receipt.jpg"])
+        self.assertEqual(args.device, "gpu:0")
+
+    def test_cli_rejects_invalid_device(self) -> None:
+        with self.assertRaises(SystemExit):
+            build_parser().parse_args(["receipt.jpg", "--device", "cuda:0"])
+
     def test_extracts_lines_from_page_wrapped_paddleocr_result(self) -> None:
         raw = [
             [

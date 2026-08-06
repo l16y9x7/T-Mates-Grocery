@@ -111,6 +111,19 @@ python -m pip install -e .
 
 `python -m pip install -e .` 会安装 FastAPI、Pillow、python-multipart 和 uvicorn。
 
+### 可选：PaddleOCR GPU 实验
+
+正式 `POST /receipt/parse` 不依赖 PaddleOCR。需要在机器人服务器运行
+`receipt-ocr` 实验时，先按服务器驱动选择对应的 `paddlepaddle-gpu`
+CUDA wheel，再安装 `paddleocr`；不要同时安装 CPU 和 GPU 两个 Paddle 包。
+
+OCR 默认使用 CPU。只有明确分配了 GPU 卡号后才设置：
+
+```bash
+export RECEIPT_OCR_DEVICE='gpu:0'
+receipt-ocr receipt.jpg
+```
+
 ## 4. 启动
 
 本地只给本机访问：

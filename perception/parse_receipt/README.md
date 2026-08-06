@@ -246,6 +246,10 @@ OCR 依赖不放进默认服务环境，避免增加服务器部署复杂度。�
 python -m pip install -e ".[ocr]"
 ```
 
+PaddlePaddle 推理引擎需要按部署平台单独安装。CPU 与 GPU 包二选一，
+不要在同一环境同时安装 `paddlepaddle` 和 `paddlepaddle-gpu`。GPU wheel
+必须与服务器驱动兼容的 CUDA 构建对应。
+
 如果运行时提示缺少 `paddle`，请按 PaddleOCR 官方说明为当前机器安装
 对应版本的 `paddlepaddle`。Apple Silicon Mac 本地 CPU 测试通常可以先试：
 
@@ -262,6 +266,22 @@ PY
 ```bash
 receipt-ocr receipt-images/receipt8.jpg
 ```
+
+默认使用 CPU，避免在共享机器上意外占用 GPU。机器人部署环境可以显式指定：
+
+```bash
+receipt-ocr receipt-images/receipt8.jpg --device gpu:0
+```
+
+也可以通过环境变量设置默认设备：
+
+```bash
+export RECEIPT_OCR_DEVICE='gpu:0'
+receipt-ocr receipt-images/receipt8.jpg
+```
+
+设备只支持 `cpu`、`gpu` 或 `gpu:<非负整数>`。当前 PaddleOCR 仍是独立
+实验入口，`POST /receipt/parse` 不会自动运行 OCR，也不会占用本机 GPU。
 
 输出是 OCR 原始文本证据，不是最终商品 JSON：
 
