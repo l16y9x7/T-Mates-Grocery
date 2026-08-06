@@ -1,4 +1,6 @@
 const imageSelect = document.querySelector("#imageSelect");
+const requestName = document.querySelector("#requestName");
+const requestHand = document.querySelector("#requestHand");
 const qwenPrompt = document.querySelector("#qwenPrompt");
 const qwenSku = document.querySelector("#qwenSku");
 const samPrompt = document.querySelector("#samPrompt");
@@ -13,6 +15,8 @@ let cropChoices = [];
 let currentCrop = null;
 const promptPairsBySku = new Map();
 let loadedPromptSku = "";
+let latestImageBase64 = "";
+let latestImageMediaType = "image/jpeg";
 
 async function api(url, options = {}) {
   const response = await fetch(url, options);
@@ -79,8 +83,11 @@ function imageUrl() {
 }
 
 async function drawBase(canvas) {
+  if (!latestImageBase64) {
+    throw new Error("Debug 接口没有返回原图");
+  }
   const image = new Image();
-  image.src = `${imageUrl()}?t=${Date.now()}`;
+  image.src = `data:${latestImageMediaType};base64,${latestImageBase64}`;
   await image.decode();
   canvas.width = image.naturalWidth;
   canvas.height = image.naturalHeight;
@@ -374,64 +381,87 @@ async function runQwen() {
   const button = document.querySelector("#runQwen");
   const rawResult = document.querySelector("#qwenRawResult");
   button.disabled = true;
-  rawResult.textContent = "等待模型返回…";
-  resetCropPanel("等待 Qwen3 检测结果");
+  rawResult.textContent = "等待 Locate Debug 返回…";
   setStatus("#qwenStatus", "运行中…", "running");
+  setStatus("#samStatus", "运行中…", "running");
   try {
-    const result = await api("/api/qwen", {
+    const result = await api("/api/locate-debug", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image_name: imageSelect.value, prompt: qwenPrompt.value }),
+      body: JSON.stringify({
+        name: requestName.value,
+        product_name: qwenSku.value,
+        hand: requestHand.value,
+      }),
     });
-    const samples = result.samples || [];
-    const successfulSamples = samples.filter((sample) => !sample.error);
-    rawResult.textContent = formatRawOutputs(samples);
-    document.querySelector("#qwenResult").textContent = JSON.stringify(samples, null, 2);
+    latestImageBase64 = result.image_base64;
+    latestImageMediaType = result.image_media_type || "image/jpeg";
+    const qwenBboxes = result.qwen_bboxes || [];
+    const instances = result.instances || [];
+
+    await drawBase(qwenCanvas);
+    const qwenContext = qwenCanvas.getContext("2d");
+    qwenBboxes.forEach((record, index) => {
+      drawBox(
+        qwenContext,
+        record.bbox_original,
+        `Qwen #${index + 1}`,
+        qwenSampleColors[index % qwenSampleColors.length],
+      );
+    });
+    document.querySelector("#qwenEmpty").hidden = true;
+    document.querySelector("#qwenResult").textContent = JSON.stringify(qwenBboxes, null, 2);
     document.querySelector("#qwenIouResult").textContent = JSON.stringify(
-      calculateIouReport(successfulSamples),
+      {
+        sku_id: result.sku_id,
+        product_name: result.product_name,
+        image_name: result.image_name,
+        image_path: result.image_path,
+        image_size: result.image_size,
+      },
       null,
       2,
     );
-    await drawBase(qwenCanvas);
-    const normalized = document.querySelector("#qwenCoordinateMode").value === "normalized";
-    const context = qwenCanvas.getContext("2d");
-    successfulSamples.forEach((sample) => {
-      sample.detections.forEach((detection, index) => {
-        const bbox = [...detection.bbox];
-        if (normalized) {
-          bbox[0] = (bbox[0] / 1000) * qwenCanvas.width;
-          bbox[1] = (bbox[1] / 1000) * qwenCanvas.height;
-          bbox[2] = (bbox[2] / 1000) * qwenCanvas.width;
-          bbox[3] = (bbox[3] / 1000) * qwenCanvas.height;
-        }
-        const label = `S${sample.sample_index} ${detection.name} #${index + 1}`;
-        const color = qwenSampleColors[(sample.sample_index - 1) % qwenSampleColors.length];
-        drawBox(context, bbox, label, color);
-      });
+    rawResult.textContent = JSON.stringify(
+      {
+        ...result,
+        image_base64: `<base64 ${result.image_base64.length} chars>`,
+        instances: instances.map((instance) => ({
+          ...instance,
+          mask: `<base64 ${instance.mask.length} chars>`,
+        })),
+      },
+      null,
+      2,
+    );
+
+    await drawBase(samCanvas);
+    for (let index = 0; index < instances.length; index += 1) {
+      await drawMask(samCanvas, instances[index].mask, colors[index % colors.length]);
+    }
+    const samContext = samCanvas.getContext("2d");
+    instances.forEach((instance, index) => {
+      const score = Number(instance.score || 0).toFixed(3);
+      drawBox(samContext, instance.bbox, `#${index + 1} ${score}`, colors[index % colors.length]);
     });
-    document.querySelector("#qwenEmpty").hidden = true;
-    populateCropChoices(successfulSamples);
-    if (cropChoices.length) {
-      await drawSelectedCrop();
-    }
-    const detectionCount = successfulSamples.reduce(
-      (count, sample) => count + sample.detections.length,
-      0,
+    document.querySelector("#samEmpty").hidden = true;
+    document.querySelector("#samResult").textContent = JSON.stringify(
+      instances.map(({ bbox, score }) => ({ bbox, score })),
+      null,
+      2,
     );
-    if (!successfulSamples.length) {
-      throw new Error(samples.map((sample) => sample.error).filter(Boolean).join("；"));
+    if (result.error) {
+      const errorMessage = `HTTP ${result.error_status_code || 500}: ${result.error}`;
+      setStatus("#qwenStatus", errorMessage, "error");
+      setStatus("#samStatus", "推理失败，已显示 Debug 接口返回的原图", "error");
+    } else {
+      setStatus("#qwenStatus", `${qwenBboxes.length} 个共识 bbox`, "success");
+      setStatus("#samStatus", `${instances.length} 个最终实例`, "success");
     }
-    const complete = successfulSamples.length === samples.length;
-    setStatus(
-      "#qwenStatus",
-      `${successfulSamples.length}/3 次成功 · ${detectionCount} 个框`,
-      complete ? "success" : "error",
-    );
   } catch (error) {
-    if (rawResult.textContent === "等待模型返回…") {
-      rawResult.textContent = "未获取到模型原始输出";
-    }
+    rawResult.textContent = error.message;
     setStatus("#qwenStatus", error.message, "error");
+    setStatus("#samStatus", error.message, "error");
   } finally {
     button.disabled = false;
   }
@@ -544,15 +574,7 @@ document.querySelector("#qwenCoordinateMode").addEventListener("change", () => {
     drawSelectedCrop().catch((error) => setStatus("#samStatus", error.message, "error"));
   }
 });
-imageSelect.addEventListener("change", async () => {
-  await drawBase(qwenCanvas);
-  document.querySelector("#qwenResult").textContent = "[]";
-  document.querySelector("#qwenIouResult").textContent = "{}";
-  document.querySelector("#qwenRawResult").textContent = "等待运行";
-  resetCropPanel();
-});
-
-Promise.all([loadImages(), loadSkus()]).catch((error) => {
+loadSkus().catch((error) => {
   setStatus("#qwenStatus", error.message, "error");
   setStatus("#savePromptStatus", error.message, "error");
   setStatus("#saveSamPromptStatus", error.message, "error");

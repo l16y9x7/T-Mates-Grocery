@@ -4,7 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
 
@@ -12,6 +12,37 @@ import server
 
 
 class PromptMappingTest(unittest.TestCase):
+    def test_locate_debug_proxy_sends_no_local_image(self) -> None:
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {
+            "image_base64": "aW1hZ2U=",
+            "qwen_bboxes": [],
+            "instances": [],
+        }
+        with patch.object(
+            server.requests,
+            "post",
+            return_value=response,
+        ) as post_mock:
+            result = server.run_locate_debug(
+                server.LocateDebugProxyRequest(
+                    name="SORTING",
+                    product_name="可口可乐",
+                    hand="left",
+                )
+            )
+
+        self.assertEqual(result["image_base64"], "aW1hZ2U=")
+        post_mock.assert_called_once_with(
+            server.LOCATE_DEBUG_URL,
+            json={
+                "name": "SORTING",
+                "product_name": "可口可乐",
+                "hand": "left",
+            },
+            timeout=600,
+        )
+
     def test_qwen_save_updates_canonical_pair_and_preserves_sam_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)

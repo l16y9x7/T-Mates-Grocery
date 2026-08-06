@@ -220,14 +220,17 @@ def save_qwen_visualization(
 
 def run_test_inference(
     name: str,
+    product_name: str,
+    hand: str,
     output_directory: Path = DEFAULT_RESULT_DIRECTORY,
-    hand: str = "left",
 ) -> dict[str, dict[str, Any]]:
     normalized_name = name.strip()
-    if not normalized_name:
-        raise RuntimeError("name 不能为空")
+    normalized_product_name = product_name.strip()
+    normalized_hand = hand.strip()
+    if not normalized_name or not normalized_product_name or not normalized_hand:
+        raise RuntimeError("name、product_name、hand 都不能为空")
 
-    product = lookup_sku_by_name(normalized_name)
+    product = lookup_sku_by_name(normalized_product_name)
     image_paths = find_test_images(product["sku_id"])
     results: dict[str, dict[str, Any]] = {}
     for image_path in image_paths:
@@ -235,9 +238,9 @@ def run_test_inference(
             response = requests.post(
                 f"{LOCATE_API_URL}/perception/pick/locate/debug",
                 json={
-                    "name": product["name"],
+                    "name": normalized_name,
                     "product_name": product["name"],
-                    "hand": hand,
+                    "hand": normalized_hand,
                     "image_name": image_path.name,
                     "image_base64": base64.b64encode(image_path.read_bytes()).decode(
                         "ascii"
@@ -289,9 +292,11 @@ def run_test_inference(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="根据商品名、SKU 和 image_name_mapping.json 运行测试图片推理"
+        description="使用正式请求参数和自动匹配的本地图片调用 Debug Locate API"
     )
-    parser.add_argument("name", help="SKU 商品名称，例如：蒙牛纯牛奶")
+    parser.add_argument("name", help="正式请求的 name 字段，例如 SORTING")
+    parser.add_argument("product_name", help="完整商品名称，例如 蒙牛纯牛奶")
+    parser.add_argument("hand", help="正式请求的 hand 字段，例如 left 或 right")
     parser.add_argument(
         "--output",
         type=Path,
@@ -303,12 +308,6 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_RESULT_DIRECTORY,
         help=f"结果图片目录，默认：{DEFAULT_RESULT_DIRECTORY}",
     )
-    parser.add_argument(
-        "--hand",
-        choices=("left", "right"),
-        default="left",
-        help="测试请求使用的手，默认：left",
-    )
     return parser.parse_args()
 
 
@@ -317,8 +316,9 @@ def main_cli() -> None:
     try:
         results = run_test_inference(
             args.name,
+            args.product_name,
+            args.hand,
             output_directory=args.output_dir,
-            hand=args.hand,
         )
     except RuntimeError as error:
         raise SystemExit(str(error)) from error

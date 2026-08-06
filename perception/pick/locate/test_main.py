@@ -11,7 +11,6 @@ from unittest.mock import Mock, patch
 from PIL import Image
 
 import main
-import test_formal_api
 import test_inference
 
 
@@ -90,59 +89,6 @@ class LocateLogicTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 400)
 
-    def test_formal_api_automatically_uploads_matched_local_image(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            image_path = Path(temporary_directory) / "matched_rgb.jpg"
-            image_path.write_bytes(b"local image")
-            response = Mock(ok=True, status_code=200)
-            response.json.return_value = {
-                "product_name": "可口可乐",
-                "bbox": [100, 200, 300, 400],
-                "mask": base64.b64encode(b"mask").decode("ascii"),
-                "image_path": "C:/monitor/stored.jpg",
-            }
-            with patch.object(
-                test_formal_api.requests,
-                "post",
-                return_value=response,
-            ) as request_mock:
-                result = test_formal_api.call_formal_locate(
-                    "SORTING",
-                    "可口可乐",
-                    "left",
-                    image_path,
-                )
-
-            self.assertEqual(result["bbox"], [100, 200, 300, 400])
-            request_payload = request_mock.call_args.kwargs["json"]
-            self.assertEqual(request_payload["name"], "SORTING")
-            self.assertEqual(request_payload["product_name"], "可口可乐")
-            self.assertEqual(request_payload["hand"], "left")
-            self.assertEqual(request_payload["image_name"], image_path.name)
-            self.assertEqual(
-                base64.b64decode(request_payload["image_base64"]),
-                b"local image",
-            )
-
-    def test_formal_api_finds_local_image_by_sku_mapping(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            directory = Path(temporary_directory)
-            image_path = directory / "mapped_rgb.jpg"
-            image_path.touch()
-            mapping_path = directory / "image_name_mapping.json"
-            mapping_path.write_text(
-                json.dumps({image_path.name: ["SKU_076"]}),
-                encoding="utf-8",
-            )
-
-            images = test_formal_api.find_local_images(
-                "sku_076",
-                mapping_path=mapping_path,
-                image_directory=directory,
-            )
-
-            self.assertEqual(images, [image_path])
-
     def test_inference_client_does_not_import_main(self) -> None:
         self.assertNotIn("main", test_inference.__dict__)
 
@@ -162,6 +108,50 @@ class LocateLogicTest(unittest.TestCase):
             params={"name": "NFC橙汁"},
             timeout=test_inference.SKU_REQUEST_TIMEOUT_SECONDS,
         )
+
+    def test_debug_inference_uses_formal_request_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            image_path = Path(temporary_directory) / "mapped_rgb.jpg"
+            image_path.write_bytes(b"image bytes")
+            response = Mock(ok=False, status_code=400)
+            response.json.return_value = {"detail": "test stop"}
+            with (
+                patch.object(
+                    test_inference,
+                    "lookup_sku_by_name",
+                    return_value={"sku_id": "SKU_001", "name": "NFC桔汁"},
+                ),
+                patch.object(
+                    test_inference,
+                    "find_test_images",
+                    return_value=[image_path],
+                ),
+                patch.object(
+                    test_inference.requests,
+                    "post",
+                    return_value=response,
+                ) as post_mock,
+            ):
+                test_inference.run_test_inference(
+                    "SORTING",
+                    "NFC桔汁",
+                    "right",
+                    output_directory=Path(temporary_directory) / "results",
+                )
+
+            self.assertEqual(
+                post_mock.call_args.args[0],
+                "http://192.168.130.59:8081/perception/pick/locate/debug",
+            )
+            request_payload = post_mock.call_args.kwargs["json"]
+            self.assertEqual(request_payload["name"], "SORTING")
+            self.assertEqual(request_payload["product_name"], "NFC桔汁")
+            self.assertEqual(request_payload["hand"], "right")
+            self.assertEqual(request_payload["image_name"], image_path.name)
+            self.assertEqual(
+                base64.b64decode(request_payload["image_base64"]),
+                b"image bytes",
+            )
 
     def test_find_test_images_by_sku_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -488,6 +478,8 @@ class LocateLogicTest(unittest.TestCase):
             self.assertEqual(result.image_name, "frame_rgb.jpg")
             self.assertTrue(Path(result.image_path).is_file())
             self.assertEqual(Path(result.image_path).parent, monitor_directory.resolve())
+            self.assertTrue(base64.b64decode(result.image_base64))
+            self.assertEqual(result.image_media_type, "image/jpeg")
             self.assertEqual(len(result.qwen_bboxes), 1)
             self.assertEqual(
                 result.qwen_bboxes[0].bbox_original,
@@ -513,6 +505,8 @@ class LocateLogicTest(unittest.TestCase):
             product_name="NFC桔汁",
             image_name="mapped_rgb.jpg",
             image_path="C:/monitor/mapped_rgb.jpg",
+            image_base64=base64.b64encode(b"image").decode("ascii"),
+            image_media_type="image/jpeg",
             image_size=[20, 10],
             instances=[],
         )
@@ -534,6 +528,45 @@ class LocateLogicTest(unittest.TestCase):
         uploaded_path = locate_mock.call_args.args[1]
         self.assertEqual(uploaded_path.name, "mapped_rgb.jpg")
 
+    def test_debug_response_keeps_uploaded_image_when_inference_fails(self) -> None:
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (20, 10), "white").save(image_buffer, format="JPEG")
+        request = main.LocateRequest(
+            name="SORTING",
+            product_name="雪碧罐装",
+            hand="left",
+            image_name="sprite.jpg",
+            image_base64=base64.b64encode(image_buffer.getvalue()).decode("ascii"),
+        )
+        with (
+            tempfile.TemporaryDirectory() as monitor_directory,
+            patch.object(
+                main,
+                "lookup_sku_by_name",
+                return_value={"sku_id": "SKU_001", "name": "雪碧罐装"},
+            ),
+            patch.object(
+                main,
+                "locate_product_in_image",
+                side_effect=main.HTTPException(
+                    status_code=502,
+                    detail="Qwen3 无法形成跨采样共识",
+                ),
+            ),
+            patch.object(main, "MONITOR_IMAGE_DIR", Path(monitor_directory)),
+        ):
+            result = main.locate_product_debug(
+                request,
+                capture_inference_errors=True,
+            )
+
+        self.assertEqual(result.error_status_code, 502)
+        self.assertEqual(result.error, "Qwen3 无法形成跨采样共识")
+        self.assertEqual(result.image_size, [20, 10])
+        self.assertTrue(base64.b64decode(result.image_base64))
+        self.assertEqual(result.qwen_bboxes, [])
+        self.assertEqual(result.instances, [])
+
     def test_public_locate_response_has_normalized_bbox_and_mask(self) -> None:
         mask = png_base64((100, 100))
         debug_response = main.LocateDebugResponse(
@@ -541,6 +574,8 @@ class LocateLogicTest(unittest.TestCase):
             product_name="可口可乐",
             image_name="frame_rgb.jpg",
             image_path="C:/monitor/frame_rgb.jpg",
+            image_base64=base64.b64encode(b"image").decode("ascii"),
+            image_media_type="image/jpeg",
             image_size=[100, 100],
             instances=[
                 main.LocatedInstance(

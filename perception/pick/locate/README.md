@@ -94,7 +94,9 @@ python main.py
 
 ### `POST /perception/pick/locate/debug`
 
-测试专用接口，输入与正式接口相同，但返回 `sku_id`、`image_name`、`image_path`、`image_size`、共识后的 `qwen_bboxes` 和全部 `instances`。`test_inference.py` 使用该接口记录 Qwen bbox，并分别绘制 Qwen 图和 SAM3 bbox/mask 图。
+测试专用接口，输入与正式接口相同，但额外返回 `image_base64`、`image_media_type`、`sku_id`、`image_name`、`image_path`、`image_size`、共识后的 `qwen_bboxes` 和全部 `instances`。其中 `image_base64` 是本次推理实际使用的原图，调用方不需要访问 Locate 服务所在机器的本地文件。
+
+若原图已经取得，但 Qwen3/SAM3 推理失败，Debug 接口仍返回 HTTP 200 和该原图，并通过 `error`、`error_status_code` 记录原始错误；此时 `qwen_bboxes`、`instances` 可以为空。正式接口仍按原始状态码返回错误，不改变生产调用语义。`test_inference.py` 使用该接口记录 Qwen bbox，并分别绘制 Qwen 图和 SAM3 bbox/mask 图。
 
 ## Prompt 文件
 
@@ -109,7 +111,7 @@ python main.py
 }
 ```
 
-没有配对 Prompt、没有形成 Qwen 跨采样共识或 SAM3 没有实例时，接口返回对应的 `4xx/5xx` 错误，不会返回未确认的 bbox。
+没有配对 Prompt、没有形成 Qwen 跨采样共识或 SAM3 没有实例时，正式接口返回对应的 `4xx/5xx` 错误，不会返回未确认的 bbox；Debug 接口按上一节约定返回原图与错误信息。
 
 ## 测试
 
@@ -139,10 +141,10 @@ python test_formal_api.py SORTING "可口可乐" left --output formal_result.jso
 
 #### Debug 推理与结果图
 
-`test_inference.py` 会按以下顺序查找测试图片：
+`test_inference.py` 使用与正式接口相同的三个必填输入 `name`、`product_name`、`hand`，并按以下顺序查找测试图片：
 
 ```text
-商品 name
+product_name
     → GET /sku/search_by_name
     → sku_id
     → perception/test_data/2026-08-04/image_name_mapping.json
@@ -164,7 +166,7 @@ Locate API: http://192.168.130.59:8081
 确认远端服务已启动后执行：
 
 ```powershell
-python test_inference.py "蒙牛纯牛奶"
+python test_inference.py SORTING "蒙牛纯牛奶" left
 ```
 
 如果同一个 SKU 出现在多张测试图片中，脚本会逐张推理，并以图片名作为结果 key。每张成功结果会保存两张图：`*_qwen.png` 绘制共识去重后的 Qwen bbox，`*_locate.png` 绘制 SAM3 半透明 mask、bbox、实例编号和置信度。默认保存到：
@@ -176,13 +178,13 @@ perception/test_data/2026-08-04/locate_results/<SKU_ID>/
 结果 JSON 会保留 `qwen_bboxes`，并通过 `qwen_result_image` 和 `result_image` 分别记录 Qwen 图与 SAM3 图的绝对路径。JSON 默认打印到终端，也可以保存到文件：
 
 ```powershell
-python test_inference.py "蒙牛纯牛奶" --output result.json
+python test_inference.py SORTING "蒙牛纯牛奶" left --output result.json
 ```
 
 可使用 `--output-dir` 指定结果图片目录：
 
 ```powershell
-python test_inference.py "蒙牛纯牛奶" --output result.json --output-dir D:/locate-results
+python test_inference.py SORTING "蒙牛纯牛奶" left --output result.json --output-dir D:/locate-results
 ```
 
 如端口或地址调整，可通过 `SKU_API_URL` 和 `LOCATE_API_URL` 环境变量覆盖；超时时间可通过 `SKU_REQUEST_TIMEOUT_SECONDS` 和 `LOCATE_REQUEST_TIMEOUT_SECONDS` 覆盖。

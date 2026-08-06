@@ -1,4 +1,4 @@
-# Qwen3 / SAM3 Prompt 测试网页
+# Locate Debug / Prompt 管理网页
 
 启动：
 
@@ -8,34 +8,37 @@ python -m pip install -r requirements.txt
 python server.py
 ```
 
-浏览器打开：`http://127.0.0.1:8082`
+浏览器打开：`http://127.0.0.1:8082`。
 
-页面顶部选择 `perception/test_data/2026-08-04` 中的 RGB 图片：
+## 数据来源与推理
 
-- 左侧输入 Qwen prompt。模型输出可以是单个目标对象，也可以是多个目标组成的数组：
+网页不再读取 `perception/test_data` 下的本地图片，也不在 test_web 内分别调用 Qwen3 和 SAM3。
 
-  ```json
-  [
-    {"name": "abc", "bbox": [x1, y1, x2, y2]},
-    {"name": "abc", "bbox": [x1, y1, x2, y2]}
-  ]
-  ```
+选择 SKU，设置 `name` 和 `hand` 后，点击“运行 Locate Debug 完整推理”。test_web 后端会代理调用：
 
-  每次点击会以 `temperature=0.5` 独立采样三次，并把三次的全部目标框叠加在同一张图上。页面支持 `[0,1000]` 归一化坐标和像素坐标两种绘制方式，并分别展示解析后的 JSON 与模型原始输出；即使 JSON 解析失败，原始输出也会保留。
+```text
+POST http://192.168.130.59:8081/perception/pick/locate/debug
+```
 
-  IoU 会在三组结果之间两两计算。多个同名目标使用“最大 IoU 一对一匹配”，同时显示未匹配目标数量和总体平均 IoU。
+请求仅包含：
 
-  测试出满意的 Prompt 后，可选择对应 SKU 并点击“保存当前 Prompt”。该按钮只更新 `perception/pick/locate/qwen_sam_prompt_mapping.json` 中对应 SKU 的 `qwen3_prompt`，并保留已经保存的 `sam3_prompt`。如果该 SKU 尚未建立完整配对，需要先在右侧填写 SAM3 Prompt 并点击“保存 SAM3 Prompt 范式”。
+```json
+{
+  "name": "SORTING",
+  "product_name": "可口可乐",
+  "hand": "left"
+}
+```
 
-- Qwen 完成后，右侧自动显示第一个检测结果向外扩张 10% 的 crop；也可以在下拉框中切换三次采样产生的其他检测框。
-- 右侧输入 SAM3 prompt 后，仅对当前 Qwen crop 进行分割。页面绘制 crop 内所有实例的 mask、bbox 和置信度，同时返回映射回原图的 `bbox_original_xyxy`。
-- 右侧的“保存 SAM3 Prompt 范式”会将左侧当前选择的 SKU、Qwen3 Prompt 和右侧 SAM3 Prompt 作为一条完整记录保存到 `perception/pick/locate/qwen_sam_prompt_mapping.json`。同一 SKU 再次保存会整体覆盖该条配对记录。选择已有 SKU 时，网页也会从这份文件同时载入两个 Prompt。
+Locate 服务自行调用相机快照接口。Debug 响应中的 `image_base64` 作为页面原图：左侧绘制共识后的 Qwen bbox，右侧叠加最终 SAM3 mask、bbox 和 score。
 
-`qwen_sam_prompt_mapping.json` 是网页和正式 Locate API 的唯一 Prompt 数据源；旧的 `qwen_prompt_mapping.json` 已停用并移除。
+可通过 `LOCATE_DEBUG_URL` 环境变量覆盖 Debug 接口地址。
 
-默认使用：
+## Prompt 管理
 
-- Qwen：`http://211.137.21.33:25542/v1/chat/completions`
-- SAM3：`http://211.137.21.33:25541/api/v1/segment`
+`qwen_sam_prompt_mapping.json` 是网页和正式 Locate API 的唯一 Prompt 数据源。
 
-可通过环境变量 `QWEN3_URL`、`QWEN3_MODEL`、`SAM3_URL` 覆盖。
+- 选择已有 SKU 时，网页同时加载 `qwen3_prompt` 和 `sam3_prompt`。
+- “保存当前 Prompt”只更新对应 SKU 的 `qwen3_prompt`，保留已保存的 `sam3_prompt`。
+- “保存 SAM3 Prompt 范式”同时保存当前 SKU 的 Qwen3/SAM3 配对 Prompt。
+- 修改 Prompt 后，需要先保存，再运行 Locate Debug，服务才会读取新内容。

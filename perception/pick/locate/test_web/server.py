@@ -29,6 +29,10 @@ SAM3_URL = os.getenv(
     "SAM3_URL",
     "http://211.137.21.33:25541/api/v1/segment",
 )
+LOCATE_DEBUG_URL = os.getenv(
+    "LOCATE_DEBUG_URL",
+    "http://192.168.130.59:8081/perception/pick/locate/debug",
+)
 QWEN_SAMPLE_COUNT = 3
 QWEN_TEMPERATURE = 0.7
 
@@ -50,6 +54,12 @@ class SavePromptPairRequest(BaseModel):
     sku_name: str
     qwen3_prompt: str
     sam3_prompt: str
+
+
+class LocateDebugProxyRequest(BaseModel):
+    name: str
+    product_name: str
+    hand: str
 
 
 class SamCropRequest(BaseModel):
@@ -171,6 +181,40 @@ def save_prompt_pair(request: SavePromptPairRequest) -> dict:
         "sam3_prompt": sam3_prompt,
         "overwritten": overwritten,
     }
+
+
+@app.post("/api/locate-debug")
+def run_locate_debug(request: LocateDebugProxyRequest) -> dict:
+    payload = {
+        "name": request.name.strip(),
+        "product_name": request.product_name.strip(),
+        "hand": request.hand.strip(),
+    }
+    if not all(payload.values()):
+        raise HTTPException(status_code=400, detail="name、product_name、hand 都不能为空")
+    try:
+        response = requests.post(
+            LOCATE_DEBUG_URL,
+            json=payload,
+            timeout=600,
+        )
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail=f"Locate Debug 请求失败: {error}") from error
+    try:
+        result = response.json()
+    except ValueError as error:
+        raise HTTPException(status_code=502, detail="Locate Debug 响应不是有效 JSON") from error
+    if not response.ok:
+        detail = result.get("detail", result) if isinstance(result, dict) else result
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    if (
+        not isinstance(result, dict)
+        or not isinstance(result.get("image_base64"), str)
+        or not isinstance(result.get("qwen_bboxes"), list)
+        or not isinstance(result.get("instances"), list)
+    ):
+        raise HTTPException(status_code=502, detail="Locate Debug 响应缺少原图或检测结果")
+    return result
 
 
 @app.get("/api/image/{image_name}")

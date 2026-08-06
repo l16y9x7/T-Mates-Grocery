@@ -14,10 +14,19 @@
           <h1>视觉 Prompt 实验台</h1>
           <p class="subtitle">Qwen3-VL 粗定位后裁图，再用 SAM3 完成局部精分割。</p>
         </div>
-        <label class="image-picker">
-          <span>测试图片</span>
-          <select id="imageSelect" aria-label="选择测试图片"></select>
-        </label>
+        <div class="request-controls">
+          <label class="image-picker">
+            <span>name</span>
+            <input id="requestName" value="SORTING" />
+          </label>
+          <label class="image-picker">
+            <span>hand</span>
+            <select id="requestHand">
+              <option value="left">left</option>
+              <option value="right">right</option>
+            </select>
+          </label>
+        </div>
       </header>
 
       <section class="workspace">
@@ -27,7 +36,7 @@
               <span class="engine-tag">QWEN3-VL</span>
               <h2>三次采样定位</h2>
             </div>
-            <label class="coordinate-mode">
+            <label class="coordinate-mode" hidden>
               <span>坐标类型</span>
               <select id="qwenCoordinateMode">
                 <option value="normalized">0–1000 归一化</option>
@@ -60,9 +69,9 @@
             <span id="savePromptStatus" class="status">未保存</span>
           </div>
 
-          <button id="runQwen" class="run-button qwen-button">运行 Qwen3 × 3</button>
+          <button id="runQwen" class="run-button qwen-button">运行 Locate Debug 完整推理</button>
 
-          <div class="sample-legend" aria-label="Qwen 三次采样颜色">
+          <div class="sample-legend" aria-label="Qwen 三次采样颜色" hidden>
             <span><i class="sample-dot sample-one"></i>第 1 次</span>
             <span><i class="sample-dot sample-two"></i>第 2 次</span>
             <span><i class="sample-dot sample-three"></i>第 3 次</span>
@@ -71,12 +80,12 @@
 
           <div class="canvas-frame">
             <canvas id="qwenCanvas"></canvas>
-            <div id="qwenEmpty" class="canvas-empty">选择图片并运行 Qwen3</div>
+            <div id="qwenEmpty" class="canvas-empty">运行 Locate Debug 获取相机原图与 Qwen bbox</div>
           </div>
 
           <div class="result-block">
             <div class="result-title">
-              <span>三次解析结果</span>
+              <span>Qwen 共识 bbox</span>
               <span id="qwenStatus" class="status">等待运行</span>
             </div>
             <pre id="qwenResult">[]</pre>
@@ -84,15 +93,15 @@
 
           <div class="result-block">
             <div class="result-title">
-              <span>跨采样 IoU</span>
-              <span class="coordinate-note">最大 IoU 一对一匹配</span>
+              <span>Debug 元数据</span>
+              <span class="coordinate-note">原图来自 Locate Debug 响应</span>
             </div>
             <pre id="qwenIouResult">{}</pre>
           </div>
 
           <div class="result-block raw-result-block">
             <div class="result-title">
-              <span>三次模型原始输出</span>
+              <span>完整 Debug 响应摘要</span>
             </div>
             <pre id="qwenRawResult">等待运行</pre>
           </div>
@@ -107,7 +116,7 @@
             <span class="coordinate-note">bbox 外扩 10%</span>
           </div>
 
-          <label class="prompt-field crop-field">
+          <label class="prompt-field crop-field" hidden>
             <span>Qwen 检测结果</span>
             <select id="cropDetectionSelect" disabled>
               <option value="">请先运行 Qwen3</option>
@@ -133,13 +142,13 @@
             </button>
             <span id="saveSamPromptStatus" class="status">未保存</span>
           </div>
-          <button id="runSam" class="run-button sam-button" disabled>
+          <button id="runSam" class="run-button sam-button" disabled hidden>
             在 Qwen Crop 上运行 SAM3
           </button>
 
           <div class="canvas-frame">
             <canvas id="samCanvas"></canvas>
-            <div id="samEmpty" class="canvas-empty">先运行 Qwen3 获取 crop</div>
+            <div id="samEmpty" class="canvas-empty">运行 Locate Debug 获取原图与最终 SAM3 实例</div>
           </div>
 
           <div class="result-block">

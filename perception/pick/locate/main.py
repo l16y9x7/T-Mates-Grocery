@@ -94,9 +94,13 @@ class LocateDebugResponse(BaseModel):
     product_name: str
     image_name: str
     image_path: str
+    image_base64: str
+    image_media_type: str
     image_size: list[int]
     qwen_bboxes: list[QwenBBoxRecord] = Field(default_factory=list)
-    instances: list[LocatedInstance]
+    instances: list[LocatedInstance] = Field(default_factory=list)
+    error: str | None = None
+    error_status_code: int | None = None
 
 
 class LocateResponse(BaseModel):
@@ -754,13 +758,44 @@ def locate_product_in_image(
         product_name=canonical_name,
         image_name=image_path.name,
         image_path=monitor_image_path,
+        image_base64=base64.b64encode(image_path.read_bytes()).decode("ascii"),
+        image_media_type=mimetypes.guess_type(image_path.name)[0] or "image/jpeg",
         image_size=list(original_image.size),
         qwen_bboxes=qwen_bbox_records,
         instances=located_instances,
     )
 
 
-def locate_product_debug(request: LocateRequest) -> LocateDebugResponse:
+def make_locate_debug_error_response(
+    product: dict[str, Any], image_path: Path, error: HTTPException
+) -> LocateDebugResponse:
+    """Return the actual input image together with an inference error for debugging."""
+    try:
+        with Image.open(image_path) as source_image:
+            image_size = list(source_image.size)
+        image_bytes = image_path.read_bytes()
+    except (UnidentifiedImageError, OSError) as image_error:
+        raise error from image_error
+
+    detail = error.detail
+    if not isinstance(detail, str):
+        detail = json.dumps(detail, ensure_ascii=False)
+    return LocateDebugResponse(
+        sku_id=product["sku_id"],
+        product_name=product["name"].strip(),
+        image_name=image_path.name,
+        image_path=store_monitor_image(image_path),
+        image_base64=base64.b64encode(image_bytes).decode("ascii"),
+        image_media_type=mimetypes.guess_type(image_path.name)[0] or "image/jpeg",
+        image_size=image_size,
+        error=detail,
+        error_status_code=error.status_code,
+    )
+
+
+def locate_product_debug(
+    request: LocateRequest, *, capture_inference_errors: bool = False
+) -> LocateDebugResponse:
     product_name = request.product_name.strip()
     if not product_name:
         raise HTTPException(status_code=400, detail="product_name 不能为空")
@@ -771,14 +806,25 @@ def locate_product_debug(request: LocateRequest) -> LocateDebugResponse:
                 status_code=400,
                 detail="指定 image_name 时必须同时提供 image_base64",
             )
-        return locate_product_in_image(product, get_latest_rgb())
+        image_path = get_latest_rgb()
+        try:
+            return locate_product_in_image(product, image_path)
+        except HTTPException as error:
+            if not capture_inference_errors:
+                raise
+            return make_locate_debug_error_response(product, image_path, error)
 
     image_bytes = decode_uploaded_image(request.image_base64)
     image_name = uploaded_image_name(request.image_name)
     with tempfile.TemporaryDirectory(prefix="locate-upload-") as temporary_directory:
         image_path = Path(temporary_directory) / image_name
         image_path.write_bytes(image_bytes)
-        return locate_product_in_image(product, image_path)
+        try:
+            return locate_product_in_image(product, image_path)
+        except HTTPException as error:
+            if not capture_inference_errors:
+                raise
+            return make_locate_debug_error_response(product, image_path, error)
 
 
 def normalize_bbox_to_1_1000(
@@ -820,7 +866,7 @@ def locate_product(request: LocateRequest) -> LocateResponse:
 
 @app.post("/perception/pick/locate/debug", response_model=LocateDebugResponse)
 def locate_product_debug_api(request: LocateRequest) -> LocateDebugResponse:
-    return locate_product_debug(request)
+    return locate_product_debug(request, capture_inference_errors=True)
 
 
 if __name__ == "__main__":
