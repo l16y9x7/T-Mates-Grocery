@@ -21,7 +21,6 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.sku_base_url, "http://127.0.0.1:25540")
         self.assertEqual(settings.sku_timeout_seconds, 3.0)
         self.assertEqual(settings.sku_edit_distance_max, 3)
-        self.assertEqual(settings.sku_fuzzy_limit, 2)
 
     def test_empty_api_key_is_none(self) -> None:
         with patch.dict(

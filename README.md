@@ -15,7 +15,7 @@ T-Mates-Grocery/
 ├── navigation/      # 导航（Agent：health / navigate）
 ├── perception/      # 感知（SKU、小票、pick/place 等）
 ├── pose/            # 占位（仅 .gitkeep）
-├── video_stream/    # 视频流
+├── video_stream/    # 视频流（Agent：health / list / snapshot / stream）
 └── .gitmodules      # submodule 配置
 ```
 
@@ -39,6 +39,21 @@ Agent 通过 HTTP 调用真机 TianJi 导航网关（默认 `http://127.0.0.1:80
 | `POST` | `/navigation/navigate` | `{"target_id":"..."}`，需头 `Idempotency-Key` |
 
 约定与 Python 客户端见 `navigation/README.md`。
+
+---
+
+## 视频流（Agent 调度）
+
+Agent 通过 HTTP 调用真机 TianJi 相机网关（默认 `http://127.0.0.1:8085`）：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/camera/health` | 探活 |
+| `GET` | `/camera/list` | 相机与流在线状态 |
+| `GET` | `/camera/snapshot` | 单帧 JPEG（`camera` + `type`） |
+| `GET` | `/camera/stream` | MJPEG 连续流 |
+
+约定与 Python 客户端见 `video_stream/README.md`。
 
 ---
 

@@ -14,7 +14,6 @@ DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_SKU_BASE_URL = "http://127.0.0.1:25540"
 DEFAULT_SKU_TIMEOUT_SECONDS = 3.0
 DEFAULT_SKU_EDIT_DISTANCE_MAX = 3
-DEFAULT_SKU_FUZZY_LIMIT = 2
 
 
 @dataclass(frozen=True)
@@ -26,7 +25,6 @@ class Settings:
     sku_base_url: str = DEFAULT_SKU_BASE_URL
     sku_timeout_seconds: float = DEFAULT_SKU_TIMEOUT_SECONDS
     sku_edit_distance_max: int = DEFAULT_SKU_EDIT_DISTANCE_MAX
-    sku_fuzzy_limit: int = DEFAULT_SKU_FUZZY_LIMIT
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -41,10 +39,6 @@ class Settings:
         raw_sku_edit_distance_max = os.getenv(
             "SKU_EDIT_DISTANCE_MAX",
             str(DEFAULT_SKU_EDIT_DISTANCE_MAX),
-        )
-        raw_sku_fuzzy_limit = os.getenv(
-            "SKU_FUZZY_LIMIT",
-            str(DEFAULT_SKU_FUZZY_LIMIT),
         )
         try:
             timeout_seconds = float(raw_timeout)
@@ -64,12 +58,6 @@ class Settings:
             raise ConfigurationError(
                 "SKU_EDIT_DISTANCE_MAX 必须是整数。"
             ) from exc
-        try:
-            sku_fuzzy_limit = int(raw_sku_fuzzy_limit)
-        except ValueError as exc:
-            raise ConfigurationError(
-                "SKU_FUZZY_LIMIT 必须是整数。"
-            ) from exc
 
         if timeout_seconds <= 0:
             raise ConfigurationError(
@@ -82,10 +70,6 @@ class Settings:
         if sku_edit_distance_max < 0:
             raise ConfigurationError(
                 "SKU_EDIT_DISTANCE_MAX 不能小于 0。"
-            )
-        if sku_fuzzy_limit <= 0:
-            raise ConfigurationError(
-                "SKU_FUZZY_LIMIT 必须大于 0。"
             )
 
         base_url = os.getenv("QWEN_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
@@ -118,5 +102,4 @@ class Settings:
             sku_base_url=sku_base_url,
             sku_timeout_seconds=sku_timeout_seconds,
             sku_edit_distance_max=sku_edit_distance_max,
-            sku_fuzzy_limit=sku_fuzzy_limit,
         )

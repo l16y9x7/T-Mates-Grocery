@@ -105,7 +105,7 @@ class SkuLookupClientTests(unittest.TestCase):
             ],
         )
 
-    def test_lookup_item_returns_edit_distance_candidates_after_404(self) -> None:
+    def test_lookup_item_returns_nearest_edit_distance_match_after_404(self) -> None:
         missing_error = HTTPError(
             url="http://127.0.0.1:25540/sku/search_by_name",
             code=404,
@@ -130,12 +130,6 @@ class SkuLookupClientTests(unittest.TestCase):
                         "locations": ["H1_F_L2_C03"],
                     }
                 ),
-                FakeResponse(
-                    {
-                        "name": "外星人电解质水青柠味0糖",
-                        "locations": ["H1_F_L2_C04"],
-                    }
-                ),
             ],
         ):
             result = SkuLookupClient(Settings()).lookup_item(
@@ -145,20 +139,8 @@ class SkuLookupClientTests(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                "recognized_name": "外星人电解质水青柠昧",
-                "match_type": "edit_distance",
-                "candidates": [
-                    {
-                        "name": "外星人电解质水青柠味",
-                        "locations": ["H1_F_L2_C03"],
-                        "distance": 1,
-                    },
-                    {
-                        "name": "外星人电解质水青柠味0糖",
-                        "locations": ["H1_F_L2_C04"],
-                        "distance": 3,
-                    },
-                ],
+                "name": "外星人电解质水青柠味",
+                "locations": ["H1_F_L2_C03"],
             },
         )
 
