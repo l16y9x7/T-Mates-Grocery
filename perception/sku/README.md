@@ -80,6 +80,7 @@ python api.py --host 0.0.0.0 --port 8080
 | `GET` | `/sku/search_by_name` | `name` | 完整 SKU 商品对象 |
 | `GET` | `/sku/search_by_location` | `location` | 完整 SKU 商品对象 |
 | `GET` | `/sku/get_image` | `name` | 商品图片相对路径列表 |
+| `GET` | `/sku/get_all_names` | 无 | 所有商品名称列表 |
 | `GET` | `/images/...` | 无 | 获取图片文件 |
 | `GET` | `/docs` | 无 | FastAPI 自动接口文档 |
 
@@ -120,6 +121,16 @@ GET /sku/get_image?name=外星人电解质水青柠口味0糖
 
 ```json
 ["images/SKU_088.jpg"]
+```
+
+获取所有商品名称，无需查询参数或请求体：
+
+```text
+GET /sku/get_all_names
+```
+
+```json
+["NFC桔汁", "蒙牛纯牛奶", "纯甄酸奶"]
 ```
 
 商品不存在时返回 `404`：

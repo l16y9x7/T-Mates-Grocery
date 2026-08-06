@@ -128,6 +128,9 @@ class SkuCatalog:
             return None
         return list(product["images"])
 
+    def all_names(self) -> list[str]:
+        return list(self._by_name)
+
     @staticmethod
     def _copy_product(product: dict[str, Any] | None) -> dict[str, Any] | None:
         if product is None:
@@ -221,6 +224,10 @@ def create_app(catalog_path: Path = DEFAULT_CATALOG_PATH) -> FastAPI:
         if images is None:
             raise ApiError(404, "SKU_NOT_FOUND")
         return images
+
+    @app.get("/sku/get_all_names", response_model=list[str])
+    def get_all_names() -> list[str]:
+        return catalog.all_names()
 
     @app.get(
         "/images/{image_path:path}",

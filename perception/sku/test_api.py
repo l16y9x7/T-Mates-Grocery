@@ -69,6 +69,14 @@ class SkuApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), ["images/SKU_001.jpg"])
 
+    def test_get_all_names(self) -> None:
+        response = self.client.get("/sku/get_all_names")
+        self.assertEqual(response.status_code, 200)
+        names = response.json()
+        self.assertEqual(len(names), 107)
+        self.assertEqual(names[0], "NFC桔汁")
+        self.assertEqual(names[-1], "心相印厨房纸巾")
+
     def test_unknown_sku(self) -> None:
         response = self.client.get(
             "/sku/search_by_name", params={"name": "不存在的商品"}
@@ -89,6 +97,7 @@ class SkuApiTest(unittest.TestCase):
         self.assertIn("/sku/search_by_name", paths)
         self.assertIn("/sku/search_by_location", paths)
         self.assertIn("/sku/get_image", paths)
+        self.assertIn("/sku/get_all_names", paths)
 
 
 if __name__ == "__main__":
