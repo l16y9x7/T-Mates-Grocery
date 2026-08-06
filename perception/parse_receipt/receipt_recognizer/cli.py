@@ -66,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
             max_pdf_pages=args.max_pdf_pages,
             temperature=args.temperature,
         )
-        sku_validation = SkuLookupClient(settings).validate_items(
+        sku_items = SkuLookupClient(settings).lookup_items(
             result.business_items
         )
     except ReceiptRecognizerError as exc:
@@ -84,10 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     print(
         json.dumps(
-            {
-                "items": result.business_items,
-                "sku_validation": sku_validation,
-            },
+            sku_items,
             ensure_ascii=False,
             indent=2,
         )

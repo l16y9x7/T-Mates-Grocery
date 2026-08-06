@@ -6,7 +6,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
 from receipt_recognizer.config import Settings
-from receipt_recognizer.errors import SKUConnectionError
+from receipt_recognizer.errors import SKUConnectionError, SKUNotFoundError
 from receipt_recognizer.sku_client import SkuLookupClient
 
 
@@ -38,7 +38,6 @@ class SkuLookupClientTests(unittest.TestCase):
             result.to_dict(),
             {
                 "name": "NFC桔汁",
-                "matched": True,
                 "locations": ["H1_F_L1_C01"],
             },
         )
@@ -46,7 +45,7 @@ class SkuLookupClientTests(unittest.TestCase):
         self.assertIsInstance(request, Request)
         self.assertIn("/sku/locations?name=NFC", request.full_url)
 
-    def test_locations_for_name_keeps_404_as_unmatched_item(self) -> None:
+    def test_locations_for_name_raises_for_404(self) -> None:
         error = HTTPError(
             url="http://127.0.0.1:8080/sku/locations",
             code=404,
@@ -58,16 +57,49 @@ class SkuLookupClientTests(unittest.TestCase):
             "receipt_recognizer.sku_client.urlopen",
             side_effect=error,
         ):
-            result = SkuLookupClient(Settings()).locations_for_name("不存在")
+            with self.assertRaises(SKUNotFoundError) as caught:
+                SkuLookupClient(Settings()).locations_for_name("不存在")
+
+        self.assertEqual(caught.exception.name, "不存在")
+        self.assertEqual(caught.exception.error_code, "SKU_NOT_FOUND")
+
+    def test_lookup_items_returns_each_location_from_one_receipt(self) -> None:
+        with patch(
+            "receipt_recognizer.sku_client.urlopen",
+            side_effect=[
+                FakeResponse(
+                    {
+                        "name": "舒肤佳香皂纯白清香型",
+                        "locations": ["H2_B_L1_C01"],
+                    }
+                ),
+                FakeResponse(
+                    {
+                        "name": "舒肤佳香皂柠檬清新香型",
+                        "locations": ["H2_B_L1_C03"],
+                    }
+                ),
+            ],
+        ):
+            result = SkuLookupClient(Settings()).lookup_items(
+                [
+                    {"name": "舒肤佳香皂纯白清香型", "specification": "100g"},
+                    {"name": "舒肤佳香皂柠檬清新香型", "specification": "100g"},
+                ]
+            )
 
         self.assertEqual(
-            result.to_dict(),
-            {
-                "name": "不存在",
-                "matched": False,
-                "locations": [],
-                "error_code": "SKU_NOT_FOUND",
-            },
+            result,
+            [
+                {
+                    "name": "舒肤佳香皂纯白清香型",
+                    "locations": ["H2_B_L1_C01"],
+                },
+                {
+                    "name": "舒肤佳香皂柠檬清新香型",
+                    "locations": ["H2_B_L1_C03"],
+                },
+            ],
         )
 
     def test_connection_error_is_raised_for_unreachable_sku_service(self) -> None:

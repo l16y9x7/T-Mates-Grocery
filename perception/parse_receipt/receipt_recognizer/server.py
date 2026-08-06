@@ -16,6 +16,7 @@ from .errors import (
     ModelOutputError,
     ReceiptRecognizerError,
     SKUConnectionError,
+    SKUNotFoundError,
     SKUResponseError,
 )
 from .media import image_bytes_to_data_url
@@ -56,7 +57,7 @@ async def parse_receipt(
         le=4096,
         description="Resize longest image edge before sending to Qwen.",
     ),
-) -> dict[str, Any] | JSONResponse:
+) -> list[dict[str, Any]] | dict[str, Any] | JSONResponse:
     raw = await file.read(MAX_UPLOAD_BYTES + 1)
     if not raw:
         return _error_response(
@@ -76,7 +77,7 @@ async def parse_receipt(
         data_url = image_bytes_to_data_url(raw, max_edge=max_edge)
         recognizer = ReceiptRecognizer(settings)
         result = recognizer.recognize_data_urls([data_url])
-        sku_validation = SkuLookupClient(settings).validate_items(
+        sku_items = SkuLookupClient(settings).lookup_items(
             result.business_items
         )
     except InputFileError as exc:
@@ -96,6 +97,11 @@ async def parse_receipt(
         return _error_response(502, "model_output_error", str(exc))
     except SKUConnectionError as exc:
         return _error_response(502, "sku_connection_error", str(exc))
+    except SKUNotFoundError as exc:
+        return JSONResponse(
+            status_code=404,
+            content={"error_code": exc.error_code},
+        )
     except SKUResponseError as exc:
         return _error_response(
             502,
@@ -106,13 +112,12 @@ async def parse_receipt(
     except ReceiptRecognizerError as exc:
         return _error_response(500, "internal_error", str(exc))
 
-    response: dict[str, Any] = {
-        "items": result.business_items,
-        "sku_validation": sku_validation,
-    }
     if diagnostics:
-        response["diagnostics"] = result.diagnostics
-    return response
+        return {
+            "items": sku_items,
+            "diagnostics": result.diagnostics,
+        }
+    return sku_items
 
 
 def _error_response(

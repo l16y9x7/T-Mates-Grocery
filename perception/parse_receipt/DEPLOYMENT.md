@@ -4,7 +4,7 @@
 
 ```text
 输入：一张 JPG/PNG 小票图片
-输出：商品结构化 JSON，并用 SKU 服务校验商品名是否存在
+输出：SKU 标准商品名和标准货位；任一名称未命中时返回 404
 ```
 
 它不是 Qwen/vLLM 本身，而是 Qwen/vLLM 外面的一层 HTTP 包装服务。
@@ -33,21 +33,12 @@ curl -F "file=@receipt.jpg" \
 默认成功响应：
 
 ```json
-{
-  "items": [
-    {
-      "name": "票面商品名称",
-      "specification": "70g"
-    }
-  ],
-  "sku_validation": [
-    {
-      "name": "票面商品名称",
-      "matched": true,
-      "locations": ["H1_F_L1_C01"]
-    }
-  ]
-}
+[
+  {
+    "name": "NFC桔汁",
+    "locations": ["H1_F_L1_C01"]
+  }
+]
 ```
 
 需要诊断信息时：
@@ -91,8 +82,13 @@ export QWEN_API_KEY='...'
 GET /sku/locations?name=<商品名>
 ```
 
-商品不存在时 SKU 服务返回 404，小票服务不会把整张小票识别判为失败，
-而是在对应商品的 `sku_validation` 中返回 `matched=false`。
+商品不存在时 SKU 服务返回 404，小票服务会停止本次处理并向调用方返回：
+
+```json
+{"error_code": "SKU_NOT_FOUND"}
+```
+
+一张小票包含多个商品时会逐条查询；任一查询返回 404，就不返回部分货位结果。
 如果 SKU 服务本身不可达，才返回 `sku_connection_error`。
 
 ## 3. 安装
@@ -147,3 +143,4 @@ uvicorn receipt_recognizer.server:app \
     "upstream_status_code": 502
   }
 }
+```

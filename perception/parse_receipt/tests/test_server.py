@@ -8,6 +8,7 @@ from receipt_recognizer import server
 from receipt_recognizer.errors import (
     APIResponseError,
     InputFileError,
+    SKUNotFoundError,
 )
 from receipt_recognizer.service import Recognition
 
@@ -41,18 +42,25 @@ class FakeSkuClient:
     def __init__(self, settings):
         self.settings = settings
 
-    def validate_items(self, items):
+    def lookup_items(self, items):
         return [
             {
                 "name": items[0]["name"],
-                "matched": True,
                 "locations": ["H1_F_L1_C01"],
             }
         ]
 
 
+class MissingSkuClient:
+    def __init__(self, settings):
+        self.settings = settings
+
+    def lookup_items(self, items):
+        raise SKUNotFoundError(items[0]["name"])
+
+
 class ServerTests(unittest.TestCase):
-    def test_receipt_parse_returns_business_items(self):
+    def test_receipt_parse_returns_sku_locations(self):
         with patch.object(
             server,
             "image_bytes_to_data_url",
@@ -75,15 +83,10 @@ class ServerTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            response["items"],
-            [{"name": "好丽友土豆薯条番茄味", "specification": "70g"}],
-        )
-        self.assertEqual(
-            response["sku_validation"],
+            response,
             [
                 {
                     "name": "好丽友土豆薯条番茄味",
-                    "matched": True,
                     "locations": ["H1_F_L1_C01"],
                 }
             ],
@@ -112,12 +115,45 @@ class ServerTests(unittest.TestCase):
                 )
             )
 
-        self.assertEqual(response["items"][0]["specification"], "70g")
-        self.assertTrue(response["sku_validation"][0]["matched"])
+        self.assertEqual(
+            response["items"],
+            [
+                {
+                    "name": "好丽友土豆薯条番茄味",
+                    "locations": ["H1_F_L1_C01"],
+                }
+            ],
+        )
         self.assertEqual(
             response["diagnostics"]["receipt_status"],
             "ok",
         )
+
+    def test_receipt_parse_propagates_sku_not_found_as_404(self):
+        with patch.object(
+            server,
+            "image_bytes_to_data_url",
+            return_value="data:image/jpeg;base64,abc",
+        ), patch.object(
+            server,
+            "ReceiptRecognizer",
+            FakeRecognizer,
+        ), patch.object(
+            server,
+            "SkuLookupClient",
+            MissingSkuClient,
+        ):
+            response = asyncio.run(
+                server.parse_receipt(
+                    file=_upload_file(b"fake image"),
+                    diagnostics=False,
+                    max_edge=2200,
+                )
+            )
+
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(body, {"error_code": "SKU_NOT_FOUND"})
 
     def test_receipt_parse_returns_structured_input_error(self):
         with patch.object(

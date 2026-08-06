@@ -1,11 +1,13 @@
 # 代码结构和调用链
 
-这份文档只解释当前第一版小票识别代码。它的核心逻辑是：图片进来，转成 Qwen 接受的多模态消息，模型输出内部 JSON，本地校验后返回业务 JSON。
+这份文档只解释当前第一版小票识别代码。它的核心逻辑是：图片进来，
+转成 Qwen 接受的多模态消息，模型输出内部 JSON，本地校验后逐条查询
+SKU 服务，最终返回标准商品名和货位。
 
 ## 一句话版本
 
 ```text
-图片/PDF -> media.py -> service.py -> api.py -> Qwen3-VL -> schema.py -> CLI 或 HTTP API 输出
+图片/PDF -> Qwen3-VL -> 中间 name/specification -> SKU API -> 最终 name/locations
 ```
 
 ## 模块职责
@@ -16,7 +18,8 @@
 | `receipt_recognizer/api.py` | Qwen OpenAI-compatible HTTP 客户端。这里的 `api.py` 不是对外服务，而是“去调用 Qwen 的客户端”。 |
 | `receipt_recognizer/media.py` | 本地读取图片/PDF，修正 EXIF 方向，限制最大边，转成 JPEG base64 data URL。 |
 | `receipt_recognizer/prompts.py` | 放系统 Prompt、用户 Prompt 和一次 JSON 纠正 Prompt。 |
-| `receipt_recognizer/schema.py` | 校验模型返回 JSON 的字段、类型、状态，并把内部 `line_items` 投影为只含 `name/specification` 的业务输出。 |
+| `receipt_recognizer/schema.py` | 校验模型返回 JSON 的字段、类型、状态，并把内部 `line_items` 投影为 `name/specification` 中间结果。 |
+| `receipt_recognizer/sku_client.py` | 逐个使用中间结果的 `name` 请求 `/sku/locations`；返回标准名称和货位，或传递 SKU 404。 |
 | `receipt_recognizer/inventory.py` | 读取库存 CSV，并统计识别出的 `name` 能否和库存 `sku_name` 精确匹配。 |
 | `receipt_recognizer/evaluation.py` | 读取已保存的识别 JSON 和库存 CSV，统计商品名库存命中率。当前不评估规格。 |
 | `receipt_recognizer/service.py` | 总编排：预处理、调用 Qwen、必要时纠正一次、构造诊断和业务输出。 |
@@ -36,7 +39,8 @@ receipt-recognizer receipt.jpg
   -> api.OpenAICompatibleClient.create_chat_completion()
   -> schema.parse_receipt_result()
   -> business_items()
-  -> stdout 打印业务数组
+  -> sku_client.lookup_items()
+  -> stdout 打印 SKU 的 name/locations 数组
 ```
 
 CLI 支持 JPG、PNG 和 PDF。PDF 会先在本地临时目录渲染成图片，默认只取第一页。
@@ -51,7 +55,8 @@ curl -F "file=@receipt.jpg" http://host:port/receipt/parse
   -> api.OpenAICompatibleClient.create_chat_completion()
   -> schema.parse_receipt_result()
   -> business_items()
-  -> HTTP 响应返回业务数组
+  -> sku_client.lookup_items()
+  -> HTTP 响应返回 SKU 的 name/locations 数组，或 SKU_NOT_FOUND 404
 ```
 
 HTTP API 第一版只接收 JPG/PNG 图片，不接收 PDF。这样部署依赖更少，也更符合后续机器人或其他程序上传图片的方式。
@@ -62,7 +67,8 @@ HTTP API 第一版只接收 JPG/PNG 图片，不接收 PDF。这样部署依赖�
 
 如果模型第一次输出不是合法 JSON，或者字段类型/状态不满足本地校验，会追加一次“只修正结构，不改内容”的纠正请求。第二次仍失败就报错，不静默修补。
 
-客户端不再合并相同商品行；模型识别到几条商品明细，业务输出就保留几条，后续再交给库存/货位映射层做唯一性校验。
+客户端不再合并相同商品行；模型识别到几条商品明细，就对 SKU 服务
+发起几次查询。任一名称未命中时整个请求失败，不返回部分货位结果。
 
 ## Base64 在哪里发生
 
@@ -78,13 +84,13 @@ data:image/jpeg;base64,...
 
 ## 业务输出和诊断输出
 
-默认业务输出：
+Qwen 中间结果包含 `name/specification`，默认不会直接对外输出。默认业务输出：
 
 ```json
 [
   {
-    "name": "Lay's乐事薯片墨西哥鸡汁番茄味",
-    "specification": "55g"
+    "name": "NFC桔汁",
+    "locations": ["H1_F_L1_C01"]
   }
 ]
 ```
