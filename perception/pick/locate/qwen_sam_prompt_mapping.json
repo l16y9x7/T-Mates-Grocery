@@ -88,8 +88,8 @@
     "sam3_prompt": "frontmost coke"
   },
   "雪碧罐装": {
-    "qwen3_prompt": "找到图中顶层货架上所有的雪碧堆，返回一个完整包含所有雪碧堆的大bbox。最终返回格式：{\"name\": \"雪碧堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost sprite"
+    "qwen3_prompt": "找到图中顶层货架上所有的雪碧瓶，返回一个完整包含所有雪碧瓶的大bbox。最终返回格式：{\"name\": \"雪碧瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost can"
   },
   "可孚棉签": {
     "qwen3_prompt": "找到图片中最上层货架的圆形透明罐子排，输出满足条件的所有圆形透明罐子排的bbox。返回格式：{\"name\": \"圆形透明罐子排\", \"bbox\": [x1, y1, x2, y2]}",
