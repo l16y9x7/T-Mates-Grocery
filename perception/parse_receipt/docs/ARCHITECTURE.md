@@ -19,7 +19,7 @@ SKU 服务，最终返回标准商品名和货位。
 | `receipt_recognizer/media.py` | 本地读取图片/PDF，修正 EXIF 方向，限制最大边，转成 JPEG base64 data URL。 |
 | `receipt_recognizer/prompts.py` | 放系统 Prompt、用户 Prompt 和一次 JSON 纠正 Prompt。 |
 | `receipt_recognizer/schema.py` | 校验模型返回 JSON 的字段、类型、状态，并把内部 `line_items` 投影为 `name/specification` 中间结果。 |
-| `receipt_recognizer/sku_client.py` | 逐个使用中间结果的 `name` 请求 `/sku/locations`；返回标准名称和货位，或传递 SKU 404。 |
+| `receipt_recognizer/sku_client.py` | 逐个使用中间结果的 `name` 请求 `/sku/search_by_name`；精确失败时用 `/sku/get_all_names` 计算编辑距离候选。 |
 | `receipt_recognizer/inventory.py` | 读取库存 CSV，并统计识别出的 `name` 能否和库存 `sku_name` 精确匹配。 |
 | `receipt_recognizer/evaluation.py` | 读取已保存的识别 JSON 和库存 CSV，统计商品名库存命中率。当前不评估规格。 |
 | `receipt_recognizer/service.py` | 总编排：预处理、调用 Qwen、必要时纠正一次、构造诊断和业务输出。 |
@@ -68,7 +68,7 @@ HTTP API 第一版只接收 JPG/PNG 图片，不接收 PDF。这样部署依赖�
 如果模型第一次输出不是合法 JSON，或者字段类型/状态不满足本地校验，会追加一次“只修正结构，不改内容”的纠正请求。第二次仍失败就报错，不静默修补。
 
 客户端不再合并相同商品行；模型识别到几条商品明细，就对 SKU 服务
-发起几次查询。任一名称未命中时整个请求失败，不返回部分货位结果。
+发起几次查询。名称精确未命中时会用 SKU 全量名称列表计算编辑距离候选；距离过大没有候选时才返回 `SKU_NOT_FOUND`。
 
 ## Base64 在哪里发生
 

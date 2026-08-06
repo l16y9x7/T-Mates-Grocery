@@ -25,6 +25,9 @@ class FakeResponse:
 
 
 class SkuLookupClientTests(unittest.TestCase):
+    def setUp(self) -> None:
+        SkuLookupClient._all_names_cache.clear()
+
     def test_locations_for_name_matches_sku_service(self) -> None:
         with patch(
             "receipt_recognizer.sku_client.urlopen",
@@ -43,11 +46,11 @@ class SkuLookupClientTests(unittest.TestCase):
         )
         request = urlopen.call_args.args[0]
         self.assertIsInstance(request, Request)
-        self.assertIn("/sku/locations?name=NFC", request.full_url)
+        self.assertIn("/sku/search_by_name?name=NFC", request.full_url)
 
     def test_locations_for_name_raises_for_404(self) -> None:
         error = HTTPError(
-            url="http://127.0.0.1:8080/sku/locations",
+            url="http://127.0.0.1:25540/sku/search_by_name",
             code=404,
             msg="not found",
             hdrs={},
@@ -101,6 +104,80 @@ class SkuLookupClientTests(unittest.TestCase):
                 },
             ],
         )
+
+    def test_lookup_item_returns_edit_distance_candidates_after_404(self) -> None:
+        missing_error = HTTPError(
+            url="http://127.0.0.1:25540/sku/search_by_name",
+            code=404,
+            msg="not found",
+            hdrs={},
+            fp=BytesIO(b'{"error_code": "SKU_NOT_FOUND"}'),
+        )
+        with patch(
+            "receipt_recognizer.sku_client.urlopen",
+            side_effect=[
+                missing_error,
+                FakeResponse(
+                    [
+                        "外星人电解质水青柠味",
+                        "外星人电解质水青柠味0糖",
+                        "康师傅香辣牛肉面",
+                    ]
+                ),
+                FakeResponse(
+                    {
+                        "name": "外星人电解质水青柠味",
+                        "locations": ["H1_F_L2_C03"],
+                    }
+                ),
+                FakeResponse(
+                    {
+                        "name": "外星人电解质水青柠味0糖",
+                        "locations": ["H1_F_L2_C04"],
+                    }
+                ),
+            ],
+        ):
+            result = SkuLookupClient(Settings()).lookup_item(
+                {"name": "外星人电解质水青柠昧", "specification": "500ml"}
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "recognized_name": "外星人电解质水青柠昧",
+                "match_type": "edit_distance",
+                "candidates": [
+                    {
+                        "name": "外星人电解质水青柠味",
+                        "locations": ["H1_F_L2_C03"],
+                        "distance": 1,
+                    },
+                    {
+                        "name": "外星人电解质水青柠味0糖",
+                        "locations": ["H1_F_L2_C04"],
+                        "distance": 3,
+                    },
+                ],
+            },
+        )
+
+    def test_lookup_item_still_raises_404_when_no_close_candidate(self) -> None:
+        missing_error = HTTPError(
+            url="http://127.0.0.1:25540/sku/search_by_name",
+            code=404,
+            msg="not found",
+            hdrs={},
+            fp=BytesIO(b'{"error_code": "SKU_NOT_FOUND"}'),
+        )
+        with patch(
+            "receipt_recognizer.sku_client.urlopen",
+            side_effect=[missing_error, FakeResponse(["NFC桔汁"])],
+        ):
+            with self.assertRaises(SKUNotFoundError):
+                SkuLookupClient(Settings()).lookup_item(
+                    {"name": "完全不存在的长商品名", "specification": None}
+                )
 
     def test_connection_error_is_raised_for_unreachable_sku_service(self) -> None:
         with patch(
