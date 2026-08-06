@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import io
 import json
 import math
@@ -24,6 +25,9 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).resolve().parent
 RGB_DIR = ROOT.parents[1] / "test_data" / "2026-08-04"
 PROMPT_MAPPING_PATH = ROOT / "qwen_sam_prompt_mapping.json"
+MONITOR_IMAGE_DIR = Path(
+    os.getenv("LOCATE_MONITOR_IMAGE_DIR", str(ROOT / "monitor_images"))
+)
 
 SKU_API_URL = os.getenv("SKU_API_URL", "http://127.0.0.1:25540").rstrip("/")
 SAM3_URL = os.getenv(
@@ -58,6 +62,8 @@ app = FastAPI(title="Sorting Pick Locate", version="2.0.0")
 
 class LocateRequest(BaseModel):
     name: str
+    product_name: str
+    hand: str
     image_name: str | None = None
     image_base64: str | None = None
 
@@ -74,12 +80,21 @@ class QwenBBoxRecord(BaseModel):
     crop_box_original: list[int]
 
 
-class LocateResponse(BaseModel):
+class LocateDebugResponse(BaseModel):
     sku_id: str
-    name: str
+    product_name: str
     image_name: str
+    image_path: str
+    image_size: list[int]
     qwen_bboxes: list[QwenBBoxRecord] = Field(default_factory=list)
     instances: list[LocatedInstance]
+
+
+class LocateResponse(BaseModel):
+    product_name: str
+    bbox: list[int]
+    mask: str
+    image_path: str
 
 
 def get_latest_rgb() -> Path:
@@ -88,6 +103,32 @@ def get_latest_rgb() -> Path:
     if not images:
         raise HTTPException(status_code=404, detail="没有找到 RGB 图片")
     return images[-1]
+
+
+def store_monitor_image(image_path: Path) -> str:
+    """按内容哈希持久化原图，返回监控系统可读取的本地绝对路径。"""
+    try:
+        image_bytes = image_path.read_bytes()
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"读取待存储图片失败: {error}") from error
+    if not image_bytes:
+        raise HTTPException(status_code=500, detail="待存储图片为空")
+
+    suffix = image_path.suffix.lower()
+    if suffix not in {".jpg", ".jpeg", ".png"}:
+        suffix = ".jpg"
+    digest = hashlib.sha256(image_bytes).hexdigest()[:24]
+    stored_name = f"{digest}{suffix}"
+    stored_path = MONITOR_IMAGE_DIR / stored_name
+    try:
+        MONITOR_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+        if not stored_path.exists():
+            temporary_path = stored_path.with_suffix(f"{stored_path.suffix}.tmp")
+            temporary_path.write_bytes(image_bytes)
+            temporary_path.replace(stored_path)
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"存储监控图片失败: {error}") from error
+    return str(stored_path.resolve())
 
 
 def decode_uploaded_image(image_base64: str) -> bytes:
@@ -619,10 +660,11 @@ def drop_smallest_mask_area_outlier(
 
 def locate_product_in_image(
     product: dict[str, Any], image_path: Path
-) -> LocateResponse:
+) -> LocateDebugResponse:
     """使用已查询的 SKU 信息，在指定 RGB 图片上运行完整定位流程。"""
     if not image_path.is_file():
         raise HTTPException(status_code=404, detail=f"测试图片不存在: {image_path.name}")
+    monitor_image_path = store_monitor_image(image_path)
     canonical_name = product["name"].strip()
     qwen_prompt, sam_prompt = load_prompt_pair(canonical_name)
     qwen_bboxes = get_stable_qwen_bboxes(qwen_prompt, image_path)
@@ -660,21 +702,22 @@ def locate_product_in_image(
     located_instances = keep_frontmost_in_overlap_chains(located_instances)
     located_instances = drop_smallest_mask_area_outlier(located_instances)
 
-    return LocateResponse(
+    return LocateDebugResponse(
         sku_id=product["sku_id"],
-        name=canonical_name,
+        product_name=canonical_name,
         image_name=image_path.name,
+        image_path=monitor_image_path,
+        image_size=list(original_image.size),
         qwen_bboxes=qwen_bbox_records,
         instances=located_instances,
     )
 
 
-@app.post("/visual/pick/locate", response_model=LocateResponse)
-def locate_product(request: LocateRequest) -> LocateResponse:
-    name = request.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="name 不能为空")
-    product = lookup_sku_by_name(name)
+def locate_product_debug(request: LocateRequest) -> LocateDebugResponse:
+    product_name = request.product_name.strip()
+    if not product_name:
+        raise HTTPException(status_code=400, detail="product_name 不能为空")
+    product = lookup_sku_by_name(product_name)
     if request.image_base64 is None:
         if request.image_name is not None:
             raise HTTPException(
@@ -689,6 +732,48 @@ def locate_product(request: LocateRequest) -> LocateResponse:
         image_path = Path(temporary_directory) / image_name
         image_path.write_bytes(image_bytes)
         return locate_product_in_image(product, image_path)
+
+
+def normalize_bbox_to_1_1000(
+    bbox: list[float], image_size: list[int]
+) -> list[int]:
+    """把原图像素 bbox 映射到接口约定的闭区间 [1,1000]。"""
+    image_width, image_height = image_size
+    if image_width <= 0 or image_height <= 0:
+        raise HTTPException(status_code=500, detail="原图尺寸无效")
+    scales = (image_width, image_height, image_width, image_height)
+    return [
+        max(
+            1,
+            min(
+                1000,
+                round(1 + max(0.0, min(float(scale), float(value))) / scale * 999),
+            ),
+        )
+        for value, scale in zip(bbox, scales)
+    ]
+
+
+def make_locate_response(debug_response: LocateDebugResponse) -> LocateResponse:
+    if not debug_response.instances:
+        raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
+    frontmost = select_frontmost_instance(debug_response.instances)
+    return LocateResponse(
+        product_name=debug_response.product_name,
+        bbox=normalize_bbox_to_1_1000(frontmost.bbox, debug_response.image_size),
+        mask=frontmost.mask,
+        image_path=debug_response.image_path,
+    )
+
+
+@app.post("/perception/pick/locate", response_model=LocateResponse)
+def locate_product(request: LocateRequest) -> LocateResponse:
+    return make_locate_response(locate_product_debug(request))
+
+
+@app.post("/perception/pick/locate/debug", response_model=LocateDebugResponse)
+def locate_product_debug_api(request: LocateRequest) -> LocateDebugResponse:
+    return locate_product_debug(request)
 
 
 if __name__ == "__main__":

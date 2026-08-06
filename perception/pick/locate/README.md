@@ -34,11 +34,13 @@ python main.py
 
 ### `POST /visual/pick/locate`
 
-请求只包含商品名称：
+请求包含商品名称和左右手信息：
 
 ```json
 {
-  "name": "蒙牛纯牛奶"
+  "name": "蒙牛纯牛奶",
+  "product_name": "蒙牛纯牛奶",
+  "hand": "left"
 }
 ```
 
@@ -47,6 +49,8 @@ python main.py
 ```json
 {
   "name": "蒙牛纯牛奶",
+  "product_name": "蒙牛纯牛奶",
+  "hand": "left",
   "image_name": "record_20260804_141434_337936_rgb.jpg",
   "image_base64": "/9j/4AAQSkZJRgABAQ..."
 }
@@ -72,32 +76,23 @@ python main.py
 
 ```json
 {
-  "sku_id": "SKU_002",
-  "name": "蒙牛纯牛奶",
-  "image_name": "record_20260804_150039_346733_rgb.jpg",
-  "qwen_bboxes": [
-    {
-      "bbox_normalized": [467.3, 101.7, 524.8, 346.7],
-      "bbox_original": [598.1, 73.2, 671.8, 249.6],
-      "crop_box_original": [590, 55, 680, 268]
-    }
-  ],
-  "instances": [
-    {
-      "bbox": [598.1, 73.2, 671.8, 249.6],
-      "mask": "iVBORw0KGgo...",
-      "score": 0.93
-    }
-  ]
+  "product_name": "蒙牛纯牛奶",
+  "bbox": [467, 102, 525, 347],
+  "mask": "iVBORw0KGgo...",
+  "image_path": "C:/data/locate/monitor_images/62af...jpg"
 }
 ```
 
-- `bbox` 是原图像素坐标 `[x1, y1, x2, y2]`。
+- `bbox` 是 `[x1, y1, x2, y2]`，坐标归一化到闭区间 `[1,1000]`。
 - `mask` 是原图尺寸的单通道 PNG base64，不包含 data-URL 前缀。
-- `instances` 可以包含多个目标，每个 bbox 与同一对象的 mask 一一对应。
-- `qwen_bboxes` 记录经过三次采样共识去重、实际送给 SAM3 的 Qwen bbox，包括模型的 `[0,1000]` 坐标、原图像素坐标和外扩后的 crop 坐标。
+- `image_path` 是服务端持久化原图的本地绝对路径，供同一文件系统上的监控程序直接读取。上传图片按内容哈希存储，接口返回后不会随临时目录删除；存储目录可通过 `LOCATE_MONITOR_IMAGE_DIR` 调整。
+- 过滤后仍有多个实例时，正式接口使用相同的 mask 面积与密度规则选出最前方的一个。
 - bbox 交集默认覆盖较小框至少 20% 才组成重叠链；链内最大 mask 达到第二名 2 倍时直接保留最大 mask，否则保留 `mask前景像素数 / bbox面积` 最大者。可通过 `SAM_BBOX_OVERLAP_MIN_RATIO` 和 `SAM_FRONT_AREA_DOMINANCE_RATIO` 调节阈值。
 - 重叠链过滤后，若最小 mask 面积不超过第二小 mask 的 50%，会再删除这个最小面积离群项一次；通过 `SAM_SMALLEST_MASK_MAX_RATIO` 调节阈值。
+
+### `POST /visual/pick/locate/debug`
+
+测试专用接口，输入与正式接口相同，但返回 `sku_id`、`image_name`、`image_path`、`image_size`、共识后的 `qwen_bboxes` 和全部 `instances`。`test_inference.py` 使用该接口记录 Qwen bbox，并分别绘制 Qwen 图和 SAM3 bbox/mask 图。
 
 ## Prompt 文件
 
@@ -133,7 +128,7 @@ python -m unittest -v test_main.py
     → perception/test_data/2026-08-04/image_name_mapping.json
     → 对应的 *_rgb.jpg
     → 读取并编码对应 RGB 图片
-    → POST /visual/pick/locate（name + image_name + image_base64）
+    → POST /visual/pick/locate/debug（product_name + hand + image_base64）
     → Qwen3/SAM3 完整推理
 ```
 

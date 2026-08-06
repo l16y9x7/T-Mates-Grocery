@@ -186,6 +186,19 @@ class LocateLogicTest(unittest.TestCase):
         encoded = base64.b64encode(b"image bytes").decode("ascii")
         self.assertEqual(main.decode_uploaded_image(encoded), b"image bytes")
 
+    def test_monitor_image_path_remains_after_source_is_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            source_path = directory / "uploaded_rgb.jpg"
+            source_path.write_bytes(b"uploaded image bytes")
+            with patch.object(main, "MONITOR_IMAGE_DIR", directory / "stored"):
+                stored_path = Path(main.store_monitor_image(source_path))
+
+            source_path.unlink()
+            self.assertTrue(stored_path.is_absolute())
+            self.assertTrue(stored_path.is_file())
+            self.assertEqual(stored_path.read_bytes(), b"uploaded image bytes")
+
     def test_sam_bbox_and_mask_are_mapped_to_original_image(self) -> None:
         instance = {
             "bbox_xyxy": [1, 2, 3, 4],
@@ -310,7 +323,9 @@ class LocateLogicTest(unittest.TestCase):
 
     def test_locate_returns_multiple_original_instances(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
-            image_path = Path(temporary_directory) / "frame_rgb.jpg"
+            temporary_path = Path(temporary_directory)
+            image_path = temporary_path / "frame_rgb.jpg"
+            monitor_directory = temporary_path / "monitor_images"
             Image.new("RGB", (100, 80), "white").save(image_path)
 
             def fake_sam(_: str, crop_image: Image.Image) -> list[dict]:
@@ -346,12 +361,21 @@ class LocateLogicTest(unittest.TestCase):
                     return_value=[[100.0, 100.0, 500.0, 500.0]],
                 ),
                 patch.object(main, "call_sam3", side_effect=fake_sam),
+                patch.object(main, "MONITOR_IMAGE_DIR", monitor_directory),
             ):
-                result = main.locate_product(main.LocateRequest(name="NFC桔汁"))
+                result = main.locate_product_debug(
+                    main.LocateRequest(
+                        name="NFC桔汁",
+                        product_name="NFC桔汁",
+                        hand="left",
+                    )
+                )
 
             self.assertEqual(result.sku_id, "SKU_001")
-            self.assertEqual(result.name, "NFC桔汁")
+            self.assertEqual(result.product_name, "NFC桔汁")
             self.assertEqual(result.image_name, "frame_rgb.jpg")
+            self.assertTrue(Path(result.image_path).is_file())
+            self.assertEqual(Path(result.image_path).parent, monitor_directory.resolve())
             self.assertEqual(len(result.qwen_bboxes), 1)
             self.assertEqual(
                 result.qwen_bboxes[0].bbox_original,
@@ -367,13 +391,17 @@ class LocateLogicTest(unittest.TestCase):
         Image.new("RGB", (20, 10), "white").save(image_buffer, format="JPEG")
         request = main.LocateRequest(
             name="NFC桔汁",
+            product_name="NFC桔汁",
+            hand="left",
             image_name="mapped_rgb.jpg",
             image_base64=base64.b64encode(image_buffer.getvalue()).decode("ascii"),
         )
-        expected = main.LocateResponse(
+        expected = main.LocateDebugResponse(
             sku_id="SKU_001",
-            name="NFC桔汁",
+            product_name="NFC桔汁",
             image_name="mapped_rgb.jpg",
+            image_path="C:/monitor/mapped_rgb.jpg",
+            image_size=[20, 10],
             instances=[],
         )
         with (
@@ -388,11 +416,43 @@ class LocateLogicTest(unittest.TestCase):
                 return_value=expected,
             ) as locate_mock,
         ):
-            result = main.locate_product(request)
+            result = main.locate_product_debug(request)
 
         self.assertEqual(result, expected)
         uploaded_path = locate_mock.call_args.args[1]
         self.assertEqual(uploaded_path.name, "mapped_rgb.jpg")
+
+    def test_public_locate_response_has_normalized_bbox_and_mask(self) -> None:
+        mask = png_base64((100, 100))
+        debug_response = main.LocateDebugResponse(
+            sku_id="SKU_001",
+            product_name="可口可乐",
+            image_name="frame_rgb.jpg",
+            image_path="C:/monitor/frame_rgb.jpg",
+            image_size=[100, 100],
+            instances=[
+                main.LocatedInstance(
+                    bbox=[10, 20, 30, 40],
+                    mask=mask,
+                    score=0.9,
+                )
+            ],
+        )
+
+        response = main.make_locate_response(debug_response)
+
+        self.assertEqual(response.product_name, "可口可乐")
+        self.assertEqual(response.bbox, [101, 201, 301, 401])
+        self.assertEqual(response.mask, mask)
+        self.assertEqual(response.image_path, "C:/monitor/frame_rgb.jpg")
+        self.assertEqual(
+            set(response.model_dump()),
+            {"product_name", "bbox", "mask", "image_path"},
+        )
+        self.assertEqual(
+            main.normalize_bbox_to_1_1000([-10, 0, 100, 120], [100, 100]),
+            [1, 1, 1000, 1000],
+        )
 
 
 if __name__ == "__main__":

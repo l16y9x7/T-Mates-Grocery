@@ -221,6 +221,7 @@ def save_qwen_visualization(
 def run_test_inference(
     name: str,
     output_directory: Path = DEFAULT_RESULT_DIRECTORY,
+    hand: str = "left",
 ) -> dict[str, dict[str, Any]]:
     normalized_name = name.strip()
     if not normalized_name:
@@ -232,9 +233,11 @@ def run_test_inference(
     for image_path in image_paths:
         try:
             response = requests.post(
-                f"{LOCATE_API_URL}/visual/pick/locate",
+                f"{LOCATE_API_URL}/perception/pick/locate/debug",
                 json={
                     "name": product["name"],
+                    "product_name": product["name"],
+                    "hand": hand,
                     "image_name": image_path.name,
                     "image_base64": base64.b64encode(image_path.read_bytes()).decode(
                         "ascii"
@@ -300,13 +303,23 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_RESULT_DIRECTORY,
         help=f"结果图片目录，默认：{DEFAULT_RESULT_DIRECTORY}",
     )
+    parser.add_argument(
+        "--hand",
+        choices=("left", "right"),
+        default="left",
+        help="测试请求使用的手，默认：left",
+    )
     return parser.parse_args()
 
 
 def main_cli() -> None:
     args = parse_args()
     try:
-        results = run_test_inference(args.name, output_directory=args.output_dir)
+        results = run_test_inference(
+            args.name,
+            output_directory=args.output_dir,
+            hand=args.hand,
+        )
     except RuntimeError as error:
         raise SystemExit(str(error)) from error
 
