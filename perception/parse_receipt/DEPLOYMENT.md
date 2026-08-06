@@ -4,7 +4,7 @@
 
 ```text
 输入：一张 JPG/PNG 小票图片
-输出：SKU 标准商品名和标准货位；任一名称未命中时返回 404
+输出：SKU 标准商品名和标准货位；精确未命中时返回编辑距离候选，距离过大才返回 404
 ```
 
 它不是 Qwen/vLLM 本身，而是 Qwen/vLLM 外面的一层 HTTP 包装服务。
@@ -56,8 +56,10 @@ curl -F "file=@receipt.jpg" \
 export QWEN_BASE_URL='http://<qwen-host>:<qwen-port>/v1'
 export QWEN_MODEL='Qwen3-VL-4B-Instruct'
 export QWEN_TIMEOUT_SECONDS='120'
-export SKU_BASE_URL='http://127.0.0.1:8080'
+export SKU_BASE_URL='http://127.0.0.1:25540'
 export SKU_TIMEOUT_SECONDS='3'
+export SKU_EDIT_DISTANCE_MAX='3'
+export SKU_FUZZY_LIMIT='2'
 ```
 
 如果 Qwen/vLLM 和本服务部署在同一台机器上，`<qwen-host>` 通常可以
@@ -73,23 +75,22 @@ export QWEN_API_KEY='...'
 不要把真实 key 写入代码、README、`.env.example` 或 Git。
 
 `SKU_BASE_URL` 指向 `perception/sku/api.py` 提供的 SKU 查询服务。
-该服务启动时可以监听 `0.0.0.0:8080`，但客户端请求时应配置为
-可访问地址，例如同机部署用 `http://127.0.0.1:8080`。
+该服务可以监听 `127.0.0.1:25540`，客户端请求时应配置为
+可访问地址，例如同机部署用 `http://127.0.0.1:25540`。
 
 小票服务会对每个识别出的商品名请求：
 
 ```text
-GET /sku/locations?name=<商品名>
+GET /sku/search_by_name?name=<商品名>
 ```
 
-商品不存在时 SKU 服务返回 404，小票服务会停止本次处理并向调用方返回：
+商品名精确查询失败时，小票服务会调用 `GET /sku/get_all_names`，在进程内缓存商品名列表，并计算编辑距离。默认返回距离不超过 `SKU_EDIT_DISTANCE_MAX` 的最多 `SKU_FUZZY_LIMIT` 个候选；没有候选时才返回：
 
 ```json
 {"error_code": "SKU_NOT_FOUND"}
 ```
 
-一张小票包含多个商品时会逐条查询；任一查询返回 404，就不返回部分货位结果。
-如果 SKU 服务本身不可达，才返回 `sku_connection_error`。
+一张小票包含多个商品时会逐条查询；精确命中的商品返回标准 `name/locations`，模糊命中的商品返回候选列表。如果 SKU 服务本身不可达，才返回 `sku_connection_error`。
 
 ## 3. 安装
 

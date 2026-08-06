@@ -72,8 +72,10 @@ ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
 export QWEN_BASE_URL='http://127.0.0.1:<local-port>/v1'
 export QWEN_MODEL='Qwen3-VL-4B-Instruct'
 export QWEN_TIMEOUT_SECONDS='120'
-export SKU_BASE_URL='http://127.0.0.1:8080'
+export SKU_BASE_URL='http://127.0.0.1:25540'
 export SKU_TIMEOUT_SECONDS='3'
+export SKU_EDIT_DISTANCE_MAX='3'
+export SKU_FUZZY_LIMIT='2'
 ```
 
 只有接口明确返回认证错误时才设置：
@@ -174,8 +176,10 @@ max_edge      可选，发送给 Qwen 前的最长边，默认 2200
 export QWEN_BASE_URL='http://<qwen-host>:<qwen-port>/v1'
 export QWEN_MODEL='Qwen3-VL-4B-Instruct'
 export QWEN_TIMEOUT_SECONDS='120'
-export SKU_BASE_URL='http://127.0.0.1:8080'
+export SKU_BASE_URL='http://127.0.0.1:25540'
 export SKU_TIMEOUT_SECONDS='3'
+export SKU_EDIT_DISTANCE_MAX='3'
+export SKU_FUZZY_LIMIT='2'
 
 uvicorn receipt_recognizer.server:app \
   --host 127.0.0.1 \
@@ -212,14 +216,14 @@ curl -F "file=@receipt-images/receipt1.jpg" \
 
 ```bash
 export QWEN_BASE_URL='http://127.0.0.1:8102/v1'
-export SKU_BASE_URL='http://127.0.0.1:8080'
+export SKU_BASE_URL='http://127.0.0.1:25540'
 ```
 
 SKU 校验依赖组仓库的 `perception/sku/api.py` 服务。该服务可以用
-`python api.py --host 0.0.0.0 --port 8080` 启动；小票服务请求时使用
-`SKU_BASE_URL`，同机部署通常配置为 `http://127.0.0.1:8080`。
-如果任一商品名查不到，SKU 服务返回 404，小票服务停止本次处理并向
-调用方返回同样的 `SKU_NOT_FOUND` 404。
+`python api.py --host 127.0.0.1 --port 25540` 启动；小票服务请求时使用
+`SKU_BASE_URL`，同机部署通常配置为 `http://127.0.0.1:25540`。
+小票服务先调用 `/sku/search_by_name` 精确校验；精确失败时再调用
+`/sku/get_all_names` 缓存商品名并计算编辑距离候选。
 
 ## 输出约束
 
@@ -228,8 +232,9 @@ SKU 校验依赖组仓库的 `perception/sku/api.py` 服务。该服务可以用
 - 不合并商品行；Qwen 识别到几条商品明细，就逐条查询 SKU 服务。
 - 默认最终响应只输出 SKU 返回的标准 `name` 和 `locations`。
 - 第一版不输出数量字段；当前实验默认每条商品明细数量为 1。
-- 第一版不输出 `source_text`；商品名通过 SKU 服务 `/sku/locations` 精确校验。
-- 任一商品名未命中 SKU 时，整个请求返回 404，不返回部分货位结果。
+- 第一版不输出 `source_text`；商品名先通过 SKU 服务 `/sku/search_by_name` 精确校验。
+- 精确校验失败时，使用 `/sku/get_all_names` 的名称列表计算编辑距离，默认最多返回 2 个候选。
+- 没有距离足够近的候选时，整个请求返回 `SKU_NOT_FOUND` 404。
 - 称重商品、小数数量或模糊内容进入 `review_items`，不进入业务数组。
 - 非法 JSON 只允许追加一次格式纠正请求；第二次仍失败就报错。
 - 不使用未经部署验证的 `response_format` 或服务专有参数。
