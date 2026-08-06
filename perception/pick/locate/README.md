@@ -42,6 +42,21 @@ python main.py
 }
 ```
 
+也可以在现有输入之外上传指定图片，用于固定图片测试：
+
+```json
+{
+  "name": "蒙牛纯牛奶",
+  "image_name": "record_20260804_141434_337936_rgb.jpg",
+  "image_base64": "/9j/4AAQSkZJRgABAQ..."
+}
+```
+
+- `image_base64` 不传或为 `null` 时，继续使用服务器当前 RGB 帧。
+- 传入 `image_base64` 时，接口使用上传图片运行推理；图片可以由调用方从任意路径、URL 或其他来源读取，接口不关心来源。支持纯 base64 或 data URL，最大 20 MB。
+- `image_name` 用于标识上传图片并原样写入响应，只允许不包含路径的 JPG/PNG 文件名。
+- `image_name` 不用于服务器端查找文件；指定它时必须同时提供 `image_base64`。
+
 处理流程：
 
 1. 调用 `GET /sku/search_by_name` 查询完整 SKU 信息。
@@ -90,6 +105,49 @@ python main.py
 
 ## 测试
 
+### 单元测试
+
 ```powershell
 python -m unittest -v test_main.py
+```
+
+### 使用标注图片运行真实推理
+
+`test_inference.py` 会按以下顺序查找测试图片：
+
+```text
+商品 name
+    → GET /sku/search_by_name
+    → sku_id
+    → perception/test_data/2026-08-04/image_name_mapping.json
+    → 对应的 *_rgb.jpg
+    → 读取并编码对应 RGB 图片
+    → POST /visual/pick/locate（name + image_name + image_base64）
+    → Qwen3/SAM3 完整推理
+```
+
+`image_name_mapping.json` 和 `2026-08-04` 目录只属于测试脚本；Locate API 本身不依赖这两个路径。
+
+先启动 SKU API 和 Locate API，然后执行：
+
+```powershell
+python test_inference.py "蒙牛纯牛奶"
+```
+
+如果同一个 SKU 出现在多张测试图片中，脚本会逐张推理，并以图片名作为结果 key。每张成功结果都会叠加半透明 mask、bbox、实例编号和置信度，默认保存到：
+
+```text
+perception/test_data/2026-08-04/locate_results/<SKU_ID>/
+```
+
+结果 JSON 中的 `result_image` 字段会记录对应图片的绝对路径。JSON 默认打印到终端，也可以保存到文件：
+
+```powershell
+python test_inference.py "蒙牛纯牛奶" --output result.json
+```
+
+可使用 `--output-dir` 指定结果图片目录：
+
+```powershell
+python test_inference.py "蒙牛纯牛奶" --output result.json --output-dir D:/locate-results
 ```

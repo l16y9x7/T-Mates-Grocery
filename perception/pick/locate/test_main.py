@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from unittest.mock import patch
 from PIL import Image
 
 import main
+import test_inference
 
 
 def png_base64(size: tuple[int, int], value: int = 255) -> str:
@@ -20,6 +22,58 @@ def png_base64(size: tuple[int, int], value: int = 255) -> str:
 
 
 class LocateLogicTest(unittest.TestCase):
+    def test_find_test_images_by_sku_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            first_image = directory / "first_rgb.jpg"
+            second_image = directory / "second_rgb.jpg"
+            first_image.touch()
+            second_image.touch()
+            mapping_path = directory / "image_name_mapping.json"
+            mapping_path.write_text(
+                json.dumps(
+                    {
+                        first_image.name: ["SKU_001"],
+                        second_image.name: ["SKU_001", "SKU_002"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            paths = test_inference.find_test_images(
+                "sku_001",
+                mapping_path=mapping_path,
+                image_directory=directory,
+            )
+
+            self.assertEqual(paths, [first_image, second_image])
+
+    def test_save_result_visualization_draws_mask_and_bbox(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            directory = Path(temporary_directory)
+            image_path = directory / "source_rgb.jpg"
+            Image.new("RGB", (20, 20), "white").save(image_path)
+            result_path = test_inference.save_result_visualization(
+                image_path,
+                {
+                    "instances": [
+                        {
+                            "bbox": [4, 4, 15, 15],
+                            "mask": png_base64((20, 20)),
+                            "score": 0.9,
+                        }
+                    ]
+                },
+                directory / "results",
+                "SKU_001",
+            )
+
+            self.assertTrue(result_path.is_file())
+            self.assertEqual(result_path.name, "source_rgb_SKU_001_locate.png")
+            with Image.open(result_path) as result_image:
+                self.assertEqual(result_image.size, (20, 20))
+                self.assertNotEqual(result_image.getpixel((10, 10)), (255, 255, 255))
+
     def test_parse_qwen_json_from_code_fence(self) -> None:
         detections = main.parse_qwen_detections(
             '结果如下：```json\n[{"name":"商品","bbox":[10,20,30,40]}]\n```'
@@ -65,6 +119,10 @@ class LocateLogicTest(unittest.TestCase):
             (1280, 720),
         )
         self.assertEqual(crop_box, (789, 480, 1225, 663))
+
+    def test_decode_uploaded_image(self) -> None:
+        encoded = base64.b64encode(b"image bytes").decode("ascii")
+        self.assertEqual(main.decode_uploaded_image(encoded), b"image bytes")
 
     def test_sam_bbox_and_mask_are_mapped_to_original_image(self) -> None:
         instance = {
@@ -133,6 +191,38 @@ class LocateLogicTest(unittest.TestCase):
             for instance in result.instances:
                 with Image.open(io.BytesIO(base64.b64decode(instance.mask))) as mask:
                     self.assertEqual(mask.size, (100, 80))
+
+    def test_locate_accepts_uploaded_image(self) -> None:
+        image_buffer = io.BytesIO()
+        Image.new("RGB", (20, 10), "white").save(image_buffer, format="JPEG")
+        request = main.LocateRequest(
+            name="NFC桔汁",
+            image_name="mapped_rgb.jpg",
+            image_base64=base64.b64encode(image_buffer.getvalue()).decode("ascii"),
+        )
+        expected = main.LocateResponse(
+            sku_id="SKU_001",
+            name="NFC桔汁",
+            image_name="mapped_rgb.jpg",
+            instances=[],
+        )
+        with (
+            patch.object(
+                main,
+                "lookup_sku_by_name",
+                return_value={"sku_id": "SKU_001", "name": "NFC桔汁"},
+            ),
+            patch.object(
+                main,
+                "locate_product_in_image",
+                return_value=expected,
+            ) as locate_mock,
+        ):
+            result = main.locate_product(request)
+
+        self.assertEqual(result, expected)
+        uploaded_path = locate_mock.call_args.args[1]
+        self.assertEqual(uploaded_path.name, "mapped_rgb.jpg")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ import math
 import mimetypes
 import os
 import re
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,7 @@ ROOT = Path(__file__).resolve().parent
 RGB_DIR = ROOT.parents[1] / "test_data" / "2026-08-04"
 PROMPT_MAPPING_PATH = ROOT / "qwen_sam_prompt_mapping.json"
 
-SKU_API_URL = os.getenv("SKU_API_URL", "http://127.0.0.1:8080").rstrip("/")
+SKU_API_URL = os.getenv("SKU_API_URL", "http://127.0.0.1:25540").rstrip("/")
 SAM3_URL = os.getenv(
     "SAM3_URL",
     "http://211.137.21.33:25541/api/v1/segment",
@@ -48,6 +49,8 @@ app = FastAPI(title="Sorting Pick Locate", version="2.0.0")
 
 class LocateRequest(BaseModel):
     name: str
+    image_name: str | None = None
+    image_base64: str | None = None
 
 
 class LocatedInstance(BaseModel):
@@ -69,6 +72,30 @@ def get_latest_rgb() -> Path:
     if not images:
         raise HTTPException(status_code=404, detail="没有找到 RGB 图片")
     return images[-1]
+
+
+def decode_uploaded_image(image_base64: str) -> bytes:
+    encoded = image_base64.split(",", 1)[-1]
+    try:
+        image_bytes = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="image_base64 格式错误") from error
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="上传图片不能为空")
+    if len(image_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="上传图片不能超过 20 MB")
+    return image_bytes
+
+
+def uploaded_image_name(image_name: str | None) -> str:
+    normalized_name = (image_name or "uploaded_rgb.jpg").strip()
+    if (
+        not normalized_name
+        or Path(normalized_name).name != normalized_name
+        or Path(normalized_name).suffix.lower() not in {".jpg", ".jpeg", ".png"}
+    ):
+        raise HTTPException(status_code=400, detail="image_name 不是合法的图片文件名")
+    return normalized_name
 
 
 @app.get("/video/frame")
@@ -416,16 +443,14 @@ def map_sam_instance_to_original(
     )
 
 
-@app.post("/visual/pick/locate", response_model=LocateResponse)
-def locate_product(request: LocateRequest) -> LocateResponse:
-    name = request.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="name 不能为空")
-
-    product = lookup_sku_by_name(name)
+def locate_product_in_image(
+    product: dict[str, Any], image_path: Path
+) -> LocateResponse:
+    """使用已查询的 SKU 信息，在指定 RGB 图片上运行完整定位流程。"""
+    if not image_path.is_file():
+        raise HTTPException(status_code=404, detail=f"测试图片不存在: {image_path.name}")
     canonical_name = product["name"].strip()
     qwen_prompt, sam_prompt = load_prompt_pair(canonical_name)
-    image_path = get_latest_rgb()
     qwen_bboxes = get_stable_qwen_bboxes(qwen_prompt, image_path)
 
     try:
@@ -456,6 +481,28 @@ def locate_product(request: LocateRequest) -> LocateResponse:
         image_name=image_path.name,
         instances=located_instances,
     )
+
+
+@app.post("/visual/pick/locate", response_model=LocateResponse)
+def locate_product(request: LocateRequest) -> LocateResponse:
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name 不能为空")
+    product = lookup_sku_by_name(name)
+    if request.image_base64 is None:
+        if request.image_name is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="指定 image_name 时必须同时提供 image_base64",
+            )
+        return locate_product_in_image(product, get_latest_rgb())
+
+    image_bytes = decode_uploaded_image(request.image_base64)
+    image_name = uploaded_image_name(request.image_name)
+    with tempfile.TemporaryDirectory(prefix="locate-upload-") as temporary_directory:
+        image_path = Path(temporary_directory) / image_name
+        image_path.write_bytes(image_bytes)
+        return locate_product_in_image(product, image_path)
 
 
 if __name__ == "__main__":
