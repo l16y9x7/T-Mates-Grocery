@@ -75,7 +75,6 @@ export QWEN_TIMEOUT_SECONDS='120'
 export SKU_BASE_URL='http://127.0.0.1:25540'
 export SKU_TIMEOUT_SECONDS='3'
 export SKU_EDIT_DISTANCE_MAX='3'
-export SKU_FUZZY_LIMIT='2'
 ```
 
 只有接口明确返回认证错误时才设置：
@@ -179,7 +178,6 @@ export QWEN_TIMEOUT_SECONDS='120'
 export SKU_BASE_URL='http://127.0.0.1:25540'
 export SKU_TIMEOUT_SECONDS='3'
 export SKU_EDIT_DISTANCE_MAX='3'
-export SKU_FUZZY_LIMIT='2'
 
 uvicorn receipt_recognizer.server:app \
   --host 127.0.0.1 \
@@ -223,7 +221,7 @@ SKU 校验依赖组仓库的 `perception/sku/api.py` 服务。该服务可以用
 `python api.py --host 127.0.0.1 --port 25540` 启动；小票服务请求时使用
 `SKU_BASE_URL`，同机部署通常配置为 `http://127.0.0.1:25540`。
 小票服务先调用 `/sku/search_by_name` 精确校验；精确失败时再调用
-`/sku/get_all_names` 缓存商品名并计算编辑距离候选。
+`/sku/get_all_names` 缓存商品名并选择编辑距离最近的一个商品名。
 
 ## 输出约束
 
@@ -233,8 +231,8 @@ SKU 校验依赖组仓库的 `perception/sku/api.py` 服务。该服务可以用
 - 默认最终响应只输出 SKU 返回的标准 `name` 和 `locations`。
 - 第一版不输出数量字段；当前实验默认每条商品明细数量为 1。
 - 第一版不输出 `source_text`；商品名先通过 SKU 服务 `/sku/search_by_name` 精确校验。
-- 精确校验失败时，使用 `/sku/get_all_names` 的名称列表计算编辑距离，默认最多返回 2 个候选。
-- 没有距离足够近的候选时，整个请求返回 `SKU_NOT_FOUND` 404。
+- 精确校验失败时，使用 `/sku/get_all_names` 的名称列表计算编辑距离，并只返回最近的一个 SKU 标准 `name/locations`。
+- 没有距离足够近的商品名时，整个请求返回 `SKU_NOT_FOUND` 404。
 - 称重商品、小数数量或模糊内容进入 `review_items`，不进入业务数组。
 - 非法 JSON 只允许追加一次格式纠正请求；第二次仍失败就报错。
 - 不使用未经部署验证的 `response_format` 或服务专有参数。

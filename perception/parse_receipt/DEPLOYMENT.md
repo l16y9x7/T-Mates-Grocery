@@ -4,7 +4,7 @@
 
 ```text
 输入：一张 JPG/PNG 小票图片
-输出：SKU 标准商品名和标准货位；精确未命中时返回编辑距离候选，距离过大才返回 404
+输出：SKU 标准商品名和标准货位；精确未命中时用编辑距离兜底，距离过大才返回 404
 ```
 
 它不是 Qwen/vLLM 本身，而是 Qwen/vLLM 外面的一层 HTTP 包装服务。
@@ -59,7 +59,6 @@ export QWEN_TIMEOUT_SECONDS='120'
 export SKU_BASE_URL='http://127.0.0.1:25540'
 export SKU_TIMEOUT_SECONDS='3'
 export SKU_EDIT_DISTANCE_MAX='3'
-export SKU_FUZZY_LIMIT='2'
 ```
 
 如果 Qwen/vLLM 和本服务部署在同一台机器上，`<qwen-host>` 通常可以
@@ -84,13 +83,13 @@ export QWEN_API_KEY='...'
 GET /sku/search_by_name?name=<商品名>
 ```
 
-商品名精确查询失败时，小票服务会调用 `GET /sku/get_all_names`，在进程内缓存商品名列表，并计算编辑距离。默认返回距离不超过 `SKU_EDIT_DISTANCE_MAX` 的最多 `SKU_FUZZY_LIMIT` 个候选；没有候选时才返回：
+商品名精确查询失败时，小票服务会调用 `GET /sku/get_all_names`，在进程内缓存商品名列表，并选择编辑距离最近且距离不超过 `SKU_EDIT_DISTANCE_MAX` 的商品名；没有近距离商品名时才返回：
 
 ```json
 {"error_code": "SKU_NOT_FOUND"}
 ```
 
-一张小票包含多个商品时会逐条查询；精确命中的商品返回标准 `name/locations`，模糊命中的商品返回候选列表。如果 SKU 服务本身不可达，才返回 `sku_connection_error`。
+一张小票包含多个商品时会逐条查询；精确命中和编辑距离兜底命中都返回标准 `name/locations`。如果 SKU 服务本身不可达，才返回 `sku_connection_error`。
 
 ## 3. 安装
 

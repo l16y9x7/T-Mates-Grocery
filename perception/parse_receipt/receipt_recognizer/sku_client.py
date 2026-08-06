@@ -32,14 +32,6 @@ class SKUCandidate:
     locations: list[str]
     distance: int
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "locations": self.locations,
-            "distance": self.distance,
-        }
-
-
 class SkuLookupClient:
     """Call the team's SKU lookup API after Qwen receipt parsing."""
 
@@ -59,13 +51,12 @@ class SkuLookupClient:
         try:
             return self.locations_for_name(name).to_dict()
         except SKUNotFoundError:
-            candidates = self.edit_distance_candidates(name)
-            if not candidates:
+            candidate = self.best_edit_distance_candidate(name)
+            if candidate is None:
                 raise
             return {
-                "recognized_name": name.strip(),
-                "match_type": "edit_distance",
-                "candidates": [candidate.to_dict() for candidate in candidates],
+                "name": candidate.name,
+                "locations": candidate.locations,
             }
 
     def locations_for_name(self, name: str) -> SKULocation:
@@ -117,10 +108,10 @@ class SkuLookupClient:
             locations=locations,
         )
 
-    def edit_distance_candidates(self, name: str) -> list[SKUCandidate]:
+    def best_edit_distance_candidate(self, name: str) -> SKUCandidate | None:
         normalized_name = name.strip()
         if not normalized_name:
-            return []
+            return None
 
         ranked_names = sorted(
             (
@@ -130,24 +121,19 @@ class SkuLookupClient:
             key=lambda value: (value[0], value[1]),
         )
 
-        candidates: list[SKUCandidate] = []
         for distance, sku_name in ranked_names:
             if distance > self.settings.sku_edit_distance_max:
-                break
+                return None
             try:
                 location = self.locations_for_name(sku_name)
             except SKUNotFoundError:
                 continue
-            candidates.append(
-                SKUCandidate(
-                    name=location.name,
-                    locations=location.locations,
-                    distance=distance,
-                )
+            return SKUCandidate(
+                name=location.name,
+                locations=location.locations,
+                distance=distance,
             )
-            if len(candidates) >= self.settings.sku_fuzzy_limit:
-                break
-        return candidates
+        return None
 
     def all_names(self) -> list[str]:
         cached = self._all_names_cache.get(self.settings.sku_base_url)
