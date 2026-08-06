@@ -440,6 +440,8 @@ async function runQwen() {
         image_name: result.image_name,
         image_path: result.image_path,
         image_size: result.image_size,
+        qwen3_prompt_used: result.qwen3_prompt_used,
+        sam3_prompt_used: result.sam3_prompt_used,
       },
       null,
       2,

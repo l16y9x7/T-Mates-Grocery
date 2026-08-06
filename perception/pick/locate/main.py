@@ -106,6 +106,8 @@ class LocateDebugResponse(BaseModel):
     image_base64: str
     image_media_type: str
     image_size: list[int]
+    qwen3_prompt_used: str | None = None
+    sam3_prompt_used: str | None = None
     raw_qwen_bboxes: list[RawQwenBBoxRecord] = Field(default_factory=list)
     qwen_bboxes: list[QwenBBoxRecord] = Field(default_factory=list)
     instances: list[LocatedInstance] = Field(default_factory=list)
@@ -275,6 +277,7 @@ def load_prompt_pair(name: str) -> tuple[str, str]:
 def call_qwen3(prompt: str, image_path: Path) -> str:
     media_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
     image_base64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    print(f"[Locate Qwen3] prompt before request:\n{prompt}", flush=True)
     response = requests.post(
         QWEN3_URL,
         json={
@@ -800,6 +803,8 @@ def locate_product_in_image(
         image_base64=base64.b64encode(image_path.read_bytes()).decode("ascii"),
         image_media_type=mimetypes.guess_type(image_path.name)[0] or "image/jpeg",
         image_size=list(original_image.size),
+        qwen3_prompt_used=qwen_prompt,
+        sam3_prompt_used=sam_prompt,
         raw_qwen_bboxes=raw_qwen_bbox_records,
         qwen_bboxes=qwen_bbox_records,
         instances=located_instances,
@@ -807,7 +812,12 @@ def locate_product_in_image(
 
 
 def make_locate_debug_error_response(
-    product: dict[str, Any], image_path: Path, error: HTTPException
+    product: dict[str, Any],
+    image_path: Path,
+    error: HTTPException,
+    *,
+    qwen3_prompt_used: str | None = None,
+    sam3_prompt_used: str | None = None,
 ) -> LocateDebugResponse:
     """Return the actual input image together with an inference error for debugging."""
     try:
@@ -828,6 +838,8 @@ def make_locate_debug_error_response(
         image_base64=base64.b64encode(image_bytes).decode("ascii"),
         image_media_type=mimetypes.guess_type(image_path.name)[0] or "image/jpeg",
         image_size=image_size,
+        qwen3_prompt_used=qwen3_prompt_used,
+        sam3_prompt_used=sam3_prompt_used,
         error=detail,
         error_status_code=error.status_code,
     )
@@ -863,7 +875,13 @@ def locate_product_debug(
         except HTTPException as error:
             if not capture_inference_errors:
                 raise
-            return make_locate_debug_error_response(product, image_path, error)
+            return make_locate_debug_error_response(
+                product,
+                image_path,
+                error,
+                qwen3_prompt_used=request.qwen3_prompt if allow_prompt_overrides else None,
+                sam3_prompt_used=request.sam3_prompt if allow_prompt_overrides else None,
+            )
 
     image_bytes = decode_uploaded_image(request.image_base64)
     image_name = uploaded_image_name(request.image_name)
@@ -875,7 +893,13 @@ def locate_product_debug(
         except HTTPException as error:
             if not capture_inference_errors:
                 raise
-            return make_locate_debug_error_response(product, image_path, error)
+            return make_locate_debug_error_response(
+                product,
+                image_path,
+                error,
+                qwen3_prompt_used=request.qwen3_prompt if allow_prompt_overrides else None,
+                sam3_prompt_used=request.sam3_prompt if allow_prompt_overrides else None,
+            )
 
 
 def normalize_bbox_to_1_1000(
