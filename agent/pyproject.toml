@@ -1,0 +1,30 @@
+[project]
+name = "robot-games-agent"
+version = "0.1.0"
+description = "LangGraph orchestration agent for robot retail tasks"
+requires-python = ">=3.11"
+# 运行时依赖：HTTP 异步调用、状态图编排、数据校验和 YAML 配置加载。
+dependencies = [
+    "httpx>=0.28,<1",
+    "langgraph>=1.0,<2",
+    "pydantic>=2.10,<3",
+    "pyyaml>=6,<7",
+]
+
+[dependency-groups]
+# 开发依赖仅用于同步/异步测试，不进入 Agent 的运行逻辑。
+dev = [
+    "pytest>=8.3,<9",
+    "pytest-asyncio>=0.24,<2",
+]
+
+[tool.pytest.ini_options]
+# -q 精简输出；auto 让 pytest 自动管理 async 测试事件循环。
+addopts = "-q"
+asyncio_mode = "auto"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.uv]
+# 本项目按应用运行，不构建或发布 Python wheel。
+package = false

@@ -11,25 +11,19 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .config import Settings
-from .errors import SKUConnectionError, SKUResponseError
+from .errors import SKUConnectionError, SKUNotFoundError, SKUResponseError
 
 
 @dataclass(frozen=True)
-class SKUValidation:
+class SKULocation:
     name: str
-    matched: bool
     locations: list[str]
-    error_code: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        result: dict[str, Any] = {
+        return {
             "name": self.name,
-            "matched": self.matched,
             "locations": self.locations,
         }
-        if self.error_code is not None:
-            result["error_code"] = self.error_code
-        return result
 
 
 class SkuLookupClient:
@@ -38,7 +32,7 @@ class SkuLookupClient:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
-    def validate_items(
+    def lookup_items(
         self,
         items: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
@@ -47,15 +41,10 @@ class SkuLookupClient:
             for item in items
         ]
 
-    def locations_for_name(self, name: str) -> SKUValidation:
+    def locations_for_name(self, name: str) -> SKULocation:
         normalized_name = name.strip()
         if not normalized_name:
-            return SKUValidation(
-                name=normalized_name,
-                matched=False,
-                locations=[],
-                error_code="EMPTY_NAME",
-            )
+            raise SKUNotFoundError(normalized_name, "EMPTY_NAME")
 
         url = (
             f"{self.settings.sku_base_url}/sku/locations?"
@@ -74,12 +63,9 @@ class SkuLookupClient:
                 raw_body = response.read()
         except HTTPError as exc:
             if exc.code == 404:
-                return SKUValidation(
-                    name=normalized_name,
-                    matched=False,
-                    locations=[],
-                    error_code=_error_code_from_http_error(exc)
-                    or "SKU_NOT_FOUND",
+                raise SKUNotFoundError(
+                    normalized_name,
+                    _error_code_from_http_error(exc) or "SKU_NOT_FOUND",
                 )
             raise SKUResponseError(
                 f"SKU 服务返回 HTTP {exc.code}: {_summarize_http_error(exc)}",
@@ -99,9 +85,8 @@ class SkuLookupClient:
         if not all(isinstance(location, str) for location in locations):
             raise SKUResponseError("SKU 服务响应 locations 必须是字符串数组。")
 
-        return SKUValidation(
+        return SKULocation(
             name=response_name,
-            matched=True,
             locations=locations,
         )
 

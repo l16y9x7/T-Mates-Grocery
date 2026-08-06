@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +18,11 @@ from typing import Any, Iterable
 
 from .errors import InputFileError, ReceiptRecognizerError
 from .media import SUPPORTED_IMAGE_SUFFIXES
+
+
+DEFAULT_OCR_DEVICE = "cpu"
+OCR_DEVICE_ENV = "RECEIPT_OCR_DEVICE"
+_OCR_DEVICE_PATTERN = re.compile(r"^(?:cpu|gpu(?::\d+)?)$")
 
 
 @dataclass(frozen=True)
@@ -52,6 +59,7 @@ def recognize_image_with_paddleocr(
     *,
     lang: str = "ch",
     use_angle_cls: bool = True,
+    device: str = DEFAULT_OCR_DEVICE,
 ) -> OCRResult:
     """Run PaddleOCR on one local JPEG/PNG image."""
 
@@ -60,6 +68,7 @@ def recognize_image_with_paddleocr(
     engine = _create_paddleocr_engine(
         lang=lang,
         use_angle_cls=use_angle_cls,
+        device=_parse_ocr_device(device),
     )
     try:
         raw_result = _run_paddleocr_engine(
@@ -125,6 +134,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="关闭文字方向分类；默认开启",
     )
+    parser.add_argument(
+        "--device",
+        type=_parse_ocr_device,
+        default=_parse_ocr_device(
+            os.getenv(OCR_DEVICE_ENV, DEFAULT_OCR_DEVICE)
+        ),
+        help=(
+            "OCR 推理设备，例如 cpu 或 gpu:0；默认读取 "
+            f"{OCR_DEVICE_ENV}，未设置时使用 {DEFAULT_OCR_DEVICE}"
+        ),
+    )
     return parser
 
 
@@ -135,6 +155,7 @@ def main(argv: list[str] | None = None) -> int:
             args.input,
             lang=args.lang,
             use_angle_cls=not args.no_angle_cls,
+            device=args.device,
         )
     except ReceiptRecognizerError as exc:
         print(f"错误：{exc}", file=sys.stderr)
@@ -161,6 +182,7 @@ def _create_paddleocr_engine(
     *,
     lang: str,
     use_angle_cls: bool,
+    device: str,
 ):
     try:
         from paddleocr import PaddleOCR
@@ -174,12 +196,14 @@ def _create_paddleocr_engine(
         return PaddleOCR(
             use_textline_orientation=use_angle_cls,
             lang=lang,
+            device=device,
         )
     except TypeError:
         # PaddleOCR 2.x used the old ``use_angle_cls`` name.
         return PaddleOCR(
             use_angle_cls=use_angle_cls,
             lang=lang,
+            use_gpu=device.startswith("gpu"),
         )
     except RuntimeError as exc:
         if "paddlepaddle" in str(exc).lower():
@@ -188,6 +212,15 @@ def _create_paddleocr_engine(
                 "请在 receipt-qwen-vl 环境里运行：python -m pip install paddlepaddle"
             ) from exc
         raise ReceiptRecognizerError(f"PaddleOCR 初始化失败：{exc}") from exc
+
+
+def _parse_ocr_device(value: str) -> str:
+    normalized = value.strip().lower()
+    if not _OCR_DEVICE_PATTERN.fullmatch(normalized):
+        raise argparse.ArgumentTypeError(
+            "OCR device 只支持 cpu、gpu 或 gpu:<非负整数>。"
+        )
+    return normalized
 
 
 def _run_paddleocr_engine(

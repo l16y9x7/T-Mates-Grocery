@@ -250,7 +250,7 @@ app = create_app()
 def main() -> None:
     parser = argparse.ArgumentParser(description="感知模块 SKU 查询服务")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--port", type=int, default=25540)
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG_PATH)
     args = parser.parse_args()
 

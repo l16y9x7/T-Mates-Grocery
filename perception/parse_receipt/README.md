@@ -2,7 +2,9 @@
 
 这是一个最小、可审计的小票商品识别项目。它读取一张购物小票图片或 PDF，在本地完成方向修正、缩放和 PDF 渲染，然后通过 OpenAI-compatible Chat Completions API 请求 `Qwen3-VL-4B-Instruct`。程序不会把本地文件路径交给服务器，也不会自动保存模型输出。
 
-第一版只负责“小票文字里的商品行”，不识别画面里的实物，也不做品牌、品类或 SKU 标准化。
+第一版只负责“小票文字里的商品行”，不识别画面里的实物。Qwen 的
+`name/specification` 仅作为中间结果；服务随后按 `name` 查询组内 SKU API，
+最终返回 SKU 的标准名称和货位。
 
 ## 数据流
 
@@ -116,24 +118,15 @@ qwen-probe receipt "/绝对路径/测试小票.pdf" --diagnostics
 receipt-recognizer "/绝对路径/测试小票.pdf"
 ```
 
-标准输出包含 Qwen 识别出的商品数组，以及 SKU 服务校验结果：
+标准输出直接采用 SKU 服务的标准名称和货位：
 
 ```json
-{
-  "items": [
-    {
-      "name": "NFC桔汁",
-      "specification": "500ml"
-    }
-  ],
-  "sku_validation": [
-    {
-      "name": "NFC桔汁",
-      "matched": true,
-      "locations": ["H1_F_L1_C01"]
-    }
-  ]
-}
+[
+  {
+    "name": "NFC桔汁",
+    "locations": ["H1_F_L1_C01"]
+  }
+]
 ```
 
 查看行级原文、待复核项、token 使用量和是否触发 JSON 纠正：
@@ -196,24 +189,15 @@ curl -F "file=@receipt-images/receipt1.jpg" \
   "http://127.0.0.1:18080/receipt/parse"
 ```
 
-返回默认包含业务数组和 SKU 校验结果：
+默认成功响应只包含 SKU 的标准名称和货位：
 
 ```json
-{
-  "items": [
-    {
-      "name": "NFC桔汁",
-      "specification": "500ml"
-    }
-  ],
-  "sku_validation": [
-    {
-      "name": "NFC桔汁",
-      "matched": true,
-      "locations": ["H1_F_L1_C01"]
-    }
-  ]
-}
+[
+  {
+    "name": "NFC桔汁",
+    "locations": ["H1_F_L1_C01"]
+  }
+]
 ```
 
 需要诊断信息时：
@@ -234,16 +218,18 @@ export SKU_BASE_URL='http://127.0.0.1:8080'
 SKU 校验依赖组仓库的 `perception/sku/api.py` 服务。该服务可以用
 `python api.py --host 0.0.0.0 --port 8080` 启动；小票服务请求时使用
 `SKU_BASE_URL`，同机部署通常配置为 `http://127.0.0.1:8080`。
-如果商品名查不到，SKU 服务返回 404，小票服务会在 `sku_validation`
-中标记 `matched=false`，而不是让整张小票请求失败。
+如果任一商品名查不到，SKU 服务返回 404，小票服务停止本次处理并向
+调用方返回同样的 `SKU_NOT_FOUND` 404。
 
 ## 输出约束
 
-- 商品名保留完整票面 SKU 名称，口味、香型、型号都并入 `name`，不再单独输出 `flavor`。
-- 规格只保留重量、容量、尺寸或包装关系，例如 `70g/袋`、`60g*10`；只要字符清晰就原样复制。没有规格时为 `null`。
-- 不合并商品行；小票上识别到几条商品明细，业务数组就输出几条。
+- Qwen 中间结果保留完整票面商品名，口味、香型、型号都并入 `name`，不再单独输出 `flavor`。
+- Qwen 中间结果中的 `specification` 只用于识别诊断，不进入默认最终响应。
+- 不合并商品行；Qwen 识别到几条商品明细，就逐条查询 SKU 服务。
+- 默认最终响应只输出 SKU 返回的标准 `name` 和 `locations`。
 - 第一版不输出数量字段；当前实验默认每条商品明细数量为 1。
-- 第一版不输出 `source_text`；商品名通过 SKU 服务 `/sku/locations` 做精确校验。
+- 第一版不输出 `source_text`；商品名通过 SKU 服务 `/sku/locations` 精确校验。
+- 任一商品名未命中 SKU 时，整个请求返回 404，不返回部分货位结果。
 - 称重商品、小数数量或模糊内容进入 `review_items`，不进入业务数组。
 - 非法 JSON 只允许追加一次格式纠正请求；第二次仍失败就报错。
 - 不使用未经部署验证的 `response_format` 或服务专有参数。
@@ -259,6 +245,10 @@ OCR 依赖不放进默认服务环境，避免增加服务器部署复杂度。�
 ```bash
 python -m pip install -e ".[ocr]"
 ```
+
+PaddlePaddle 推理引擎需要按部署平台单独安装。CPU 与 GPU 包二选一，
+不要在同一环境同时安装 `paddlepaddle` 和 `paddlepaddle-gpu`。GPU wheel
+必须与服务器驱动兼容的 CUDA 构建对应。
 
 如果运行时提示缺少 `paddle`，请按 PaddleOCR 官方说明为当前机器安装
 对应版本的 `paddlepaddle`。Apple Silicon Mac 本地 CPU 测试通常可以先试：
@@ -276,6 +266,22 @@ PY
 ```bash
 receipt-ocr receipt-images/receipt8.jpg
 ```
+
+默认使用 CPU，避免在共享机器上意外占用 GPU。机器人部署环境可以显式指定：
+
+```bash
+receipt-ocr receipt-images/receipt8.jpg --device gpu:0
+```
+
+也可以通过环境变量设置默认设备：
+
+```bash
+export RECEIPT_OCR_DEVICE='gpu:0'
+receipt-ocr receipt-images/receipt8.jpg
+```
+
+设备只支持 `cpu`、`gpu` 或 `gpu:<非负整数>`。当前 PaddleOCR 仍是独立
+实验入口，`POST /receipt/parse` 不会自动运行 OCR，也不会占用本机 GPU。
 
 输出是 OCR 原始文本证据，不是最终商品 JSON：
 
@@ -329,7 +335,8 @@ for image in receipt-images/receipt{12,13,14,15,16,17,18,19,20}.jpg; do
 done
 ```
 
-这样每张图会保存一个 `*.items.json`，内容就是最终业务输出，只含 `name` 和 `specification`。
+这样每张图会保存一个 `*.items.json`，内容就是最终业务输出，只含 SKU
+返回的 `name` 和 `locations`。Qwen 的 `name/specification` 只保留在诊断信息中。
 
 如果已经有旧版 `*.items.json`，仍可以用本地 CSV 统计商品名命中率。当前接口已默认通过 SKU 服务做在线校验；CSV 评估仅保留为离线实验工具：
 
@@ -360,4 +367,6 @@ receipt-evaluate output/某次实验目录 \
 conda run --name receipt-qwen-vl python -m unittest discover -v
 ```
 
-测试覆盖配置、HTTP 协议、认证头、严格 JSON 校验、完整商品名与规格输出、库存精确匹配、派生状态规范化、行级商品输出、待复核排除、单次纠正逻辑、HTTP API，以及 PNG 到 JPEG 的本地预处理。
+测试覆盖配置、HTTP 协议、认证头、严格 JSON 校验、Qwen 中间结构、SKU
+精确查询、多商品货位汇总、SKU 404 传递、待复核排除、单次纠正逻辑、
+HTTP API，以及 PNG 到 JPEG 的本地预处理。

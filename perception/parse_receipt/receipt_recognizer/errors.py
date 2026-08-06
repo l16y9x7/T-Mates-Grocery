@@ -39,6 +39,15 @@ class SKUConnectionError(ReceiptRecognizerError):
     """The SKU lookup service could not be reached."""
 
 
+class SKUNotFoundError(ReceiptRecognizerError):
+    """A recognized product name does not exist in the SKU catalog."""
+
+    def __init__(self, name: str, error_code: str = "SKU_NOT_FOUND") -> None:
+        super().__init__(f"商品名称未在 SKU 库中找到：{name}")
+        self.name = name
+        self.error_code = error_code
+
+
 class SKUResponseError(ReceiptRecognizerError):
     """The SKU lookup service returned an unexpected response."""
 
