@@ -34,7 +34,7 @@ python main.py
 
 返回当前 RGB 图片。服务只请求 `CAMERA_SNAPSHOT_URL` 并验证响应是有效 JPG/PNG；连接失败、非 2xx、空响应、图片无效或缓存失败时返回 HTTP 400，不读取本地图片。
 
-### `POST /visual/pick/locate`
+### `POST /perception/pick/locate`
 
 请求包含商品名称和左右手信息：
 
@@ -92,7 +92,7 @@ python main.py
 - bbox 交集默认覆盖较小框至少 20% 才组成重叠链；链内最大 mask 达到第二名 2 倍时直接保留最大 mask，否则保留 `mask前景像素数 / bbox面积` 最大者。可通过 `SAM_BBOX_OVERLAP_MIN_RATIO` 和 `SAM_FRONT_AREA_DOMINANCE_RATIO` 调节阈值。
 - 重叠链过滤后，若最小 mask 面积不超过第二小 mask 的 50%，会再删除这个最小面积离群项一次；通过 `SAM_SMALLEST_MASK_MAX_RATIO` 调节阈值。
 
-### `POST /visual/pick/locate/debug`
+### `POST /perception/pick/locate/debug`
 
 测试专用接口，输入与正式接口相同，但返回 `sku_id`、`image_name`、`image_path`、`image_size`、共识后的 `qwen_bboxes` 和全部 `instances`。`test_inference.py` 使用该接口记录 Qwen bbox，并分别绘制 Qwen 图和 SAM3 bbox/mask 图。
 
@@ -129,7 +129,7 @@ python -m unittest -v test_main.py
 python test_formal_api.py SORTING "可口可乐" left
 ```
 
-脚本会用 `product_name` 请求 SKU API，再通过 `image_name_mapping.json` 和 SKU ID 自动找到 `2026-08-04` 下的所有对应本地图片。随后由脚本内部补充 `image_name` 和 `image_base64`，逐张调用正式 `/visual/pick/locate`，并校验响应只包含 `product_name`、`bbox`、`mask`、`image_path`，bbox 坐标均在 `[1,1000]` 内。
+脚本会用 `product_name` 请求 SKU API，再通过 `image_name_mapping.json` 和 SKU ID 自动找到 `2026-08-04` 下的所有对应本地图片。随后由脚本内部补充 `image_name` 和 `image_base64`，逐张调用正式 `/perception/pick/locate`，并校验响应只包含 `product_name`、`bbox`、`mask`、`image_path`，bbox 坐标均在 `[1,1000]` 内。
 
 可选保存测试结果：
 
@@ -148,7 +148,7 @@ python test_formal_api.py SORTING "可口可乐" left --output formal_result.jso
     → perception/test_data/2026-08-04/image_name_mapping.json
     → 对应的 *_rgb.jpg
     → 读取并编码对应 RGB 图片
-    → POST /visual/pick/locate/debug（product_name + hand + image_base64）
+    → POST /perception/pick/locate/debug（product_name + hand + image_base64）
     → Qwen3/SAM3 完整推理
 ```
 
