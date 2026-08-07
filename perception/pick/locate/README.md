@@ -21,8 +21,8 @@ python main.py
 
 默认地址：
 
-- SKU：`http://127.0.0.1:8080`
-- Locate：`http://127.0.0.1:8081`
+- SKU：`http://127.0.0.1:25540`
+- Locate：`http://127.0.0.1:8083`
 
 可使用 `SKU_API_URL`、`QWEN3_URL`、`QWEN3_MODEL`、`SAM3_URL` 环境变量覆盖。
 
@@ -160,7 +160,7 @@ product_name
 
 ```text
 SKU API:    http://192.168.130.59:25540
-Locate API: http://192.168.130.59:8081
+Locate API: http://192.168.130.59:8083
 ```
 
 确认远端服务已启动后执行：

@@ -31,7 +31,7 @@ SAM3_URL = os.getenv(
 )
 LOCATE_DEBUG_URL = os.getenv(
     "LOCATE_DEBUG_URL",
-    "http://192.168.130.59:8081/perception/pick/locate/debug",
+    "http://192.168.130.59:8083/perception/pick/locate/debug",
 )
 QWEN_SAMPLE_COUNT = 3
 QWEN_TEMPERATURE = 0.7

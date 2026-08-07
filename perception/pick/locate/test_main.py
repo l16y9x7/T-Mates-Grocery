@@ -141,7 +141,7 @@ class LocateLogicTest(unittest.TestCase):
 
             self.assertEqual(
                 post_mock.call_args.args[0],
-                "http://192.168.130.59:8081/perception/pick/locate/debug",
+                "http://192.168.130.59:8083/perception/pick/locate/debug",
             )
             request_payload = post_mock.call_args.kwargs["json"]
             self.assertEqual(request_payload["name"], "SORTING")

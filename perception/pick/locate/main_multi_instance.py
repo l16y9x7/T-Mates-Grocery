@@ -45,5 +45,5 @@ if __name__ == "__main__":
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=int(os.getenv("MULTI_LOCATE_PORT", "8081")),
+        port=int(os.getenv("MULTI_LOCATE_PORT", "8083")),
     )

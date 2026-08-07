@@ -17,7 +17,7 @@ python server.py
 选择 SKU，设置 `name` 和 `hand` 后，点击“运行 Locate Debug 完整推理”。test_web 后端会代理调用：
 
 ```text
-POST http://192.168.130.59:8081/perception/pick/locate/debug
+POST http://192.168.130.59:8083/perception/pick/locate/debug
 ```
 
 请求仅包含：

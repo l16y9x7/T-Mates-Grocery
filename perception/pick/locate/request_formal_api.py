@@ -10,7 +10,7 @@ import requests
 
 DEFAULT_LOCATE_URL = os.getenv(
     "LOCATE_FORMAL_API_URL",
-    "http://192.168.130.59:8081/perception/pick/locate",
+    "http://192.168.130.59:8083/perception/pick/locate",
 )
 
 
