@@ -54,6 +54,7 @@ class SkuCatalog:
             raise ValueError("products.json 中的 products 必须是数组")
 
         self._by_name: dict[str, dict[str, Any]] = {}
+        self._by_name_alias: dict[str, dict[str, Any]] = {}
         self._by_sku: dict[str, dict[str, Any]] = {}
         self._by_location: dict[str, dict[str, Any]] = {}
 
@@ -97,8 +98,12 @@ class SkuCatalog:
                 raise ValueError(f"SKU ID 重复: {normalized_sku}")
             if normalized_name in self._by_name:
                 raise ValueError(f"商品名称重复: {normalized_name}")
+            normalized_name_alias = self._name_lookup_key(normalized_name)
+            if normalized_name_alias in self._by_name_alias:
+                raise ValueError(f"商品名称规范化后重复: {normalized_name}")
             self._by_sku[normalized_sku] = product
             self._by_name[normalized_name] = product
+            self._by_name_alias[normalized_name_alias] = product
 
             for location in locations:
                 if not isinstance(location, str) or not location.strip():
@@ -117,19 +122,36 @@ class SkuCatalog:
         return self._copy_product(self._by_sku.get(sku.strip().upper()))
 
     def product_for_name(self, name: str) -> dict[str, Any] | None:
-        return self._copy_product(self._by_name.get(name.strip()))
+        normalized_name = name.strip()
+        product = self._by_name.get(normalized_name)
+        if product is None:
+            product = self._by_name_alias.get(self._name_lookup_key(normalized_name))
+        return self._copy_product(product)
 
     def product_for_location(self, location: str) -> dict[str, Any] | None:
         return self._copy_product(self._by_location.get(location.strip().upper()))
 
     def images_for_name(self, name: str) -> list[str] | None:
-        product = self._by_name.get(name.strip())
+        normalized_name = name.strip()
+        product = self._by_name.get(normalized_name)
+        if product is None:
+            product = self._by_name_alias.get(self._name_lookup_key(normalized_name))
         if product is None:
             return None
         return list(product["images"])
 
     def all_names(self) -> list[str]:
         return list(self._by_name)
+
+    @staticmethod
+    def _name_lookup_key(name: str) -> str:
+        return (
+            name.strip()
+            .replace("’", "'")
+            .replace("‘", "'")
+            .replace("'", "")
+            .casefold()
+        )
 
     @staticmethod
     def _copy_product(product: dict[str, Any] | None) -> dict[str, Any] | None:

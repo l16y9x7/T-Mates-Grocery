@@ -19,23 +19,23 @@
     "qwen3_prompt": "找到图片中从上往下第一排货架的棕色Dove沐浴露，输出一个完整的bbox。返回格式：{\"name\": \"棕色Dove沐浴露\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost bottle with long neck"
   },
-  "Lays乐事薯片墨西哥鸡汁番茄味": {
+  "Lay's乐事薯片墨西哥鸡汁番茄味": {
     "qwen3_prompt": "找到图片中货架第一排的红色乐事薯片，输出满足条件的红色乐事薯片的bbox。返回格式：{\"name\": \"红色乐事薯片\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost red Lay's package"
   },
-  "Lays乐事薯片意大利香浓红烩味": {
+  "Lay's乐事薯片意大利香浓红烩味": {
     "qwen3_prompt": "找到图片中货架第一排的绿色乐事薯片右边的意大利香浓红烩味乐事薯片，输出满足条件的意大利香浓红烩味乐事薯片的bbox。返回格式：{\"name\": \"意大利香浓红烩味乐事薯片\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost blue Lay's package"
   },
-  "Lays乐事薯片经典原味": {
+  "Lay's乐事薯片经典原味": {
     "qwen3_prompt": "找到图片中货架第一排的黄色乐事薯片，输出满足条件的黄色乐事薯片的bbox。返回格式：{\"name\": \"黄色乐事薯片\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost yellow Lay's package"
   },
-  "Lays乐事薯片青柠味": {
+  "Lay's乐事薯片青柠味": {
     "qwen3_prompt": "找到图片中货架第一排的绿色乐事薯片右边的青柠味乐事薯片，输出满足条件的青柠味乐事薯片的bbox。返回格式：{\"name\": \"青柠味乐事薯片\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost blue Lay's package"
   },
-  "Lays乐事薯片黄瓜味": {
+  "Lay's乐事薯片黄瓜味": {
     "qwen3_prompt": "找到图片中货架第一排的绿色乐事薯片，输出满足条件的绿色乐事薯片的bbox。返回格式：{\"name\": \"绿色乐事薯片\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost green Lay's package"
   },
@@ -354,5 +354,77 @@
   "雪碧罐装": {
     "qwen3_prompt": "找到图中顶层货架上所有的雪碧瓶，返回一个完整包含所有雪碧瓶的大bbox。最终返回格式：{\"name\": \"雪碧瓶\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost can"
+  },
+  "7喜瓶装": {
+    "qwen3_prompt": "找到图中顶层货架上所有的7喜瓶，返回一个完整包含所有7喜瓶的大bbox。最终返回格式：{\"name\": \"7喜瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost bottle"
+  },
+  "NFC桔汁": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "奥利奥香甜不腻": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "百事可乐瓶装": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "薄盐生抽": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "草原红太阳烧烤料香辣味": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "草原红太阳烧烤料原味": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "纯棉酒店大毛巾": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "高纤七色糙米": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "好友趣蜂蜜黄油味": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "健食力低脂香肠": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "慢碳十色糙米": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "外星人电解质水白桃口味0糖": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "外星人电解质水青柠口味": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "外星人电解质水青柠口味0糖": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "外星人电解质水西柚口味": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "外星人电解质水椰子口味": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
+  },
+  "蒸鱼豉油": {
+    "qwen3_prompt": "",
+    "sam3_prompt": ""
   }
 }
