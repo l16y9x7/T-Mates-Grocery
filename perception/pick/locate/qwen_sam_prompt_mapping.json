@@ -87,10 +87,6 @@
     "qwen3_prompt": "找到图中顶层货架上所有的可口可乐堆，返回一个完整包含所有可口可乐堆的大bbox。最终返回格式：{\"name\": \"可口可乐堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost coke"
   },
-  "雪碧罐装": {
-    "qwen3_prompt": "找到图中顶层货架上所有的雪碧瓶，返回一个完整包含所有雪碧瓶的大bbox。最终返回格式：{\"name\": \"雪碧瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost can"
-  },
   "可孚棉签": {
     "qwen3_prompt": "找到图片中最上层货架的圆形透明罐子排，输出满足条件的所有圆形透明罐子排的bbox。返回格式：{\"name\": \"圆形透明罐子排\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost row round container"
@@ -108,7 +104,7 @@
     "sam3_prompt": "frontmost bottle"
   },
   "吐司方方原味": {
-    "qwen3_prompt": "找到图片中货架第底排的面包包装袋，输出满足条件的面包包装袋的bbox。返回格式：{\"name\": \"面包包装袋\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架第底排的面包包装袋，输出满足条件的所有面包包装袋的bbox。返回格式：{\"name\": \"面包包装袋\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost cake package"
   },
   "呀！土豆番茄酱味": {
@@ -354,5 +350,9 @@
   "镇江香醋": {
     "qwen3_prompt": "找到图片中底层货架的恒顺香醋，输出满足条件的所有恒顺香醋的bbox，每一堆分开。返回格式：{\"name\": \"恒顺香醋\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost bottle"
+  },
+  "雪碧罐装": {
+    "qwen3_prompt": "找到图中顶层货架上所有的雪碧瓶，返回一个完整包含所有雪碧瓶的大bbox。最终返回格式：{\"name\": \"雪碧瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost can"
   }
 }
