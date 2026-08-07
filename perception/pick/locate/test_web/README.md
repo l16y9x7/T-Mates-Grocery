@@ -14,7 +14,7 @@ python server.py
 
 网页不再读取 `perception/test_data` 下的本地图片，也不在 test_web 内分别调用 Qwen3 和 SAM3。
 
-选择 SKU，设置 `name` 和 `hand` 后，点击“运行 Locate Debug 完整推理”。test_web 后端会代理调用：
+选择 SKU，设置 `task_type` 和 `hand` 后，点击“运行 Locate Debug 完整推理”。test_web 后端会代理调用：
 
 ```text
 POST http://192.168.130.59:8083/perception/pick/locate/debug
@@ -24,7 +24,7 @@ POST http://192.168.130.59:8083/perception/pick/locate/debug
 
 ```json
 {
-  "name": "SORTING",
+  "task_type": "SORTING",
   "product_name": "可口可乐",
   "hand": "left"
 }
@@ -36,7 +36,13 @@ Locate 服务自行调用相机快照接口。Debug 响应中的 `image_base64` 
 
 ## Prompt 管理
 
-`qwen_sam_prompt_mapping.json` 是网页和正式 Locate API 的唯一 Prompt 数据源。
+网页和 Locate API 会根据 `task_type` 读写不同 Prompt 文件：
+
+- `SORTING`：`qwen_sam_prompt_mapping.json`（现有 Prompt）
+- `SHORTAGE`：`qwen_sam_prompt_mapping_shortage.json`
+- `MISPLACED`：`qwen_sam_prompt_mapping_misplaced.json`
+
+切换网页顶部的 `task_type` 时，会自动加载对应文件中的 Prompt。
 
 - 选择已有 SKU 时，网页同时加载 `qwen3_prompt` 和 `sam3_prompt`。
 - “保存当前 Prompt”只更新对应 SKU 的 `qwen3_prompt`，保留已保存的 `sam3_prompt`。

@@ -40,7 +40,7 @@ python main.py
 
 ```json
 {
-  "name": "蒙牛纯牛奶",
+  "task_type": "SORTING",
   "product_name": "蒙牛纯牛奶",
   "hand": "left"
 }
@@ -50,7 +50,7 @@ python main.py
 
 ```json
 {
-  "name": "蒙牛纯牛奶",
+  "task_type": "SORTING",
   "product_name": "蒙牛纯牛奶",
   "hand": "left",
   "image_name": "record_20260804_141434_337936_rgb.jpg",
@@ -66,7 +66,7 @@ python main.py
 处理流程：
 
 1. 调用 `GET /sku/search_by_name` 查询完整 SKU 信息。
-2. 从 `qwen_sam_prompt_mapping.json` 读取该商品的 Qwen3 与 SAM3 Prompt。
+2. 根据 `task_type` 从对应 JSON 读取该商品的 Qwen3 与 SAM3 Prompt：SORTING 使用 `qwen_sam_prompt_mapping.json`，SHORTAGE 使用 `qwen_sam_prompt_mapping_shortage.json`，MISPLACED 使用 `qwen_sam_prompt_mapping_misplaced.json`。
 3. Qwen3 以 `temperature=0.5` 独立采样三次。
 4. 对跨采样 bbox 聚类，只保留至少由两个不同采样支持且匹配 IoU 严格大于 `0.85` 的目标；同一目标的坐标取支持框平均值。
 5. 将 Qwen `[0,1000]` 归一化 bbox 转为原图像素坐标，向外扩张 10% 后裁图。
@@ -100,6 +100,12 @@ python main.py
 
 ## Prompt 文件
 
+| task_type | Prompt JSON |
+|---|---|
+| `SORTING` | `qwen_sam_prompt_mapping.json`（保留现有配置） |
+| `SHORTAGE` | `qwen_sam_prompt_mapping_shortage.json` |
+| `MISPLACED` | `qwen_sam_prompt_mapping_misplaced.json` |
+
 `qwen_sam_prompt_mapping.json` 使用商品名称作为 key：
 
 ```json
@@ -125,7 +131,7 @@ python -m unittest -v test_main.py
 
 #### 正式接口测试
 
-`test_formal_api.py` 的命令行只接收 `name`、`product_name`、`hand` 三个必填输入：
+`request_formal_api.py` 的命令行只接收 `task_type`、`product_name`、`hand` 三个必填输入：
 
 ```powershell
 python test_formal_api.py SORTING "可口可乐" left
@@ -141,7 +147,7 @@ python test_formal_api.py SORTING "可口可乐" left --output formal_result.jso
 
 #### Debug 推理与结果图
 
-`test_inference.py` 使用与正式接口相同的三个必填输入 `name`、`product_name`、`hand`，并按以下顺序查找测试图片：
+`test_inference.py` 使用与正式接口相同的三个必填输入 `task_type`、`product_name`、`hand`，并按以下顺序查找测试图片：
 
 ```text
 product_name

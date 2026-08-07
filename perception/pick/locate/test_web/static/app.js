@@ -1,5 +1,6 @@
 const imageSelect = document.querySelector("#imageSelect");
-const requestName = document.querySelector("#requestName");
+const requestTaskType =
+  document.querySelector("#requestTaskType") || document.querySelector("#requestName");
 const requestHand = document.querySelector("#requestHand");
 const qwenPrompt = document.querySelector("#qwenPrompt");
 const qwenSku = document.querySelector("#qwenSku");
@@ -46,10 +47,12 @@ async function loadImages() {
 }
 
 async function loadSkus() {
-  const data = await api("/api/skus");
+  const taskType = requestTaskType?.value || "SORTING";
+  const data = await api(`/api/skus?task_type=${encodeURIComponent(taskType)}`);
   const options = document.querySelector("#qwenSkuOptions");
   options.replaceChildren();
   promptPairsBySku.clear();
+  loadedPromptSku = "";
   data.skus.forEach(({ name, qwen3_prompt: qwen3Prompt, sam3_prompt: sam3Prompt }) => {
     const option = document.createElement("option");
     option.value = name;
@@ -329,7 +332,11 @@ async function saveQwenPrompt() {
     const result = await api("/api/qwen-prompts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sku_name: qwenSku.value, prompt: qwenPrompt.value }),
+      body: JSON.stringify({
+        task_type: requestTaskType.value,
+        sku_name: qwenSku.value,
+        prompt: qwenPrompt.value,
+      }),
     });
     promptPairsBySku.set(result.sku_name, {
       qwen3_prompt: result.qwen3_prompt,
@@ -362,6 +369,7 @@ async function saveSamPromptPair() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        task_type: requestTaskType.value,
         sku_name: qwenSku.value,
         qwen3_prompt: qwenPrompt.value,
         sam3_prompt: samPrompt.value,
@@ -392,11 +400,14 @@ async function runQwen() {
   setStatus("#qwenStatus", "运行中…", "running");
   setStatus("#samStatus", "运行中…", "running");
   try {
+    if (!requestTaskType) {
+      throw new Error("页面版本不一致，请按 Ctrl+F5 强制刷新");
+    }
     const result = await api("/api/locate-debug", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: requestName.value,
+        task_type: requestTaskType.value,
         product_name: qwenSku.value,
         hand: requestHand.value,
         qwen3_prompt: qwenPrompt.value,
@@ -605,6 +616,14 @@ document.querySelector("#runQwen").addEventListener("click", runQwen);
 document.querySelector("#saveQwenPrompt").addEventListener("click", saveQwenPrompt);
 document.querySelector("#saveSamPrompt").addEventListener("click", saveSamPromptPair);
 document.querySelector("#runSam").addEventListener("click", runSam);
+requestTaskType?.addEventListener("change", () => {
+  loadSkus()
+    .then(() => loadPromptPairForSelectedSku())
+    .catch((error) => {
+      setStatus("#savePromptStatus", error.message, "error");
+      setStatus("#saveSamPromptStatus", error.message, "error");
+    });
+});
 qwenSku.addEventListener("input", () => {
   syncSamPairedSku();
   setStatus("#savePromptStatus", "未保存");

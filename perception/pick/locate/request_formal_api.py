@@ -15,14 +15,14 @@ DEFAULT_LOCATE_URL = os.getenv(
 
 
 def request_locate(
-    name: str,
+    task_type: str,
     product_name: str,
     hand: str,
     url: str = DEFAULT_LOCATE_URL,
     timeout: float = 600,
 ) -> dict:
     payload = {
-        "name": name,
+        "task_type": task_type,
         "product_name": product_name,
         "hand": hand,
     }
@@ -48,7 +48,7 @@ def request_locate(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="请求正式商品定位接口")
-    parser.add_argument("name", help="请求的 name，例如 SORTING")
+    parser.add_argument("task_type", help="请求的 task_type，例如 SORTING")
     parser.add_argument("product_name", help="完整商品名称，例如 可口可乐")
     parser.add_argument("hand", help="使用的手，例如 left 或 right")
     parser.add_argument("--url", default=DEFAULT_LOCATE_URL, help="正式接口地址")
@@ -60,7 +60,7 @@ def main() -> None:
     args = parse_args()
     try:
         result = request_locate(
-            args.name.strip(),
+            args.task_type.strip(),
             args.product_name.strip(),
             args.hand.strip(),
             url=args.url,

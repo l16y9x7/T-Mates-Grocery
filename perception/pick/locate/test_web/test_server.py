@@ -26,7 +26,7 @@ class PromptMappingTest(unittest.TestCase):
         ) as post_mock:
             result = server.run_locate_debug(
                 server.LocateDebugProxyRequest(
-                    name="SORTING",
+                    task_type="SORTING",
                     product_name="可口可乐",
                     hand="left",
                 )
@@ -36,7 +36,7 @@ class PromptMappingTest(unittest.TestCase):
         post_mock.assert_called_once_with(
             server.LOCATE_DEBUG_URL,
             json={
-                "name": "SORTING",
+                "task_type": "SORTING",
                 "product_name": "可口可乐",
                 "hand": "left",
             },
@@ -69,6 +69,7 @@ class PromptMappingTest(unittest.TestCase):
             ):
                 result = server.save_qwen_prompt(
                     server.SaveQwenPromptRequest(
+                        task_type="SORTING",
                         sku_name="蒙牛纯牛奶",
                         prompt="新 Qwen",
                     )
@@ -98,6 +99,7 @@ class PromptMappingTest(unittest.TestCase):
             ):
                 server.save_qwen_prompt(
                     server.SaveQwenPromptRequest(
+                        task_type="SORTING",
                         sku_name="新商品",
                         prompt="Qwen Prompt",
                     )

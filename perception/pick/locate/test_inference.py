@@ -219,16 +219,16 @@ def save_qwen_visualization(
 
 
 def run_test_inference(
-    name: str,
+    task_type: str,
     product_name: str,
     hand: str,
     output_directory: Path = DEFAULT_RESULT_DIRECTORY,
 ) -> dict[str, dict[str, Any]]:
-    normalized_name = name.strip()
+    normalized_task_type = task_type.strip()
     normalized_product_name = product_name.strip()
     normalized_hand = hand.strip()
-    if not normalized_name or not normalized_product_name or not normalized_hand:
-        raise RuntimeError("name、product_name、hand 都不能为空")
+    if not normalized_task_type or not normalized_product_name or not normalized_hand:
+        raise RuntimeError("task_type、product_name、hand 都不能为空")
 
     product = lookup_sku_by_name(normalized_product_name)
     image_paths = find_test_images(product["sku_id"])
@@ -238,7 +238,7 @@ def run_test_inference(
             response = requests.post(
                 f"{LOCATE_API_URL}/perception/pick/locate/debug",
                 json={
-                    "name": normalized_name,
+                    "task_type": normalized_task_type,
                     "product_name": product["name"],
                     "hand": normalized_hand,
                     "image_name": image_path.name,
@@ -294,7 +294,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="使用正式请求参数和自动匹配的本地图片调用 Debug Locate API"
     )
-    parser.add_argument("name", help="正式请求的 name 字段，例如 SORTING")
+    parser.add_argument("task_type", help="正式请求的 task_type 字段，例如 SORTING")
     parser.add_argument("product_name", help="完整商品名称，例如 蒙牛纯牛奶")
     parser.add_argument("hand", help="正式请求的 hand 字段，例如 left 或 right")
     parser.add_argument(
@@ -315,7 +315,7 @@ def main_cli() -> None:
     args = parse_args()
     try:
         results = run_test_inference(
-            args.name,
+            args.task_type,
             args.product_name,
             args.hand,
             output_directory=args.output_dir,

@@ -72,7 +72,7 @@ class LocateLogicTest(unittest.TestCase):
 
     def test_formal_request_without_image_returns_400_when_camera_fails(self) -> None:
         request = main.LocateRequest(
-            name="SORTING",
+            task_type="SORTING",
             product_name="可口可乐",
             hand="left",
         )
@@ -467,7 +467,7 @@ class LocateLogicTest(unittest.TestCase):
             ):
                 result = main.locate_product_debug(
                     main.LocateRequest(
-                        name="NFC桔汁",
+                        task_type="SORTING",
                         product_name="NFC桔汁",
                         hand="left",
                     )
@@ -494,7 +494,7 @@ class LocateLogicTest(unittest.TestCase):
         image_buffer = io.BytesIO()
         Image.new("RGB", (20, 10), "white").save(image_buffer, format="JPEG")
         request = main.LocateRequest(
-            name="NFC桔汁",
+            task_type="SORTING",
             product_name="NFC桔汁",
             hand="left",
             image_name="mapped_rgb.jpg",
@@ -532,7 +532,7 @@ class LocateLogicTest(unittest.TestCase):
         image_buffer = io.BytesIO()
         Image.new("RGB", (20, 10), "white").save(image_buffer, format="JPEG")
         request = main.LocateRequest(
-            name="SORTING",
+            task_type="SORTING",
             product_name="雪碧罐装",
             hand="left",
             image_name="sprite.jpg",

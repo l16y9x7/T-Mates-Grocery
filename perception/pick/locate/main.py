@@ -24,6 +24,12 @@ from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent
 PROMPT_MAPPING_PATH = ROOT / "qwen_sam_prompt_mapping.json"
+SUPPORTED_TASK_TYPES = ("SORTING", "SHORTAGE", "MISPLACED")
+PROMPT_MAPPING_PATHS = {
+    "SORTING": PROMPT_MAPPING_PATH,
+    "SHORTAGE": ROOT / "qwen_sam_prompt_mapping_shortage.json",
+    "MISPLACED": ROOT / "qwen_sam_prompt_mapping_misplaced.json",
+}
 MONITOR_IMAGE_DIR = Path(
     os.getenv("LOCATE_MONITOR_IMAGE_DIR", str(ROOT / "monitor_images"))
 )
@@ -274,17 +280,42 @@ def lookup_sku_by_name(name: str) -> dict[str, Any]:
     return product
 
 
-def load_prompt_pair(name: str) -> tuple[str, str]:
+def normalize_task_type(task_type: str) -> str:
+    normalized = task_type.strip().upper()
+    if normalized not in PROMPT_MAPPING_PATHS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"task_type 只能是: {', '.join(SUPPORTED_TASK_TYPES)}",
+        )
+    return normalized
+
+
+def prompt_mapping_path(task_type: str) -> Path:
+    normalized = normalize_task_type(task_type)
+    if normalized == "SORTING":
+        return PROMPT_MAPPING_PATH
+    return PROMPT_MAPPING_PATHS[normalized]
+
+
+def load_prompt_pair(name: str, task_type: str = "SORTING") -> tuple[str, str]:
+    normalized_task_type = normalize_task_type(task_type)
+    mapping_path = prompt_mapping_path(normalized_task_type)
     try:
-        mapping = json.loads(PROMPT_MAPPING_PATH.read_text(encoding="utf-8"))
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
     except FileNotFoundError as error:
-        raise HTTPException(status_code=500, detail="Prompt 配对文件不存在") from error
+        raise HTTPException(
+            status_code=500,
+            detail=f"{normalized_task_type} Prompt 配对文件不存在",
+        ) from error
     except (OSError, json.JSONDecodeError) as error:
         raise HTTPException(status_code=500, detail=f"读取 Prompt 配对失败: {error}") from error
 
     pair = mapping.get(name) if isinstance(mapping, dict) else None
     if not isinstance(pair, dict):
-        raise HTTPException(status_code=400, detail=f"商品尚未配置配对 Prompt: {name}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"{normalized_task_type} 尚未配置商品 Prompt: {name}",
+        )
     qwen_prompt = pair.get("qwen3_prompt")
     sam_prompt = pair.get("sam3_prompt")
     if not isinstance(qwen_prompt, str) or not qwen_prompt.strip():
@@ -756,6 +787,7 @@ def locate_product_in_image(
     product: dict[str, Any],
     image_path: Path,
     *,
+    task_type: str = "SORTING",
     qwen_prompt_override: str | None = None,
     sam_prompt_override: str | None = None,
 ) -> LocateDebugResponse:
@@ -767,7 +799,10 @@ def locate_product_in_image(
     qwen_prompt = (qwen_prompt_override or "").strip()
     sam_prompt = (sam_prompt_override or "").strip()
     if not qwen_prompt or not sam_prompt:
-        stored_qwen_prompt, stored_sam_prompt = load_prompt_pair(canonical_name)
+        stored_qwen_prompt, stored_sam_prompt = load_prompt_pair(
+            canonical_name,
+            task_type,
+        )
         qwen_prompt = qwen_prompt or stored_qwen_prompt
         sam_prompt = sam_prompt or stored_sam_prompt
     qwen_bboxes = get_stable_qwen_bboxes(qwen_prompt, image_path)
@@ -874,18 +909,18 @@ def locate_product_debug(
     allow_prompt_overrides: bool = False,
 ) -> LocateDebugResponse:
     product_name = request.product_name.strip()
-    if request.task_type == "SHORTAGE":
-        raise HTTPException(status_code=400, detail="货架上的locate当前只支持SORTING和MISPLACED")
+    task_type = normalize_task_type(request.task_type)
     if not product_name:
         raise HTTPException(status_code=400, detail="product_name 不能为空")
     product = lookup_sku_by_name(product_name)
     prompt_overrides = (
         {
+            "task_type": task_type,
             "qwen_prompt_override": request.qwen3_prompt,
             "sam_prompt_override": request.sam3_prompt,
         }
         if allow_prompt_overrides
-        else {}
+        else {"task_type": task_type}
     )
     if request.image_base64 is None:
         if request.image_name is not None:

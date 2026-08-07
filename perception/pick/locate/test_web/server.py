@@ -19,6 +19,12 @@ STATIC_DIR = ROOT / "static"
 RGB_DIR = ROOT.parents[2] / "test_data" / "2026-08-04"
 SKU_CATALOG_PATH = ROOT.parents[2] / "sku" / "products.json"
 PROMPT_PAIR_MAPPING_PATH = ROOT.parent / "qwen_sam_prompt_mapping.json"
+SUPPORTED_TASK_TYPES = ("SORTING", "SHORTAGE", "MISPLACED")
+PROMPT_PAIR_MAPPING_PATHS = {
+    "SORTING": PROMPT_PAIR_MAPPING_PATH,
+    "SHORTAGE": ROOT.parent / "qwen_sam_prompt_mapping_shortage.json",
+    "MISPLACED": ROOT.parent / "qwen_sam_prompt_mapping_misplaced.json",
+}
 
 QWEN3_URL = os.getenv(
     "QWEN3_URL",
@@ -52,18 +58,20 @@ class DirectQwenRequest(BaseModel):
 
 
 class SaveQwenPromptRequest(BaseModel):
+    task_type: str
     sku_name: str
     prompt: str
 
 
 class SavePromptPairRequest(BaseModel):
+    task_type: str
     sku_name: str
     qwen3_prompt: str
     sam3_prompt: str
 
 
 class LocateDebugProxyRequest(BaseModel):
-    name: str
+    task_type: str
     product_name: str
     hand: str
     qwen3_prompt: str | None = None
@@ -110,8 +118,9 @@ def list_images() -> dict:
 
 
 @app.get("/api/skus")
-def list_skus() -> dict:
-    prompt_mapping = load_prompt_pair_mapping()
+def list_skus(task_type: str = "SORTING") -> dict:
+    normalized_task_type = normalize_task_type(task_type)
+    prompt_mapping = load_prompt_pair_mapping(normalized_task_type)
     skus = []
     for sku in load_skus():
         prompt_pair = prompt_mapping.get(sku["name"])
@@ -126,11 +135,12 @@ def list_skus() -> dict:
                 ),
             }
         )
-    return {"skus": skus}
+    return {"task_type": normalized_task_type, "skus": skus}
 
 
 @app.post("/api/qwen-prompts")
 def save_qwen_prompt(request: SaveQwenPromptRequest) -> dict:
+    task_type = normalize_task_type(request.task_type)
     sku_name = request.sku_name.strip()
     prompt = request.prompt.strip()
     if not sku_name:
@@ -142,7 +152,7 @@ def save_qwen_prompt(request: SaveQwenPromptRequest) -> dict:
     if sku_name not in valid_names:
         raise HTTPException(status_code=400, detail=f"商品库中不存在 SKU：{sku_name}")
 
-    mapping = load_prompt_pair_mapping()
+    mapping = load_prompt_pair_mapping(task_type)
     current_pair = mapping.get(sku_name)
     if current_pair is None or not current_pair["sam3_prompt"].strip():
         raise HTTPException(
@@ -155,8 +165,9 @@ def save_qwen_prompt(request: SaveQwenPromptRequest) -> dict:
         "qwen3_prompt": prompt,
         "sam3_prompt": current_pair["sam3_prompt"],
     }
-    write_json_mapping(PROMPT_PAIR_MAPPING_PATH, mapping, "配对 Prompt")
+    write_json_mapping(prompt_mapping_path(task_type), mapping, f"{task_type} 配对 Prompt")
     return {
+        "task_type": task_type,
         "sku_name": sku_name,
         "prompt": prompt,
         "qwen3_prompt": prompt,
@@ -167,6 +178,7 @@ def save_qwen_prompt(request: SaveQwenPromptRequest) -> dict:
 
 @app.post("/api/prompt-pairs")
 def save_prompt_pair(request: SavePromptPairRequest) -> dict:
+    task_type = normalize_task_type(request.task_type)
     sku_name = request.sku_name.strip()
     qwen3_prompt = request.qwen3_prompt.strip()
     sam3_prompt = request.sam3_prompt.strip()
@@ -181,14 +193,15 @@ def save_prompt_pair(request: SavePromptPairRequest) -> dict:
     if sku_name not in valid_names:
         raise HTTPException(status_code=400, detail=f"商品库中不存在 SKU：{sku_name}")
 
-    mapping = load_prompt_pair_mapping()
+    mapping = load_prompt_pair_mapping(task_type)
     overwritten = sku_name in mapping
     mapping[sku_name] = {
         "qwen3_prompt": qwen3_prompt,
         "sam3_prompt": sam3_prompt,
     }
-    write_json_mapping(PROMPT_PAIR_MAPPING_PATH, mapping, "配对 Prompt")
+    write_json_mapping(prompt_mapping_path(task_type), mapping, f"{task_type} 配对 Prompt")
     return {
+        "task_type": task_type,
         "sku_name": sku_name,
         "qwen3_prompt": qwen3_prompt,
         "sam3_prompt": sam3_prompt,
@@ -199,12 +212,12 @@ def save_prompt_pair(request: SavePromptPairRequest) -> dict:
 @app.post("/api/locate-debug")
 def run_locate_debug(request: LocateDebugProxyRequest) -> dict:
     payload = {
-        "name": request.name.strip(),
+        "task_type": request.task_type.strip(),
         "product_name": request.product_name.strip(),
         "hand": request.hand.strip(),
     }
     if not all(payload.values()):
-        raise HTTPException(status_code=400, detail="name、product_name、hand 都不能为空")
+        raise HTTPException(status_code=400, detail="task_type、product_name、hand 都不能为空")
     if request.qwen3_prompt is not None:
         payload["qwen3_prompt"] = request.qwen3_prompt
     if request.sam3_prompt is not None:
@@ -500,11 +513,29 @@ def load_skus() -> list[dict]:
     return skus
 
 
-def load_prompt_pair_mapping() -> dict[str, dict[str, str]]:
-    if not PROMPT_PAIR_MAPPING_PATH.exists():
+def normalize_task_type(task_type: str) -> str:
+    normalized = task_type.strip().upper()
+    if normalized not in PROMPT_PAIR_MAPPING_PATHS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"task_type 只能是: {', '.join(SUPPORTED_TASK_TYPES)}",
+        )
+    return normalized
+
+
+def prompt_mapping_path(task_type: str) -> Path:
+    normalized = normalize_task_type(task_type)
+    if normalized == "SORTING":
+        return PROMPT_PAIR_MAPPING_PATH
+    return PROMPT_PAIR_MAPPING_PATHS[normalized]
+
+
+def load_prompt_pair_mapping(task_type: str = "SORTING") -> dict[str, dict[str, str]]:
+    mapping_path = prompt_mapping_path(task_type)
+    if not mapping_path.exists():
         return {}
     try:
-        mapping = json.loads(PROMPT_PAIR_MAPPING_PATH.read_text(encoding="utf-8"))
+        mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise HTTPException(
             status_code=500,

@@ -17,8 +17,12 @@
         <div class="request-controls">
           <a href="/qwen-debug" class="engine-tag">Qwen3 独立测试</a>
           <label class="image-picker">
-            <span>name</span>
-            <input id="requestName" value="SORTING" />
+            <span>task_type</span>
+            <select id="requestTaskType">
+              <option value="SORTING">SORTING</option>
+              <option value="SHORTAGE">SHORTAGE</option>
+              <option value="MISPLACED">MISPLACED</option>
+            </select>
           </label>
           <label class="image-picker">
             <span>hand</span>
@@ -186,6 +190,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260807-task-prompts"></script>
   </body>
 </html>
