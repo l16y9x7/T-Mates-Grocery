@@ -27,10 +27,23 @@ PROMPT_MAPPING_PATH = ROOT / "qwen_sam_prompt_mapping.json"
 MONITOR_IMAGE_DIR = Path(
     os.getenv("LOCATE_MONITOR_IMAGE_DIR", str(ROOT / "monitor_images"))
 )
-CAMERA_SNAPSHOT_URL = os.getenv(
-    "CAMERA_SNAPSHOT_URL",
-    "http://192.168.130.50:8085/camera/snapshot?camera=left_wrist&type=color",
+LEFT_CAMERA_SNAPSHOT_URL = os.getenv(
+    "LEFT_CAMERA_SNAPSHOT_URL",
+    os.getenv(
+        "CAMERA_SNAPSHOT_URL",
+        "http://192.168.130.50:8085/camera/snapshot?camera=left_wrist&type=color",
+    ),
 )
+RIGHT_CAMERA_SNAPSHOT_URL = os.getenv(
+    "RIGHT_CAMERA_SNAPSHOT_URL",
+    "http://192.168.130.50:8085/camera/snapshot?camera=right_wrist&type=color",
+)
+# 保留旧常量名称，兼容现有左手相机配置与测试。
+CAMERA_SNAPSHOT_URL = LEFT_CAMERA_SNAPSHOT_URL
+CAMERA_SNAPSHOT_URLS = {
+    "left": LEFT_CAMERA_SNAPSHOT_URL,
+    "right": RIGHT_CAMERA_SNAPSHOT_URL,
+}
 CAMERA_SNAPSHOT_TIMEOUT_SECONDS = float(
     os.getenv("CAMERA_SNAPSHOT_TIMEOUT_SECONDS", "5")
 )
@@ -123,9 +136,12 @@ class LocateResponse(BaseModel):
     image_path: str
 
 
-def get_latest_rgb() -> Path:
+def get_latest_rgb(hand: str = "left") -> Path:
     """只读取相机快照接口；不可用或内容无效时返回 HTTP 400。"""
-    camera_snapshot = fetch_camera_snapshot()
+    normalized_hand = hand.strip().lower()
+    if normalized_hand not in CAMERA_SNAPSHOT_URLS:
+        raise HTTPException(status_code=400, detail="hand 只能是 left 或 right")
+    camera_snapshot = fetch_camera_snapshot(normalized_hand)
     if camera_snapshot is not None:
         return camera_snapshot
     raise HTTPException(
@@ -134,11 +150,14 @@ def get_latest_rgb() -> Path:
     )
 
 
-def fetch_camera_snapshot() -> Path | None:
+def fetch_camera_snapshot(hand: str = "left") -> Path | None:
     """获取并验证相机快照；任何读取错误都返回 None。"""
+    camera_url = CAMERA_SNAPSHOT_URLS.get(hand.strip().lower())
+    if camera_url is None:
+        raise HTTPException(status_code=400, detail="hand 只能是 left 或 right")
     try:
         response = requests.get(
-            CAMERA_SNAPSHOT_URL,
+            camera_url,
             timeout=CAMERA_SNAPSHOT_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
@@ -220,8 +239,8 @@ def uploaded_image_name(image_name: str | None) -> str:
 
 
 @app.get("/video/frame")
-def get_video_frame() -> FileResponse:
-    image_path = get_latest_rgb()
+def get_video_frame(hand: str = "left") -> FileResponse:
+    image_path = get_latest_rgb(hand)
     media_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
     return FileResponse(image_path, media_type=media_type)
 
@@ -872,7 +891,7 @@ def locate_product_debug(
                 status_code=400,
                 detail="指定 image_name 时必须同时提供 image_base64",
             )
-        image_path = get_latest_rgb()
+        image_path = get_latest_rgb(request.hand)
         try:
             return locate_product_in_image(product, image_path, **prompt_overrides)
         except HTTPException as error:
