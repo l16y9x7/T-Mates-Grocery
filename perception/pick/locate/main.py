@@ -874,8 +874,8 @@ def locate_product_debug(
     allow_prompt_overrides: bool = False,
 ) -> LocateDebugResponse:
     product_name = request.product_name.strip()
-    if request.task_type != "SORTING":
-        raise HTTPException(status_code=400, detail="当前只支持SORTING")
+    if request.task_type == "SHORTAGE":
+        raise HTTPException(status_code=400, detail="货架上的locate当前只支持SORTING和MISPLACED")
     if not product_name:
         raise HTTPException(status_code=400, detail="product_name 不能为空")
     product = lookup_sku_by_name(product_name)
