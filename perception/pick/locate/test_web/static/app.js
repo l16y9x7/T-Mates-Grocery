@@ -6,6 +6,7 @@ const qwenSku = document.querySelector("#qwenSku");
 const samPrompt = document.querySelector("#samPrompt");
 const rawQwenCanvas = document.querySelector("#rawQwenCanvas");
 const qwenCanvas = document.querySelector("#qwenCanvas");
+const rawSamCanvas = document.querySelector("#rawSamCanvas");
 const samCanvas = document.querySelector("#samCanvas");
 const cropDetectionSelect = document.querySelector("#cropDetectionSelect");
 
@@ -406,6 +407,7 @@ async function runQwen() {
     latestImageMediaType = result.image_media_type || "image/jpeg";
     const rawQwenBboxes = result.raw_qwen_bboxes || [];
     const qwenBboxes = result.qwen_bboxes || [];
+    const rawSamInstances = result.raw_sam_instances || [];
     const instances = result.instances || [];
 
     await drawBase(rawQwenCanvas);
@@ -450,6 +452,10 @@ async function runQwen() {
       {
         ...result,
         image_base64: `<base64 ${result.image_base64.length} chars>`,
+        raw_sam_instances: rawSamInstances.map((instance) => ({
+          ...instance,
+          mask: `<base64 ${instance.mask.length} chars>`,
+        })),
         instances: instances.map((instance) => ({
           ...instance,
           mask: `<base64 ${instance.mask.length} chars>`,
@@ -458,6 +464,26 @@ async function runQwen() {
       null,
       2,
     );
+
+    await drawBase(rawSamCanvas);
+    for (let index = 0; index < rawSamInstances.length; index += 1) {
+      await drawMask(
+        rawSamCanvas,
+        rawSamInstances[index].mask,
+        colors[index % colors.length],
+      );
+    }
+    const rawSamContext = rawSamCanvas.getContext("2d");
+    rawSamInstances.forEach((instance, index) => {
+      const score = Number(instance.score || 0).toFixed(3);
+      drawBox(
+        rawSamContext,
+        instance.bbox,
+        `#${index + 1} ${score}`,
+        colors[index % colors.length],
+      );
+    });
+    document.querySelector("#rawSamEmpty").hidden = true;
 
     await drawBase(samCanvas);
     for (let index = 0; index < instances.length; index += 1) {

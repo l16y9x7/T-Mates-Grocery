@@ -45,6 +45,12 @@ class PromptRequest(BaseModel):
     prompt: str
 
 
+class DirectQwenRequest(BaseModel):
+    prompt: str
+    image_base64: str
+    temperature: float = Field(default=0.5, ge=0, le=2)
+
+
 class SaveQwenPromptRequest(BaseModel):
     sku_name: str
     prompt: str
@@ -90,6 +96,11 @@ class QwenResponse(BaseModel):
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/qwen-debug")
+def qwen_debug_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "qwen_debug.html")
 
 
 @app.get("/api/images")
@@ -271,7 +282,57 @@ def run_qwen(request: PromptRequest) -> QwenResponse:
     return QwenResponse(temperature=QWEN_TEMPERATURE, samples=samples)
 
 
-def call_qwen(prompt: str, media_type: str, image_base64: str) -> str:
+@app.post("/api/qwen-direct")
+def run_qwen_direct(request: DirectQwenRequest) -> dict:
+    prompt = request.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Qwen Prompt 不能为空")
+
+    encoded = request.image_base64.split(",", 1)[-1]
+    try:
+        image_bytes = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="粘贴的图片不是有效 base64") from error
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="请先粘贴图片")
+    if len(image_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="图片不能超过 20 MB")
+
+    header = request.image_base64.split(",", 1)[0]
+    media_match = re.match(r"data:(image/(?:jpeg|png|webp));base64", header)
+    media_type = media_match.group(1) if media_match else "image/jpeg"
+    try:
+        raw_output = call_qwen(
+            prompt,
+            media_type,
+            encoded,
+            temperature=request.temperature,
+        )
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail=f"Qwen3 请求失败: {error}") from error
+    try:
+        detections = parse_qwen_json(raw_output)
+        parse_error = None
+    except (TypeError, ValueError) as error:
+        detections = []
+        parse_error = str(error)
+    return {
+        "prompt_used": prompt,
+        "temperature": request.temperature,
+        "detections": detections,
+        "raw_output": raw_output,
+        "parse_error": parse_error,
+    }
+
+
+def call_qwen(
+    prompt: str,
+    media_type: str,
+    image_base64: str,
+    *,
+    temperature: float = QWEN_TEMPERATURE,
+) -> str:
+    print(f"[Qwen3 Direct] prompt before request:\n{prompt}", flush=True)
     response = requests.post(
         QWEN3_URL,
         json={
@@ -290,7 +351,7 @@ def call_qwen(prompt: str, media_type: str, image_base64: str) -> str:
                     ],
                 }
             ],
-            "temperature": QWEN_TEMPERATURE,
+            "temperature": temperature,
             "max_tokens": 1024,
         },
         timeout=120,

@@ -15,6 +15,7 @@
           <p class="subtitle">Qwen3-VL 粗定位后裁图，再用 SAM3 完成局部精分割。</p>
         </div>
         <div class="request-controls">
+          <a href="/qwen-debug" class="engine-tag">Qwen3 独立测试</a>
           <label class="image-picker">
             <span>name</span>
             <input id="requestName" value="SORTING" />
@@ -158,6 +159,17 @@
             在 Qwen Crop 上运行 SAM3
           </button>
 
+          <div class="result-title canvas-title">
+            <span>SAM3 原始 bbox / mask（过滤前）</span>
+          </div>
+          <div class="canvas-frame">
+            <canvas id="rawSamCanvas"></canvas>
+            <div id="rawSamEmpty" class="canvas-empty">运行 Locate Debug 获取 SAM3 原始实例</div>
+          </div>
+
+          <div class="result-title canvas-title">
+            <span>SAM3 bbox / mask（过滤后）</span>
+          </div>
           <div class="canvas-frame">
             <canvas id="samCanvas"></canvas>
             <div id="samEmpty" class="canvas-empty">运行 Locate Debug 获取原图与最终 SAM3 实例</div>

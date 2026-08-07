@@ -110,6 +110,7 @@ class LocateDebugResponse(BaseModel):
     sam3_prompt_used: str | None = None
     raw_qwen_bboxes: list[RawQwenBBoxRecord] = Field(default_factory=list)
     qwen_bboxes: list[QwenBBoxRecord] = Field(default_factory=list)
+    raw_sam_instances: list[LocatedInstance] = Field(default_factory=list)
     instances: list[LocatedInstance] = Field(default_factory=list)
     error: str | None = None
     error_status_code: int | None = None
@@ -792,6 +793,7 @@ def locate_product_in_image(
     if not located_instances:
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
 
+    raw_sam_instances = list(located_instances)
     located_instances = keep_frontmost_in_overlap_chains(located_instances)
     located_instances = drop_smallest_mask_area_outlier(located_instances)
 
@@ -807,6 +809,7 @@ def locate_product_in_image(
         sam3_prompt_used=sam_prompt,
         raw_qwen_bboxes=raw_qwen_bbox_records,
         qwen_bboxes=qwen_bbox_records,
+        raw_sam_instances=raw_sam_instances,
         instances=located_instances,
     )
 
