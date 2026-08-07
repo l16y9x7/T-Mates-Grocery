@@ -83,7 +83,7 @@ app = FastAPI(title="Sorting Pick Locate", version="2.0.0")
 
 
 class LocateRequest(BaseModel):
-    name: str
+    task_type: str
     product_name: str
     hand: str
     image_name: str | None = None
@@ -874,6 +874,8 @@ def locate_product_debug(
     allow_prompt_overrides: bool = False,
 ) -> LocateDebugResponse:
     product_name = request.product_name.strip()
+    if request.task_type != "SORTING":
+        raise HTTPException(status_code=400, detail="当前只支持SORTING")
     if not product_name:
         raise HTTPException(status_code=400, detail="product_name 不能为空")
     product = lookup_sku_by_name(product_name)
