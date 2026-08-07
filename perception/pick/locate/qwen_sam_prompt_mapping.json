@@ -156,7 +156,7 @@
     "sam3_prompt": "frontmost cardboard box"
   },
   "妙芙绵醇奶油味": {
-    "qwen3_prompt": "找到图片中货架第二排的橙色妙芙盒子右边的蓝色妙芙盒子，输出满足条件的所有蓝色妙芙盒子的bbox。返回格式：{\"name\": \"蓝色妙芙盒子\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架第二排的橙色奶油味妙芙盒子，输出满足条件的所有橙色奶油味妙芙盒子的bbox。返回格式：{\"name\": \"橙色奶油味妙芙盒子\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost cardboard box"
   },
   "妙芙香芋牛奶味": {
