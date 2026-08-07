@@ -105,7 +105,7 @@
   },
   "吐司方方原味": {
     "qwen3_prompt": "找到图片中货架第底排的面包包装袋，输出满足条件的所有面包包装袋的bbox。返回格式：{\"name\": \"面包包装袋\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost cake package"
+    "sam3_prompt": "frontmost white cake package"
   },
   "呀！土豆番茄酱味": {
     "qwen3_prompt": "找到图片中货架最上排的呀土豆包装袋，输出满足条件的呀土豆包装袋的bbox。返回格式：{\"name\": \"呀土豆包装袋\", \"bbox\": [x1, y1, x2, y2]}",
