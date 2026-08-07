@@ -3,7 +3,7 @@
 这份文档给服务器部署同事使用。当前服务的作用是：
 
 ```text
-输入：一张 JPG/PNG 小票图片
+输入：1-4 张同一张小票的 JPG/PNG 图片
 输出：SKU 标准商品名和标准货位；精确未命中时用编辑距离兜底，距离过大才返回 404
 ```
 
@@ -23,10 +23,18 @@ GET /health
 POST /receipt/parse
 ```
 
-请求使用 `multipart/form-data` 上传图片：
+请求使用 `multipart/form-data` 上传图片。兼容旧版单图字段 `file`，
+新版多帧字段为可重复的 `files`，最多 4 张，且必须属于同一张小票：
 
 ```bash
 curl -F "file=@receipt.jpg" \
+  "http://<host>:<port>/receipt/parse"
+```
+
+```bash
+curl -F "files=@frame1.jpg" \
+     -F "files=@frame2.jpg" \
+     -F "files=@frame3.jpg" \
   "http://<host>:<port>/receipt/parse"
 ```
 

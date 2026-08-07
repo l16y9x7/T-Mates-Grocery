@@ -48,9 +48,9 @@ CLI 支持 JPG、PNG 和 PDF。PDF 会先在本地临时目录渲染成图片，
 ## HTTP API 调用链
 
 ```text
-curl -F "file=@receipt.jpg" http://host:port/receipt/parse
-  -> server.py 接收上传文件
-  -> media.image_bytes_to_data_url()
+curl -F "files=@frame1.jpg" -F "files=@frame2.jpg" http://host:port/receipt/parse
+  -> server.py 接收 1-4 张同一张小票图片，兼容旧 file 字段
+  -> media.image_bytes_to_data_url() 逐张转成 data URL
   -> service.recognize_data_urls()
   -> api.OpenAICompatibleClient.create_chat_completion()
   -> schema.parse_receipt_result()
@@ -59,7 +59,9 @@ curl -F "file=@receipt.jpg" http://host:port/receipt/parse
   -> HTTP 响应返回 SKU 的 name/locations 数组，或 SKU_NOT_FOUND 404
 ```
 
-HTTP API 第一版只接收 JPG/PNG 图片，不接收 PDF。这样部署依赖更少，也更符合后续机器人或其他程序上传图片的方式。
+HTTP API 接收 JPG/PNG 图片，不接收 PDF。多张图片必须是同一张小票的
+不同帧或角度，由 Qwen 在一次请求中综合识别，避免因为同一商品重复出现而
+重复输出。这样部署依赖更少，也更符合后续机器人或其他程序上传图片的方式。
 
 ## 模型调用次数
 
