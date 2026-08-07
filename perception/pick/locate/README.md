@@ -88,7 +88,7 @@ python main.py
 - `bbox` 是 `[x1, y1, x2, y2]`，坐标归一化到闭区间 `[1,1000]`。
 - `mask` 是原图尺寸的单通道 PNG base64，不包含 data-URL 前缀。
 - `image_path` 是服务端持久化原图的本地绝对路径，供同一文件系统上的监控程序直接读取。上传图片按内容哈希存储，接口返回后不会随临时目录删除；存储目录可通过 `LOCATE_MONITOR_IMAGE_DIR` 调整。
-- 过滤后仍有多个实例时，正式接口使用相同的 mask 面积与密度规则选出最前方的一个。
+- 过滤后仍有多个实例时，正式单实例接口返回 bbox 中心点距离原图中心最近的一个。
 - bbox 交集默认覆盖较小框至少 20% 才组成重叠链；链内最大 mask 达到第二名 2 倍时直接保留最大 mask，否则保留 `mask前景像素数 / bbox面积` 最大者。可通过 `SAM_BBOX_OVERLAP_MIN_RATIO` 和 `SAM_FRONT_AREA_DOMINANCE_RATIO` 调节阈值。
 - 重叠链过滤后，若最小 mask 面积不超过第二小 mask 的 50%，会再删除这个最小面积离群项一次；通过 `SAM_SMALLEST_MASK_MAX_RATIO` 调节阈值。
 

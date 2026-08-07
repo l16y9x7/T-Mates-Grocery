@@ -947,11 +947,22 @@ def normalize_bbox_to_1_1000(
 def make_locate_response(debug_response: LocateDebugResponse) -> LocateResponse:
     if not debug_response.instances:
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
-    frontmost = select_frontmost_instance(debug_response.instances)
+    image_center_x = debug_response.image_size[0] / 2
+    image_center_y = debug_response.image_size[1] / 2
+    selected_instance = min(
+        debug_response.instances,
+        key=lambda instance: (
+            ((instance.bbox[0] + instance.bbox[2]) / 2 - image_center_x) ** 2
+            + ((instance.bbox[1] + instance.bbox[3]) / 2 - image_center_y) ** 2
+        ),
+    )
     return LocateResponse(
         product_name=debug_response.product_name,
-        bbox=normalize_bbox_to_1_1000(frontmost.bbox, debug_response.image_size),
-        mask=frontmost.mask,
+        bbox=normalize_bbox_to_1_1000(
+            selected_instance.bbox,
+            debug_response.image_size,
+        ),
+        mask=selected_instance.mask,
         image_path=debug_response.image_path,
     )
 
