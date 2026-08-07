@@ -89,7 +89,7 @@
   },
   "可孚棉签": {
     "qwen3_prompt": "找到图片中最上层货架的圆形透明罐子排，输出满足条件的所有圆形透明罐子排的bbox。返回格式：{\"name\": \"圆形透明罐子排\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost row round container"
+    "sam3_prompt": "frontmost round container"
   },
   "合味道五香牛肉味": {
     "qwen3_prompt": "找到图片中从上往下第二层货架上，蓝色面桶堆右边、白色辛拉面碗堆左边的红色圆柱形牛肉桶堆，输出满足条件的所有红色圆柱形牛肉桶堆的bbox，每一堆分开。返回格式：{\"name\": \"红色圆柱形牛肉桶堆\", \"bbox\": [x1, y1, x2, y2]}",
@@ -360,71 +360,71 @@
     "sam3_prompt": "frontmost bottle"
   },
   "NFC桔汁": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图中顶层货架上所有的NFC桔汁盒堆，返回这些NFC桔汁盒堆的bbox，每一堆分开。最终返回格式：{\"name\": \"NFC桔汁盒堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost carton"
   },
   "奥利奥香甜不腻": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中从上往下第二层货架的蓝色奥利奥原味饼干盒，输出满足条件的所有蓝色奥利奥原味饼干盒的bbox。返回格式：{\"name\": \"蓝色奥利奥原味饼干盒\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost oreo box"
   },
   "百事可乐瓶装": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图中顶层货架上所有的百事可乐pepsi瓶，返回一个完整包含所有百事可乐pepsi瓶的大bbox。最终返回格式：{\"name\": \"百事可乐pepsi瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost pepsi bottle"
   },
   "薄盐生抽": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中底层货架的紫色瓶盖薄盐生抽瓶，输出满足条件的所有紫色瓶盖薄盐生抽瓶的bbox。返回格式：{\"name\": \"紫色瓶盖薄盐生抽瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost bottle"
   },
   "草原红太阳烧烤料香辣味": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中顶货架的红色烧烤料小瓶子，输出满足条件的所有红色烧烤料小瓶子的bbox。返回格式：{\"name\": \"红色烧烤料小瓶子\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost printed bottle"
   },
   "草原红太阳烧烤料原味": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中顶货架的棕色烧烤料小瓶子，输出满足条件的所有棕色烧烤料小瓶子的bbox。返回格式：{\"name\": \"棕色烧烤料小瓶子\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost printed bottle"
   },
   "纯棉酒店大毛巾": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图中从上往下第二层货架上所有的PICC毛巾包，返回一个完整包含所有PICC毛巾包的大bbox。最终返回格式：{\"name\": \"PICC毛巾包\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "topmost PICC towel package"
   },
   "高纤七色糙米": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中从上往下第二层货架的淡蓝色标签高纤七色糙米罐，输出满足条件的所有淡蓝色标签高纤七色糙米罐的bbox。返回格式：{\"name\": \"淡蓝色标签高纤七色糙米罐\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost container"
   },
   "好友趣蜂蜜黄油味": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中最底排货架，面包袋右边的好友趣包装袋，输出满足条件的所有好友趣包装袋的bbox。返回格式：{\"name\": \"好友趣包装袋\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost snack package"
   },
   "健食力低脂香肠": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中从上往下第二层的绿白低脂香肠袋堆，返回一个完整包含所有绿白低脂香肠袋堆的大bbox。返回格式：{\"name\": \"绿白低脂香肠袋堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost white and green package"
   },
   "慢碳十色糙米": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中从上往下第二层货架的淡蓝色标签慢碳十色糙米罐，输出满足条件的所有淡蓝色标签慢碳十色糙米罐的bbox。返回格式：{\"name\": \"淡蓝色标签慢碳十色糙米罐\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost container"
   },
   "外星人电解质水白桃口味0糖": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中顶货架的所有纯白白桃口味外星人电解质水瓶，输出满足条件的所有纯白白桃口味外星人电解质水瓶的bbox。返回格式：{\"name\": \"纯白白桃口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost bottle"
   },
   "外星人电解质水青柠口味": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中顶货架的所有蓝白青柠口味外星人电解质水瓶，输出满足条件的所有蓝白青柠口味外星人电解质水瓶的bbox。返回格式：{\"name\": \"蓝白青柠口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost bottle"
   },
   "外星人电解质水青柠口味0糖": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中顶货架的所有纯白青柠口味外星人电解质水瓶，输出满足条件的所有纯白青柠口味外星人电解质水瓶的bbox。返回格式：{\"name\": \"纯白青柠口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost bottle"
   },
   "外星人电解质水西柚口味": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中顶货架的所有蓝白西柚口味外星人电解质水瓶，输出满足条件的所有蓝白西柚口味外星人电解质水瓶的bbox。返回格式：{\"name\": \"蓝白西柚口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost bottle"
   },
   "外星人电解质水椰子口味": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中顶货架的所有蓝椰子口味外星人电解质水瓶，输出满足条件的所有蓝白椰子口味外星人电解质水瓶的bbox。返回格式：{\"name\": \"蓝白椰子口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost bottle"
   },
   "蒸鱼豉油": {
-    "qwen3_prompt": "",
-    "sam3_prompt": ""
+    "qwen3_prompt": "找到图片中底层货架的棕色瓶盖蒸鱼豉油瓶，输出满足条件的所有棕色瓶盖蒸鱼豉油瓶的bbox。返回格式：{\"name\": \"棕色瓶盖蒸鱼豉油瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost bottle"
   }
 }
