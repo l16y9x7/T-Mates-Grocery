@@ -14,11 +14,13 @@ from receipt_recognizer.service import Recognition
 
 
 class FakeRecognizer:
+    seen_data_urls = []
+
     def __init__(self, settings):
         self.settings = settings
 
     def recognize_data_urls(self, data_urls):
-        self.data_urls = data_urls
+        type(self).seen_data_urls = list(data_urls)
         return Recognition(
             business_items=[
                 {
@@ -60,6 +62,9 @@ class MissingSkuClient:
 
 
 class ServerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        FakeRecognizer.seen_data_urls = []
+
     def test_receipt_parse_returns_sku_locations(self):
         with patch.object(
             server,
@@ -77,6 +82,7 @@ class ServerTests(unittest.TestCase):
             response = asyncio.run(
                 server.parse_receipt(
                     file=_upload_file(b"fake image"),
+                    files=None,
                     diagnostics=False,
                     max_edge=2200,
                 )
@@ -92,6 +98,83 @@ class ServerTests(unittest.TestCase):
             ],
         )
         convert.assert_called_once()
+
+    def test_receipt_parse_accepts_multiple_frames(self):
+        with patch.object(
+            server,
+            "image_bytes_to_data_url",
+            side_effect=[
+                "data:image/jpeg;base64,frame1",
+                "data:image/jpeg;base64,frame2",
+                "data:image/jpeg;base64,frame3",
+            ],
+        ), patch.object(
+            server,
+            "ReceiptRecognizer",
+            FakeRecognizer,
+        ), patch.object(
+            server,
+            "SkuLookupClient",
+            FakeSkuClient,
+        ):
+            response = asyncio.run(
+                server.parse_receipt(
+                    file=None,
+                    files=[
+                        _upload_file(b"frame 1"),
+                        _upload_file(b"frame 2"),
+                        _upload_file(b"frame 3"),
+                    ],
+                    diagnostics=False,
+                    max_edge=2200,
+                )
+            )
+
+        self.assertEqual(
+            FakeRecognizer.seen_data_urls,
+            [
+                "data:image/jpeg;base64,frame1",
+                "data:image/jpeg;base64,frame2",
+                "data:image/jpeg;base64,frame3",
+            ],
+        )
+        self.assertEqual(
+            response,
+            [
+                {
+                    "name": "好丽友土豆薯条番茄味",
+                    "locations": ["H1_F_L1_C01"],
+                }
+            ],
+        )
+
+    def test_receipt_parse_rejects_too_many_frames(self):
+        response = asyncio.run(
+            server.parse_receipt(
+                file=None,
+                files=[_upload_file(b"fake image") for _ in range(5)],
+                diagnostics=False,
+                max_edge=2200,
+            )
+        )
+
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(body["error"]["type"], "too_many_files")
+
+    def test_receipt_parse_requires_file_or_files(self):
+        response = asyncio.run(
+            server.parse_receipt(
+                file=None,
+                files=None,
+                diagnostics=False,
+                max_edge=2200,
+            )
+        )
+
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(body["error"]["type"], "missing_file")
 
     def test_receipt_parse_can_return_diagnostics(self):
         with patch.object(
@@ -110,6 +193,7 @@ class ServerTests(unittest.TestCase):
             response = asyncio.run(
                 server.parse_receipt(
                     file=_upload_file(b"fake image"),
+                    files=None,
                     diagnostics=True,
                     max_edge=2200,
                 )
@@ -146,6 +230,7 @@ class ServerTests(unittest.TestCase):
             response = asyncio.run(
                 server.parse_receipt(
                     file=_upload_file(b"fake image"),
+                    files=None,
                     diagnostics=False,
                     max_edge=2200,
                 )
@@ -164,6 +249,7 @@ class ServerTests(unittest.TestCase):
             response = asyncio.run(
                 server.parse_receipt(
                     file=_upload_file(b"fake image"),
+                    files=None,
                     diagnostics=False,
                     max_edge=2200,
                 )
@@ -190,6 +276,7 @@ class ServerTests(unittest.TestCase):
             response = asyncio.run(
                 server.parse_receipt(
                     file=_upload_file(b"fake image"),
+                    files=None,
                     diagnostics=False,
                     max_edge=2200,
                 )

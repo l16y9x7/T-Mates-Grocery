@@ -25,12 +25,14 @@ from .sku_client import SkuLookupClient
 
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_RECEIPT_FRAMES = 4
 
 app = FastAPI(
     title="Qwen3-VL Receipt Recognizer",
     version="0.1.0",
     description=(
-        "Recognize one clear receipt image and return structured item JSON."
+        "Recognize one receipt from one or more clear image frames and "
+        "return structured item JSON."
     ),
 )
 
@@ -46,7 +48,14 @@ def health() -> dict[str, str]:
 
 @app.post("/receipt/parse", response_model=None)
 async def parse_receipt(
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(
+        None,
+        description="Backward-compatible single receipt image field.",
+    ),
+    files: list[UploadFile] | None = File(
+        None,
+        description="One to four frames of the same receipt.",
+    ),
     diagnostics: bool = Query(
         False,
         description="Return line-level diagnostics together with items.",
@@ -58,25 +67,41 @@ async def parse_receipt(
         description="Resize longest image edge before sending to Qwen.",
     ),
 ) -> list[dict[str, Any]] | dict[str, Any] | JSONResponse:
-    raw = await file.read(MAX_UPLOAD_BYTES + 1)
-    if not raw:
+    uploaded_files = _uploaded_receipt_files(file, files)
+    if not uploaded_files:
         return _error_response(
             400,
-            "empty_file",
-            "上传文件不能为空。",
+            "missing_file",
+            "请上传 file 或 files 字段。",
         )
-    if len(raw) > MAX_UPLOAD_BYTES:
+    if len(uploaded_files) > MAX_RECEIPT_FRAMES:
         return _error_response(
-            413,
-            "file_too_large",
-            "上传图片不能超过 20MB。",
+            400,
+            "too_many_files",
+            f"同一张小票最多上传 {MAX_RECEIPT_FRAMES} 张图片。",
         )
 
     try:
         settings = Settings.from_env()
-        data_url = image_bytes_to_data_url(raw, max_edge=max_edge)
+        data_urls = []
+        for upload in uploaded_files:
+            raw = await upload.read(MAX_UPLOAD_BYTES + 1)
+            if not raw:
+                return _error_response(
+                    400,
+                    "empty_file",
+                    "上传文件不能为空。",
+                )
+            if len(raw) > MAX_UPLOAD_BYTES:
+                return _error_response(
+                    413,
+                    "file_too_large",
+                    "单张图片不能超过 20MB。",
+                )
+            data_urls.append(image_bytes_to_data_url(raw, max_edge=max_edge))
+
         recognizer = ReceiptRecognizer(settings)
-        result = recognizer.recognize_data_urls([data_url])
+        result = recognizer.recognize_data_urls(data_urls)
         sku_items = SkuLookupClient(settings).lookup_items(
             result.business_items
         )
@@ -118,6 +143,18 @@ async def parse_receipt(
             "diagnostics": result.diagnostics,
         }
     return sku_items
+
+
+def _uploaded_receipt_files(
+    file: UploadFile | None,
+    files: list[UploadFile] | None,
+) -> list[UploadFile]:
+    uploaded_files: list[UploadFile] = []
+    if file is not None:
+        uploaded_files.append(file)
+    if files:
+        uploaded_files.extend(files)
+    return uploaded_files
 
 
 def _error_response(

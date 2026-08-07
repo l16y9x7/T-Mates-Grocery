@@ -164,10 +164,13 @@ POST /receipt/parse
 请求参数：
 
 ```text
-file          必填，JPG/PNG 图片文件
+file          可选，旧版单张 JPG/PNG 图片字段
+files         可选，新版 1-4 张同一张小票图片字段，可重复传
 diagnostics   可选，true 时返回诊断信息
 max_edge      可选，发送给 Qwen 前的最长边，默认 2200
 ```
+
+`file` 和 `files` 至少提供一个；如果同时提供，会按同一张小票的多帧输入处理。
 
 本地启动示例：
 
@@ -184,10 +187,19 @@ uvicorn receipt_recognizer.server:app \
   --port 18080
 ```
 
-调用示例：
+单图调用示例：
 
 ```bash
 curl -F "file=@receipt-images/receipt1.jpg" \
+  "http://127.0.0.1:18080/receipt/parse"
+```
+
+多帧调用示例，所有图片必须属于同一张小票：
+
+```bash
+curl -F "files=@frames/frame1.jpg" \
+     -F "files=@frames/frame2.jpg" \
+     -F "files=@frames/frame3.jpg" \
   "http://127.0.0.1:18080/receipt/parse"
 ```
 
