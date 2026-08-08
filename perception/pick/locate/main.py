@@ -9,6 +9,7 @@ import math
 import mimetypes
 import os
 import re
+import sys
 import tempfile
 from collections import defaultdict
 from pathlib import Path
@@ -22,6 +23,27 @@ from pydantic import BaseModel, Field
 
 
 ROOT = Path(__file__).resolve().parent
+if __package__ and __package__.startswith("perception."):
+    from ...config import (
+        QWEN3_MODEL as CONFIG_QWEN3_MODEL,
+        QWEN3_URL as CONFIG_QWEN3_URL,
+        SAM3_URL as CONFIG_SAM3_URL,
+        SKU_API_URL as CONFIG_SKU_API_URL,
+        camera_snapshot_url,
+    )
+else:
+    PERCEPTION_ROOT = ROOT.parents[1]
+    if str(PERCEPTION_ROOT) not in sys.path:
+        sys.path.insert(0, str(PERCEPTION_ROOT))
+    from config import (
+        QWEN3_MODEL as CONFIG_QWEN3_MODEL,
+        QWEN3_URL as CONFIG_QWEN3_URL,
+        SAM3_URL as CONFIG_SAM3_URL,
+        SKU_API_URL as CONFIG_SKU_API_URL,
+        camera_snapshot_url,
+    )
+
+
 PROMPT_MAPPING_PATH = ROOT / "qwen_sam_prompt_mapping.json"
 SUPPORTED_TASK_TYPES = ("SORTING", "SHORTAGE", "MISPLACED")
 PROMPT_MAPPING_PATHS = {
@@ -32,17 +54,8 @@ PROMPT_MAPPING_PATHS = {
 MONITOR_IMAGE_DIR = Path(
     os.getenv("LOCATE_MONITOR_IMAGE_DIR", str(ROOT / "monitor_images"))
 )
-LEFT_CAMERA_SNAPSHOT_URL = os.getenv(
-    "LEFT_CAMERA_SNAPSHOT_URL",
-    os.getenv(
-        "CAMERA_SNAPSHOT_URL",
-        "http://192.168.130.50:8085/camera/snapshot?camera=left_wrist&type=color",
-    ),
-)
-RIGHT_CAMERA_SNAPSHOT_URL = os.getenv(
-    "RIGHT_CAMERA_SNAPSHOT_URL",
-    "http://192.168.130.50:8085/camera/snapshot?camera=right_wrist&type=color",
-)
+LEFT_CAMERA_SNAPSHOT_URL = camera_snapshot_url("left")
+RIGHT_CAMERA_SNAPSHOT_URL = camera_snapshot_url("right")
 # 保留旧常量名称，兼容现有左手相机配置与测试。
 CAMERA_SNAPSHOT_URL = LEFT_CAMERA_SNAPSHOT_URL
 CAMERA_SNAPSHOT_URLS = {
@@ -56,16 +69,10 @@ CAMERA_SNAPSHOT_CACHE_DIR = Path(
     os.getenv("CAMERA_SNAPSHOT_CACHE_DIR", str(ROOT / "camera_snapshots"))
 )
 
-SKU_API_URL = os.getenv("SKU_API_URL", "http://127.0.0.1:25540").rstrip("/")
-SAM3_URL = os.getenv(
-    "SAM3_URL",
-    "http://211.137.21.33:25541/api/v1/segment",
-)
-QWEN3_URL = os.getenv(
-    "QWEN3_URL",
-    "http://211.137.21.33:25542/v1/chat/completions",
-)
-QWEN3_MODEL = os.getenv("QWEN3_MODEL", "Qwen3-VL-4B-Instruct")
+SKU_API_URL = CONFIG_SKU_API_URL
+SAM3_URL = CONFIG_SAM3_URL
+QWEN3_URL = CONFIG_QWEN3_URL
+QWEN3_MODEL = CONFIG_QWEN3_MODEL
 
 QWEN_SAMPLE_COUNT = 3
 QWEN_TEMPERATURE = 0.5

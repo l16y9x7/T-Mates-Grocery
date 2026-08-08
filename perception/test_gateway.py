@@ -15,6 +15,8 @@ class PerceptionGatewayTest(unittest.TestCase):
         paths = main.app.openapi()["paths"]
         self.assertIn("/perception/pick/locate", paths)
         self.assertIn("/perception/pick/locate/debug", paths)
+        self.assertIn("/perception/pick/check", paths)
+        self.assertIn("/perception/place/check", paths)
         self.assertIn("/perception/parse", paths)
 
 

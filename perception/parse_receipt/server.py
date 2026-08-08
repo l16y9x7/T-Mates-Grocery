@@ -8,7 +8,9 @@ import json
 import os
 import re
 import socket
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -18,17 +20,31 @@ from fastapi.responses import JSONResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
+if __package__ and __package__.startswith("perception."):
+    from ..config import (
+        QWEN3_URL as CONFIG_QWEN3_URL,
+        SKU_API_URL as CONFIG_SKU_API_URL,
+        camera_snapshot_url,
+    )
+else:
+    PERCEPTION_ROOT = Path(__file__).resolve().parents[1]
+    if str(PERCEPTION_ROOT) not in sys.path:
+        sys.path.insert(0, str(PERCEPTION_ROOT))
+    from config import (
+        QWEN3_URL as CONFIG_QWEN3_URL,
+        SKU_API_URL as CONFIG_SKU_API_URL,
+        camera_snapshot_url,
+    )
+
 
 MAX_CAMERA_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_EDGE = 2200
-DEFAULT_CAMERA_URL = (
-    "http://192.168.130.50:8085/camera/snapshot?camera=head&type=color"
-)
-DEFAULT_QWEN_BASE_URL = "http://211.137.21.33:25542/v1/chat/completions"
+DEFAULT_CAMERA_URL = camera_snapshot_url("head")
+DEFAULT_QWEN_BASE_URL = CONFIG_QWEN3_URL
 DEFAULT_QWEN_MODEL = "Qwen3-VL-4B-Instruct"
 DEFAULT_CAMERA_TIMEOUT_SECONDS = 5.0
 DEFAULT_QWEN_TIMEOUT_SECONDS = 120.0
-DEFAULT_SKU_BASE_URL = "http://127.0.0.1:25540"
+DEFAULT_SKU_BASE_URL = CONFIG_SKU_API_URL
 DEFAULT_SKU_TIMEOUT_SECONDS = 3.0
 
 
@@ -82,7 +98,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        camera_url = os.getenv("RECEIPT_CAMERA_URL", "").strip() or DEFAULT_CAMERA_URL
+        camera_url = camera_snapshot_url("head")
         qwen_base_url = (
             os.getenv("QWEN_BASE_URL", "").strip()
             or os.getenv("QWEN3_URL", "").strip()

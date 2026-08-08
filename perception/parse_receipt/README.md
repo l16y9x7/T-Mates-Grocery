@@ -42,12 +42,6 @@ export SKU_BASE_URL='http://127.0.0.1:25540'
 export SKU_TIMEOUT_SECONDS='3'
 ```
 
-如果 Qwen 需要认证，再设置：
-
-```bash
-export QWEN_API_KEY='<api-key>'
-```
-
 ## 启动
 
 在本目录运行：
