@@ -1,0 +1,4894 @@
+{
+  "generated_at": "2026-08-08T12:56:13.397609+08:00",
+  "sam3_url": "http://211.137.21.33:25541/api/v1/segment",
+  "threshold": "SAM3 server default (threshold fields were not sent)",
+  "summary": {
+    "SORTING": {
+      "detected": 102,
+      "no_detection": 5,
+      "empty_prompt": 0,
+      "missing_image": 0,
+      "request_error": 0,
+      "invalid_response": 0
+    },
+    "SHORTAGE": {
+      "detected": 93,
+      "no_detection": 14,
+      "empty_prompt": 0,
+      "missing_image": 0,
+      "request_error": 0,
+      "invalid_response": 0
+    },
+    "MISPLACED": {
+      "detected": 100,
+      "no_detection": 7,
+      "empty_prompt": 0,
+      "missing_image": 0,
+      "request_error": 0,
+      "invalid_response": 0
+    }
+  },
+  "failure_count": 26,
+  "failures": [
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_005",
+      "name": "三只松鼠每日坚果",
+      "sam3_prompt": "frontmost package",
+      "images": [
+        {
+          "image": "images/SKU_005.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_006",
+      "name": "费列罗巧克力",
+      "sam3_prompt": "topmost ferrero package",
+      "images": [
+        {
+          "image": "images/SKU_006.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_007",
+      "name": "双汇王中王火腿肠",
+      "sam3_prompt": "topmost sausage",
+      "images": [
+        {
+          "image": "images/SKU_007.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_043",
+      "name": "海氏海诺创口贴",
+      "sam3_prompt": "top frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_043.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_053",
+      "name": "康师傅老坛酸菜牛肉面",
+      "sam3_prompt": "topmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_053.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_004",
+      "name": "百草味海苔肉松蛋卷",
+      "sam3_prompt": "light blue can",
+      "images": [
+        {
+          "image": "images/SKU_004.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_011",
+      "name": "薯愿非油炸清新番茄味",
+      "sam3_prompt": "cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_011.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_030",
+      "name": "百醇巧克力味",
+      "sam3_prompt": "brown box",
+      "images": [
+        {
+          "image": "images/SKU_030.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_034",
+      "name": "吐司方方原味",
+      "sam3_prompt": "white cake package",
+      "images": [
+        {
+          "image": "images/SKU_034.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_039",
+      "name": "草原红太阳烧烤料原味",
+      "sam3_prompt": "printed bottle",
+      "images": [
+        {
+          "image": "images/SKU_039.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_040",
+      "name": "草原红太阳烧烤料香辣味",
+      "sam3_prompt": "printed bottle",
+      "images": [
+        {
+          "image": "images/SKU_040.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_041",
+      "name": "草原红太阳烧烤酱香辣",
+      "sam3_prompt": "red package",
+      "images": [
+        {
+          "image": "images/SKU_041.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_042",
+      "name": "草原红太阳烧烤酱原味",
+      "sam3_prompt": "green sauce package",
+      "images": [
+        {
+          "image": "images/SKU_042.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_043",
+      "name": "海氏海诺创口贴",
+      "sam3_prompt": "light blue box",
+      "images": [
+        {
+          "image": "images/SKU_043.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_053",
+      "name": "康师傅老坛酸菜牛肉面",
+      "sam3_prompt": "noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_053.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_099",
+      "name": "Dove沐浴泡泡樱花甜香",
+      "sam3_prompt": "container with neck",
+      "images": [
+        {
+          "image": "images/SKU_099.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_101",
+      "name": "Dove沐浴泡泡清甜奶香",
+      "sam3_prompt": "container with neck",
+      "images": [
+        {
+          "image": "images/SKU_101.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_106",
+      "name": "半亩花田洗发水",
+      "sam3_prompt": "beige bottle",
+      "images": [
+        {
+          "image": "images/SKU_106.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_107",
+      "name": "心相印厨房纸巾",
+      "sam3_prompt": "green package",
+      "images": [
+        {
+          "image": "images/SKU_107.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_002",
+      "name": "蒙牛纯牛奶",
+      "sam3_prompt": "frontmost white box",
+      "images": [
+        {
+          "image": "images/SKU_002.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_005",
+      "name": "三只松鼠每日坚果",
+      "sam3_prompt": "frontmost package",
+      "images": [
+        {
+          "image": "images/SKU_005.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_006",
+      "name": "费列罗巧克力",
+      "sam3_prompt": "topmost ferrero package",
+      "images": [
+        {
+          "image": "images/SKU_006.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_007",
+      "name": "双汇王中王火腿肠",
+      "sam3_prompt": "topmost sausage",
+      "images": [
+        {
+          "image": "images/SKU_007.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_043",
+      "name": "海氏海诺创口贴",
+      "sam3_prompt": "top frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_043.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_044",
+      "name": "德佑湿巾",
+      "sam3_prompt": "top silver package",
+      "images": [
+        {
+          "image": "images/SKU_044.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_053",
+      "name": "康师傅老坛酸菜牛肉面",
+      "sam3_prompt": "topmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_053.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    }
+  ],
+  "results": [
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_001",
+      "name": "NFC桔汁",
+      "sam3_prompt": "frontmost carton",
+      "images": [
+        {
+          "image": "images/SKU_001.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_002",
+      "name": "蒙牛纯牛奶",
+      "sam3_prompt": "frontmost milk carton",
+      "images": [
+        {
+          "image": "images/SKU_002.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_003",
+      "name": "纯甄酸奶",
+      "sam3_prompt": "frontmost blue and white carton",
+      "images": [
+        {
+          "image": "images/SKU_003.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_004",
+      "name": "百草味海苔肉松蛋卷",
+      "sam3_prompt": "topmost can",
+      "images": [
+        {
+          "image": "images/SKU_004.jpg",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_005",
+      "name": "三只松鼠每日坚果",
+      "sam3_prompt": "frontmost package",
+      "images": [
+        {
+          "image": "images/SKU_005.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_006",
+      "name": "费列罗巧克力",
+      "sam3_prompt": "topmost ferrero package",
+      "images": [
+        {
+          "image": "images/SKU_006.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_007",
+      "name": "双汇王中王火腿肠",
+      "sam3_prompt": "topmost sausage",
+      "images": [
+        {
+          "image": "images/SKU_007.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_008",
+      "name": "妙芙香芋牛奶味",
+      "sam3_prompt": "cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_008.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_009",
+      "name": "妙芙绵醇奶油味",
+      "sam3_prompt": "frontmost cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_009.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_010",
+      "name": "妙芙巧克力味",
+      "sam3_prompt": "frontmost cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_010.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_011",
+      "name": "薯愿非油炸清新番茄味",
+      "sam3_prompt": "frontmost cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_011.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_012",
+      "name": "薯愿非油炸韩国泡菜味",
+      "sam3_prompt": "frontmost cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_012.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_013",
+      "name": "薯愿非油炸香烤原味",
+      "sam3_prompt": "frontmost cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_013.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_014",
+      "name": "品客薯片烧烤牛排味",
+      "sam3_prompt": "frontmost pringles can",
+      "images": [
+        {
+          "image": "images/SKU_014.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_015",
+      "name": "品客原味",
+      "sam3_prompt": "frontmost pringles can",
+      "images": [
+        {
+          "image": "images/SKU_015.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_016",
+      "name": "品客酸乳酪洋葱味",
+      "sam3_prompt": "frontmost pringles can",
+      "images": [
+        {
+          "image": "images/SKU_016.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_017",
+      "name": "奥利奥香甜不腻",
+      "sam3_prompt": "frontmost oreo box",
+      "images": [
+        {
+          "image": "images/SKU_017.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_018",
+      "name": "奥利奥冰淇淋抹茶味",
+      "sam3_prompt": "frontmost oreo box",
+      "images": [
+        {
+          "image": "images/SKU_018.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_019",
+      "name": "奥利奥浓醇巧克力味",
+      "sam3_prompt": "frontmost oreo box",
+      "images": [
+        {
+          "image": "images/SKU_019.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_020",
+      "name": "奥利奥白桃乌龙味",
+      "sam3_prompt": "frontmost oreo box",
+      "images": [
+        {
+          "image": "images/SKU_020.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_021",
+      "name": "Lay's乐事薯片墨西哥鸡汁番茄味",
+      "sam3_prompt": "frontmost red Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_021.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_022",
+      "name": "Lay's乐事薯片经典原味",
+      "sam3_prompt": "frontmost yellow Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_022.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_023",
+      "name": "Lay's乐事薯片黄瓜味",
+      "sam3_prompt": "frontmost green Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_023.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_024",
+      "name": "Lay's乐事薯片意大利香浓红烩味",
+      "sam3_prompt": "frontmost blue Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_024.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_025",
+      "name": "Lay's乐事薯片青柠味",
+      "sam3_prompt": "frontmost blue Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_025.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_026",
+      "name": "呀！土豆番茄酱味",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_026.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_027",
+      "name": "好友趣韩国泡菜味",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_027.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_028",
+      "name": "卫龙辣条",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_028.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_029",
+      "name": "百醇草莓香草味",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_029.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_030",
+      "name": "百醇巧克力味",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_030.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_031",
+      "name": "上好佳鲜虾条",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_031.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_032",
+      "name": "浪味仙",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_032.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_033",
+      "name": "好丽友派",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_033.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_034",
+      "name": "吐司方方原味",
+      "sam3_prompt": "frontmost white cake package",
+      "images": [
+        {
+          "image": "images/SKU_034.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_035",
+      "name": "好友趣蜂蜜黄油味",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_035.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_036",
+      "name": "可孚棉签",
+      "sam3_prompt": "frontmost round container",
+      "images": [
+        {
+          "image": "images/SKU_036.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_037",
+      "name": "小鹿妈妈牙线",
+      "sam3_prompt": "frontmost container",
+      "images": [
+        {
+          "image": "images/SKU_037.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_038",
+      "name": "得宝纸巾",
+      "sam3_prompt": "top blue tissue package",
+      "images": [
+        {
+          "image": "images/SKU_038.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_039",
+      "name": "草原红太阳烧烤料原味",
+      "sam3_prompt": "frontmost printed bottle",
+      "images": [
+        {
+          "image": "images/SKU_039.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_040",
+      "name": "草原红太阳烧烤料香辣味",
+      "sam3_prompt": "frontmost printed bottle",
+      "images": [
+        {
+          "image": "images/SKU_040.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_041",
+      "name": "草原红太阳烧烤酱香辣",
+      "sam3_prompt": "frontmost red package",
+      "images": [
+        {
+          "image": "images/SKU_041.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_042",
+      "name": "草原红太阳烧烤酱原味",
+      "sam3_prompt": "frontmost green sauce package",
+      "images": [
+        {
+          "image": "images/SKU_042.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_043",
+      "name": "海氏海诺创口贴",
+      "sam3_prompt": "top frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_043.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_044",
+      "name": "德佑湿巾",
+      "sam3_prompt": "top package",
+      "images": [
+        {
+          "image": "images/SKU_044.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_045",
+      "name": "心相印纸巾",
+      "sam3_prompt": "top frontmost green package",
+      "images": [
+        {
+          "image": "images/SKU_045.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_046",
+      "name": "合味道海鲜味",
+      "sam3_prompt": "frontmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_046.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_047",
+      "name": "合味道五香牛肉味",
+      "sam3_prompt": "frontmost red noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_047.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_048",
+      "name": "农心碗面",
+      "sam3_prompt": "topmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_048.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_049",
+      "name": "健食力低脂香肠",
+      "sam3_prompt": "frontmost white and green package",
+      "images": [
+        {
+          "image": "images/SKU_049.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_050",
+      "name": "妙洁海绵百洁布",
+      "sam3_prompt": "top frontmost package",
+      "images": [
+        {
+          "image": "images/SKU_050.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_051",
+      "name": "康师傅香辣牛肉面",
+      "sam3_prompt": "topmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_051.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_052",
+      "name": "康师傅鲜虾鱼板面",
+      "sam3_prompt": "topmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_052.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_053",
+      "name": "康师傅老坛酸菜牛肉面",
+      "sam3_prompt": "topmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_053.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_054",
+      "name": "好人家火锅底料",
+      "sam3_prompt": "frontmost hotpot package",
+      "images": [
+        {
+          "image": "images/SKU_054.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_055",
+      "name": "纯棉酒店大毛巾",
+      "sam3_prompt": "topmost PICC towel package",
+      "images": [
+        {
+          "image": "images/SKU_055.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_056",
+      "name": "京东京造毛巾",
+      "sam3_prompt": "top plastic towel package",
+      "images": [
+        {
+          "image": "images/SKU_056.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_057",
+      "name": "三色藜麦",
+      "sam3_prompt": "frontmost white package",
+      "images": [
+        {
+          "image": "images/SKU_057.png",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_058",
+      "name": "慢碳十色糙米",
+      "sam3_prompt": "frontmost container",
+      "images": [
+        {
+          "image": "images/SKU_058.png",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_059",
+      "name": "高纤七色糙米",
+      "sam3_prompt": "frontmost container",
+      "images": [
+        {
+          "image": "images/SKU_059.png",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_060",
+      "name": "山西黄小米",
+      "sam3_prompt": "frontmost container",
+      "images": [
+        {
+          "image": "images/SKU_060.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_061",
+      "name": "界面医疗医用外科口罩",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_061.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_062",
+      "name": "中盐精制盐",
+      "sam3_prompt": "topmost white and blue package",
+      "images": [
+        {
+          "image": "images/SKU_062.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_063",
+      "name": "小苏打",
+      "sam3_prompt": "topmost white and green package",
+      "images": [
+        {
+          "image": "images/SKU_063.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_064",
+      "name": "镇江香醋",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_064.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_065",
+      "name": "蒸鱼豉油",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_065.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_066",
+      "name": "薄盐生抽",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_066.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_067",
+      "name": "可口可乐罐装",
+      "sam3_prompt": "frontmost coke",
+      "images": [
+        {
+          "image": "images/SKU_067.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_068",
+      "name": "雪碧罐装",
+      "sam3_prompt": "frontmost can",
+      "images": [
+        {
+          "image": "images/SKU_068.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_069",
+      "name": "芬达罐装",
+      "sam3_prompt": "frontmost fanta can",
+      "images": [
+        {
+          "image": "images/SKU_069.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_070",
+      "name": "百事可乐瓶装",
+      "sam3_prompt": "frontmost pepsi bottle",
+      "images": [
+        {
+          "image": "images/SKU_070.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_071",
+      "name": "7喜瓶装",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_071.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_072",
+      "name": "水溶C100瓶装",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_072.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_073",
+      "name": "小青柠汁饮料",
+      "sam3_prompt": "frontmost yellow bottle",
+      "images": [
+        {
+          "image": "images/SKU_073.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_074",
+      "name": "美年达瓶装",
+      "sam3_prompt": "frontmost orange bottle",
+      "images": [
+        {
+          "image": "images/SKU_074.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_075",
+      "name": "名仁苏打水饮料",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_075.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_076",
+      "name": "东方树叶茉莉花茶",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_076.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_077",
+      "name": "绿豆冰沙",
+      "sam3_prompt": "frontmost green cup",
+      "images": [
+        {
+          "image": "images/SKU_077.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_078",
+      "name": "外星人电解质水椰子口味",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_078.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_079",
+      "name": "外星人电解质水青柠口味",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_079.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_080",
+      "name": "外星人电解质水白桃口味0糖",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_080.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_081",
+      "name": "外星人电解质水西柚口味",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_081.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_082",
+      "name": "尖叫",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_082.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_083",
+      "name": "百岁山矿泉水",
+      "sam3_prompt": "frontmost transparent bottle",
+      "images": [
+        {
+          "image": "images/SKU_083.png",
+          "instance_count": 4
+        }
+      ],
+      "instance_count": 4,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_084",
+      "name": "脉动观梅止渴饮",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_084.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_085",
+      "name": "脉动芒果口味",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_085.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_086",
+      "name": "脉动菠萝口味",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_086.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_087",
+      "name": "脉动猫薄荷瓶",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_087.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_088",
+      "name": "外星人电解质水青柠口味0糖",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_088.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_089",
+      "name": "宝矿力水特",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_089.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_090",
+      "name": "舒肤佳香皂纯白清香型",
+      "sam3_prompt": "frontmost white and blue box",
+      "images": [
+        {
+          "image": "images/SKU_090.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_091",
+      "name": "舒肤佳香皂芦荟呵护香型",
+      "sam3_prompt": "frontmost white and pink box",
+      "images": [
+        {
+          "image": "images/SKU_091.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_092",
+      "name": "舒肤佳香皂柠檬清新香型",
+      "sam3_prompt": "frontmost white and yellow box",
+      "images": [
+        {
+          "image": "images/SKU_092.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_093",
+      "name": "汰渍肥皂",
+      "sam3_prompt": "frontmost orange Tide package",
+      "images": [
+        {
+          "image": "images/SKU_093.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_094",
+      "name": "杯子",
+      "sam3_prompt": "cup",
+      "images": [
+        {
+          "image": "images/SKU_094.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_095",
+      "name": "舒克牙膏竹炭薄荷",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_095.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_096",
+      "name": "舒克牙膏柠檬百香果",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_096.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_097",
+      "name": "舒克牙膏海盐薄荷",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_097.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_098",
+      "name": "冷酸灵云感觉牙刷",
+      "sam3_prompt": "toothbrush package",
+      "images": [
+        {
+          "image": "images/SKU_098.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_099",
+      "name": "Dove沐浴泡泡樱花甜香",
+      "sam3_prompt": "frontmost bottle with long neck",
+      "images": [
+        {
+          "image": "images/SKU_099.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_100",
+      "name": "Dove沐浴泡泡白桃果香",
+      "sam3_prompt": "frontmost bottle with long neck",
+      "images": [
+        {
+          "image": "images/SKU_100.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_101",
+      "name": "Dove沐浴泡泡清甜奶香",
+      "sam3_prompt": "frontmost bottle with long neck",
+      "images": [
+        {
+          "image": "images/SKU_101.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_102",
+      "name": "威露士",
+      "sam3_prompt": "frontmost bottle with neck",
+      "images": [
+        {
+          "image": "images/SKU_102.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_103",
+      "name": "Dove沐浴乳",
+      "sam3_prompt": "frontmost white tube",
+      "images": [
+        {
+          "image": "images/SKU_103.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_104",
+      "name": "拖鞋",
+      "sam3_prompt": "package",
+      "images": [
+        {
+          "image": "images/SKU_104.jpg",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_105",
+      "name": "Dove沐浴泡泡樱花甜香袋装",
+      "sam3_prompt": "frontmost pink and white pack",
+      "images": [
+        {
+          "image": "images/SKU_105.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_106",
+      "name": "半亩花田洗发水",
+      "sam3_prompt": "frontmost beige bottle",
+      "images": [
+        {
+          "image": "images/SKU_106.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SORTING",
+      "sku_id": "SKU_107",
+      "name": "心相印厨房纸巾",
+      "sam3_prompt": "top green package",
+      "images": [
+        {
+          "image": "images/SKU_107.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_001",
+      "name": "NFC桔汁",
+      "sam3_prompt": "carton",
+      "images": [
+        {
+          "image": "images/SKU_001.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_002",
+      "name": "蒙牛纯牛奶",
+      "sam3_prompt": "box",
+      "images": [
+        {
+          "image": "images/SKU_002.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_003",
+      "name": "纯甄酸奶",
+      "sam3_prompt": "blue and white carton",
+      "images": [
+        {
+          "image": "images/SKU_003.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_004",
+      "name": "百草味海苔肉松蛋卷",
+      "sam3_prompt": "light blue can",
+      "images": [
+        {
+          "image": "images/SKU_004.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_005",
+      "name": "三只松鼠每日坚果",
+      "sam3_prompt": "package",
+      "images": [
+        {
+          "image": "images/SKU_005.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_006",
+      "name": "费列罗巧克力",
+      "sam3_prompt": "ferrero package",
+      "images": [
+        {
+          "image": "images/SKU_006.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_007",
+      "name": "双汇王中王火腿肠",
+      "sam3_prompt": "sausage",
+      "images": [
+        {
+          "image": "images/SKU_007.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_008",
+      "name": "妙芙香芋牛奶味",
+      "sam3_prompt": "cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_008.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_009",
+      "name": "妙芙绵醇奶油味",
+      "sam3_prompt": "cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_009.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_010",
+      "name": "妙芙巧克力味",
+      "sam3_prompt": "cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_010.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_011",
+      "name": "薯愿非油炸清新番茄味",
+      "sam3_prompt": "cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_011.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_012",
+      "name": "薯愿非油炸韩国泡菜味",
+      "sam3_prompt": "cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_012.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_013",
+      "name": "薯愿非油炸香烤原味",
+      "sam3_prompt": "cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_013.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_014",
+      "name": "品客薯片烧烤牛排味",
+      "sam3_prompt": "pringles can",
+      "images": [
+        {
+          "image": "images/SKU_014.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_015",
+      "name": "品客原味",
+      "sam3_prompt": "pringles can",
+      "images": [
+        {
+          "image": "images/SKU_015.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_016",
+      "name": "品客酸乳酪洋葱味",
+      "sam3_prompt": "pringles can",
+      "images": [
+        {
+          "image": "images/SKU_016.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_017",
+      "name": "奥利奥香甜不腻",
+      "sam3_prompt": "oreo box",
+      "images": [
+        {
+          "image": "images/SKU_017.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_018",
+      "name": "奥利奥冰淇淋抹茶味",
+      "sam3_prompt": "oreo box",
+      "images": [
+        {
+          "image": "images/SKU_018.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_019",
+      "name": "奥利奥浓醇巧克力味",
+      "sam3_prompt": "oreo box",
+      "images": [
+        {
+          "image": "images/SKU_019.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_020",
+      "name": "奥利奥白桃乌龙味",
+      "sam3_prompt": "oreo box",
+      "images": [
+        {
+          "image": "images/SKU_020.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_021",
+      "name": "Lay's乐事薯片墨西哥鸡汁番茄味",
+      "sam3_prompt": "red Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_021.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_022",
+      "name": "Lay's乐事薯片经典原味",
+      "sam3_prompt": "yellow Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_022.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_023",
+      "name": "Lay's乐事薯片黄瓜味",
+      "sam3_prompt": "green Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_023.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_024",
+      "name": "Lay's乐事薯片意大利香浓红烩味",
+      "sam3_prompt": "blue Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_024.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_025",
+      "name": "Lay's乐事薯片青柠味",
+      "sam3_prompt": "blue Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_025.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_026",
+      "name": "呀！土豆番茄酱味",
+      "sam3_prompt": "snack package",
+      "images": [
+        {
+          "image": "images/SKU_026.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_027",
+      "name": "好友趣韩国泡菜味",
+      "sam3_prompt": "snack package",
+      "images": [
+        {
+          "image": "images/SKU_027.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_028",
+      "name": "卫龙辣条",
+      "sam3_prompt": "snack package",
+      "images": [
+        {
+          "image": "images/SKU_028.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_029",
+      "name": "百醇草莓香草味",
+      "sam3_prompt": "pink box",
+      "images": [
+        {
+          "image": "images/SKU_029.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_030",
+      "name": "百醇巧克力味",
+      "sam3_prompt": "brown box",
+      "images": [
+        {
+          "image": "images/SKU_030.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_031",
+      "name": "上好佳鲜虾条",
+      "sam3_prompt": "snack package",
+      "images": [
+        {
+          "image": "images/SKU_031.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_032",
+      "name": "浪味仙",
+      "sam3_prompt": "snack package",
+      "images": [
+        {
+          "image": "images/SKU_032.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_033",
+      "name": "好丽友派",
+      "sam3_prompt": "box",
+      "images": [
+        {
+          "image": "images/SKU_033.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_034",
+      "name": "吐司方方原味",
+      "sam3_prompt": "white cake package",
+      "images": [
+        {
+          "image": "images/SKU_034.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_035",
+      "name": "好友趣蜂蜜黄油味",
+      "sam3_prompt": "snack package",
+      "images": [
+        {
+          "image": "images/SKU_035.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_036",
+      "name": "可孚棉签",
+      "sam3_prompt": "round container",
+      "images": [
+        {
+          "image": "images/SKU_036.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_037",
+      "name": "小鹿妈妈牙线",
+      "sam3_prompt": "container",
+      "images": [
+        {
+          "image": "images/SKU_037.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_038",
+      "name": "得宝纸巾",
+      "sam3_prompt": "blue tissue package",
+      "images": [
+        {
+          "image": "images/SKU_038.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_039",
+      "name": "草原红太阳烧烤料原味",
+      "sam3_prompt": "printed bottle",
+      "images": [
+        {
+          "image": "images/SKU_039.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_040",
+      "name": "草原红太阳烧烤料香辣味",
+      "sam3_prompt": "printed bottle",
+      "images": [
+        {
+          "image": "images/SKU_040.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_041",
+      "name": "草原红太阳烧烤酱香辣",
+      "sam3_prompt": "red package",
+      "images": [
+        {
+          "image": "images/SKU_041.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_042",
+      "name": "草原红太阳烧烤酱原味",
+      "sam3_prompt": "green sauce package",
+      "images": [
+        {
+          "image": "images/SKU_042.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_043",
+      "name": "海氏海诺创口贴",
+      "sam3_prompt": "light blue box",
+      "images": [
+        {
+          "image": "images/SKU_043.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_044",
+      "name": "德佑湿巾",
+      "sam3_prompt": "silver package",
+      "images": [
+        {
+          "image": "images/SKU_044.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_045",
+      "name": "心相印纸巾",
+      "sam3_prompt": "green package",
+      "images": [
+        {
+          "image": "images/SKU_045.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_046",
+      "name": "合味道海鲜味",
+      "sam3_prompt": "noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_046.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_047",
+      "name": "合味道五香牛肉味",
+      "sam3_prompt": "red noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_047.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_048",
+      "name": "农心碗面",
+      "sam3_prompt": "noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_048.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_049",
+      "name": "健食力低脂香肠",
+      "sam3_prompt": "white and green package",
+      "images": [
+        {
+          "image": "images/SKU_049.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_050",
+      "name": "妙洁海绵百洁布",
+      "sam3_prompt": "transparent package",
+      "images": [
+        {
+          "image": "images/SKU_050.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_051",
+      "name": "康师傅香辣牛肉面",
+      "sam3_prompt": "noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_051.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_052",
+      "name": "康师傅鲜虾鱼板面",
+      "sam3_prompt": "noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_052.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_053",
+      "name": "康师傅老坛酸菜牛肉面",
+      "sam3_prompt": "noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_053.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_054",
+      "name": "好人家火锅底料",
+      "sam3_prompt": "hotpot package",
+      "images": [
+        {
+          "image": "images/SKU_054.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_055",
+      "name": "纯棉酒店大毛巾",
+      "sam3_prompt": "PICC towel package",
+      "images": [
+        {
+          "image": "images/SKU_055.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_056",
+      "name": "京东京造毛巾",
+      "sam3_prompt": "plastic towel package",
+      "images": [
+        {
+          "image": "images/SKU_056.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_057",
+      "name": "三色藜麦",
+      "sam3_prompt": "white package",
+      "images": [
+        {
+          "image": "images/SKU_057.png",
+          "instance_count": 8
+        }
+      ],
+      "instance_count": 8,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_058",
+      "name": "慢碳十色糙米",
+      "sam3_prompt": "container",
+      "images": [
+        {
+          "image": "images/SKU_058.png",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_059",
+      "name": "高纤七色糙米",
+      "sam3_prompt": "container",
+      "images": [
+        {
+          "image": "images/SKU_059.png",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_060",
+      "name": "山西黄小米",
+      "sam3_prompt": "container",
+      "images": [
+        {
+          "image": "images/SKU_060.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_061",
+      "name": "界面医疗医用外科口罩",
+      "sam3_prompt": "blue and white box",
+      "images": [
+        {
+          "image": "images/SKU_061.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_062",
+      "name": "中盐精制盐",
+      "sam3_prompt": "white and blue package",
+      "images": [
+        {
+          "image": "images/SKU_062.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_063",
+      "name": "小苏打",
+      "sam3_prompt": "white and green package",
+      "images": [
+        {
+          "image": "images/SKU_063.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_064",
+      "name": "镇江香醋",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_064.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_065",
+      "name": "蒸鱼豉油",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_065.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_066",
+      "name": "薄盐生抽",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_066.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_067",
+      "name": "可口可乐罐装",
+      "sam3_prompt": "coke",
+      "images": [
+        {
+          "image": "images/SKU_067.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_068",
+      "name": "雪碧罐装",
+      "sam3_prompt": "can",
+      "images": [
+        {
+          "image": "images/SKU_068.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_069",
+      "name": "芬达罐装",
+      "sam3_prompt": "fanta can",
+      "images": [
+        {
+          "image": "images/SKU_069.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_070",
+      "name": "百事可乐瓶装",
+      "sam3_prompt": "pepsi bottle",
+      "images": [
+        {
+          "image": "images/SKU_070.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_071",
+      "name": "7喜瓶装",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_071.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_072",
+      "name": "水溶C100瓶装",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_072.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_073",
+      "name": "小青柠汁饮料",
+      "sam3_prompt": "yellow bottle",
+      "images": [
+        {
+          "image": "images/SKU_073.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_074",
+      "name": "美年达瓶装",
+      "sam3_prompt": "orange bottle",
+      "images": [
+        {
+          "image": "images/SKU_074.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_075",
+      "name": "名仁苏打水饮料",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_075.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_076",
+      "name": "东方树叶茉莉花茶",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_076.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_077",
+      "name": "绿豆冰沙",
+      "sam3_prompt": "green cup",
+      "images": [
+        {
+          "image": "images/SKU_077.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_078",
+      "name": "外星人电解质水椰子口味",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_078.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_079",
+      "name": "外星人电解质水青柠口味",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_079.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_080",
+      "name": "外星人电解质水白桃口味0糖",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_080.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_081",
+      "name": "外星人电解质水西柚口味",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_081.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_082",
+      "name": "尖叫",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_082.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_083",
+      "name": "百岁山矿泉水",
+      "sam3_prompt": "transparent bottle",
+      "images": [
+        {
+          "image": "images/SKU_083.png",
+          "instance_count": 5
+        }
+      ],
+      "instance_count": 5,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_084",
+      "name": "脉动观梅止渴饮",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_084.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_085",
+      "name": "脉动芒果口味",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_085.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_086",
+      "name": "脉动菠萝口味",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_086.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_087",
+      "name": "脉动猫薄荷瓶",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_087.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_088",
+      "name": "外星人电解质水青柠口味0糖",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_088.jpg",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_089",
+      "name": "宝矿力水特",
+      "sam3_prompt": "bottle",
+      "images": [
+        {
+          "image": "images/SKU_089.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_090",
+      "name": "舒肤佳香皂纯白清香型",
+      "sam3_prompt": "white and blue box",
+      "images": [
+        {
+          "image": "images/SKU_090.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_091",
+      "name": "舒肤佳香皂芦荟呵护香型",
+      "sam3_prompt": "white and pink box",
+      "images": [
+        {
+          "image": "images/SKU_091.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_092",
+      "name": "舒肤佳香皂柠檬清新香型",
+      "sam3_prompt": "white and yellow box",
+      "images": [
+        {
+          "image": "images/SKU_092.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_093",
+      "name": "汰渍肥皂",
+      "sam3_prompt": "orange Tide package",
+      "images": [
+        {
+          "image": "images/SKU_093.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_094",
+      "name": "杯子",
+      "sam3_prompt": "cup",
+      "images": [
+        {
+          "image": "images/SKU_094.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_095",
+      "name": "舒克牙膏竹炭薄荷",
+      "sam3_prompt": "box",
+      "images": [
+        {
+          "image": "images/SKU_095.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_096",
+      "name": "舒克牙膏柠檬百香果",
+      "sam3_prompt": "box",
+      "images": [
+        {
+          "image": "images/SKU_096.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_097",
+      "name": "舒克牙膏海盐薄荷",
+      "sam3_prompt": "box",
+      "images": [
+        {
+          "image": "images/SKU_097.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_098",
+      "name": "冷酸灵云感觉牙刷",
+      "sam3_prompt": "toothbrush package",
+      "images": [
+        {
+          "image": "images/SKU_098.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_099",
+      "name": "Dove沐浴泡泡樱花甜香",
+      "sam3_prompt": "bottle with long neck",
+      "images": [
+        {
+          "image": "images/SKU_099.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_100",
+      "name": "Dove沐浴泡泡白桃果香",
+      "sam3_prompt": "bottle with long neck",
+      "images": [
+        {
+          "image": "images/SKU_100.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_101",
+      "name": "Dove沐浴泡泡清甜奶香",
+      "sam3_prompt": "bottle with long neck",
+      "images": [
+        {
+          "image": "images/SKU_101.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_102",
+      "name": "威露士",
+      "sam3_prompt": "bottle with neck",
+      "images": [
+        {
+          "image": "images/SKU_102.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_103",
+      "name": "Dove沐浴乳",
+      "sam3_prompt": "white tube",
+      "images": [
+        {
+          "image": "images/SKU_103.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_104",
+      "name": "拖鞋",
+      "sam3_prompt": "package",
+      "images": [
+        {
+          "image": "images/SKU_104.jpg",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_105",
+      "name": "Dove沐浴泡泡樱花甜香袋装",
+      "sam3_prompt": "pink and white pack",
+      "images": [
+        {
+          "image": "images/SKU_105.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_106",
+      "name": "半亩花田洗发水",
+      "sam3_prompt": "beige bottle",
+      "images": [
+        {
+          "image": "images/SKU_106.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "SHORTAGE",
+      "sku_id": "SKU_107",
+      "name": "心相印厨房纸巾",
+      "sam3_prompt": "green package",
+      "images": [
+        {
+          "image": "images/SKU_107.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_001",
+      "name": "NFC桔汁",
+      "sam3_prompt": "frontmost carton",
+      "images": [
+        {
+          "image": "images/SKU_001.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_002",
+      "name": "蒙牛纯牛奶",
+      "sam3_prompt": "frontmost white box",
+      "images": [
+        {
+          "image": "images/SKU_002.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_003",
+      "name": "纯甄酸奶",
+      "sam3_prompt": "frontmost blue and white carton",
+      "images": [
+        {
+          "image": "images/SKU_003.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_004",
+      "name": "百草味海苔肉松蛋卷",
+      "sam3_prompt": "topmost can",
+      "images": [
+        {
+          "image": "images/SKU_004.jpg",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_005",
+      "name": "三只松鼠每日坚果",
+      "sam3_prompt": "frontmost package",
+      "images": [
+        {
+          "image": "images/SKU_005.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_006",
+      "name": "费列罗巧克力",
+      "sam3_prompt": "topmost ferrero package",
+      "images": [
+        {
+          "image": "images/SKU_006.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_007",
+      "name": "双汇王中王火腿肠",
+      "sam3_prompt": "topmost sausage",
+      "images": [
+        {
+          "image": "images/SKU_007.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_008",
+      "name": "妙芙香芋牛奶味",
+      "sam3_prompt": "frontmost cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_008.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_009",
+      "name": "妙芙绵醇奶油味",
+      "sam3_prompt": "frontmost cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_009.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_010",
+      "name": "妙芙巧克力味",
+      "sam3_prompt": "frontmost cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_010.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_011",
+      "name": "薯愿非油炸清新番茄味",
+      "sam3_prompt": "frontmost cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_011.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_012",
+      "name": "薯愿非油炸韩国泡菜味",
+      "sam3_prompt": "frontmost cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_012.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_013",
+      "name": "薯愿非油炸香烤原味",
+      "sam3_prompt": "frontmost cardboard box",
+      "images": [
+        {
+          "image": "images/SKU_013.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_014",
+      "name": "品客薯片烧烤牛排味",
+      "sam3_prompt": "frontmost pringles can",
+      "images": [
+        {
+          "image": "images/SKU_014.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_015",
+      "name": "品客原味",
+      "sam3_prompt": "frontmost pringles can",
+      "images": [
+        {
+          "image": "images/SKU_015.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_016",
+      "name": "品客酸乳酪洋葱味",
+      "sam3_prompt": "frontmost pringles can",
+      "images": [
+        {
+          "image": "images/SKU_016.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_017",
+      "name": "奥利奥香甜不腻",
+      "sam3_prompt": "frontmost oreo box",
+      "images": [
+        {
+          "image": "images/SKU_017.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_018",
+      "name": "奥利奥冰淇淋抹茶味",
+      "sam3_prompt": "frontmost oreo box",
+      "images": [
+        {
+          "image": "images/SKU_018.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_019",
+      "name": "奥利奥浓醇巧克力味",
+      "sam3_prompt": "frontmost oreo box",
+      "images": [
+        {
+          "image": "images/SKU_019.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_020",
+      "name": "奥利奥白桃乌龙味",
+      "sam3_prompt": "frontmost oreo box",
+      "images": [
+        {
+          "image": "images/SKU_020.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_021",
+      "name": "Lay's乐事薯片墨西哥鸡汁番茄味",
+      "sam3_prompt": "frontmost red Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_021.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_022",
+      "name": "Lay's乐事薯片经典原味",
+      "sam3_prompt": "frontmost yellow Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_022.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_023",
+      "name": "Lay's乐事薯片黄瓜味",
+      "sam3_prompt": "frontmost green Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_023.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_024",
+      "name": "Lay's乐事薯片意大利香浓红烩味",
+      "sam3_prompt": "frontmost blue Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_024.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_025",
+      "name": "Lay's乐事薯片青柠味",
+      "sam3_prompt": "frontmost blue Lay's package",
+      "images": [
+        {
+          "image": "images/SKU_025.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_026",
+      "name": "呀！土豆番茄酱味",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_026.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_027",
+      "name": "好友趣韩国泡菜味",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_027.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_028",
+      "name": "卫龙辣条",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_028.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_029",
+      "name": "百醇草莓香草味",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_029.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_030",
+      "name": "百醇巧克力味",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_030.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_031",
+      "name": "上好佳鲜虾条",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_031.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_032",
+      "name": "浪味仙",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_032.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_033",
+      "name": "好丽友派",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_033.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_034",
+      "name": "吐司方方原味",
+      "sam3_prompt": "frontmost white cake package",
+      "images": [
+        {
+          "image": "images/SKU_034.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_035",
+      "name": "好友趣蜂蜜黄油味",
+      "sam3_prompt": "frontmost snack package",
+      "images": [
+        {
+          "image": "images/SKU_035.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_036",
+      "name": "可孚棉签",
+      "sam3_prompt": "frontmost round container",
+      "images": [
+        {
+          "image": "images/SKU_036.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_037",
+      "name": "小鹿妈妈牙线",
+      "sam3_prompt": "frontmost container",
+      "images": [
+        {
+          "image": "images/SKU_037.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_038",
+      "name": "得宝纸巾",
+      "sam3_prompt": "top blue tissue package",
+      "images": [
+        {
+          "image": "images/SKU_038.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_039",
+      "name": "草原红太阳烧烤料原味",
+      "sam3_prompt": "frontmost printed bottle",
+      "images": [
+        {
+          "image": "images/SKU_039.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_040",
+      "name": "草原红太阳烧烤料香辣味",
+      "sam3_prompt": "frontmost printed bottle",
+      "images": [
+        {
+          "image": "images/SKU_040.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_041",
+      "name": "草原红太阳烧烤酱香辣",
+      "sam3_prompt": "frontmost red package",
+      "images": [
+        {
+          "image": "images/SKU_041.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_042",
+      "name": "草原红太阳烧烤酱原味",
+      "sam3_prompt": "frontmost green sauce package",
+      "images": [
+        {
+          "image": "images/SKU_042.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_043",
+      "name": "海氏海诺创口贴",
+      "sam3_prompt": "top frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_043.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_044",
+      "name": "德佑湿巾",
+      "sam3_prompt": "top silver package",
+      "images": [
+        {
+          "image": "images/SKU_044.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_045",
+      "name": "心相印纸巾",
+      "sam3_prompt": "top green package",
+      "images": [
+        {
+          "image": "images/SKU_045.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_046",
+      "name": "合味道海鲜味",
+      "sam3_prompt": "frontmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_046.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_047",
+      "name": "合味道五香牛肉味",
+      "sam3_prompt": "frontmost red noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_047.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_048",
+      "name": "农心碗面",
+      "sam3_prompt": "topmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_048.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_049",
+      "name": "健食力低脂香肠",
+      "sam3_prompt": "frontmost white and green package",
+      "images": [
+        {
+          "image": "images/SKU_049.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_050",
+      "name": "妙洁海绵百洁布",
+      "sam3_prompt": "frontmost transparent package",
+      "images": [
+        {
+          "image": "images/SKU_050.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_051",
+      "name": "康师傅香辣牛肉面",
+      "sam3_prompt": "topmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_051.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_052",
+      "name": "康师傅鲜虾鱼板面",
+      "sam3_prompt": "topmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_052.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_053",
+      "name": "康师傅老坛酸菜牛肉面",
+      "sam3_prompt": "topmost noodle cup",
+      "images": [
+        {
+          "image": "images/SKU_053.jpg",
+          "instance_count": 0
+        }
+      ],
+      "instance_count": 0,
+      "status": "no_detection"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_054",
+      "name": "好人家火锅底料",
+      "sam3_prompt": "frontmost hotpot package",
+      "images": [
+        {
+          "image": "images/SKU_054.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_055",
+      "name": "纯棉酒店大毛巾",
+      "sam3_prompt": "topmost PICC towel package",
+      "images": [
+        {
+          "image": "images/SKU_055.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_056",
+      "name": "京东京造毛巾",
+      "sam3_prompt": "top plastic towel package",
+      "images": [
+        {
+          "image": "images/SKU_056.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_057",
+      "name": "三色藜麦",
+      "sam3_prompt": "frontmost white package",
+      "images": [
+        {
+          "image": "images/SKU_057.png",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_058",
+      "name": "慢碳十色糙米",
+      "sam3_prompt": "frontmost container",
+      "images": [
+        {
+          "image": "images/SKU_058.png",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_059",
+      "name": "高纤七色糙米",
+      "sam3_prompt": "frontmost container",
+      "images": [
+        {
+          "image": "images/SKU_059.png",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_060",
+      "name": "山西黄小米",
+      "sam3_prompt": "frontmost container",
+      "images": [
+        {
+          "image": "images/SKU_060.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_061",
+      "name": "界面医疗医用外科口罩",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_061.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_062",
+      "name": "中盐精制盐",
+      "sam3_prompt": "topmost white and blue package",
+      "images": [
+        {
+          "image": "images/SKU_062.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_063",
+      "name": "小苏打",
+      "sam3_prompt": "topmost white and green package",
+      "images": [
+        {
+          "image": "images/SKU_063.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_064",
+      "name": "镇江香醋",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_064.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_065",
+      "name": "蒸鱼豉油",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_065.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_066",
+      "name": "薄盐生抽",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_066.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_067",
+      "name": "可口可乐罐装",
+      "sam3_prompt": "frontmost coke",
+      "images": [
+        {
+          "image": "images/SKU_067.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_068",
+      "name": "雪碧罐装",
+      "sam3_prompt": "frontmost can",
+      "images": [
+        {
+          "image": "images/SKU_068.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_069",
+      "name": "芬达罐装",
+      "sam3_prompt": "frontmost fanta can",
+      "images": [
+        {
+          "image": "images/SKU_069.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_070",
+      "name": "百事可乐瓶装",
+      "sam3_prompt": "frontmost pepsi bottle",
+      "images": [
+        {
+          "image": "images/SKU_070.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_071",
+      "name": "7喜瓶装",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_071.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_072",
+      "name": "水溶C100瓶装",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_072.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_073",
+      "name": "小青柠汁饮料",
+      "sam3_prompt": "frontmost yellow bottle",
+      "images": [
+        {
+          "image": "images/SKU_073.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_074",
+      "name": "美年达瓶装",
+      "sam3_prompt": "frontmost orange bottle",
+      "images": [
+        {
+          "image": "images/SKU_074.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_075",
+      "name": "名仁苏打水饮料",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_075.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_076",
+      "name": "东方树叶茉莉花茶",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_076.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_077",
+      "name": "绿豆冰沙",
+      "sam3_prompt": "frontmost green cup",
+      "images": [
+        {
+          "image": "images/SKU_077.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_078",
+      "name": "外星人电解质水椰子口味",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_078.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_079",
+      "name": "外星人电解质水青柠口味",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_079.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_080",
+      "name": "外星人电解质水白桃口味0糖",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_080.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_081",
+      "name": "外星人电解质水西柚口味",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_081.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_082",
+      "name": "尖叫",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_082.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_083",
+      "name": "百岁山矿泉水",
+      "sam3_prompt": "frontmost transparent bottle",
+      "images": [
+        {
+          "image": "images/SKU_083.png",
+          "instance_count": 4
+        }
+      ],
+      "instance_count": 4,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_084",
+      "name": "脉动观梅止渴饮",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_084.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_085",
+      "name": "脉动芒果口味",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_085.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_086",
+      "name": "脉动菠萝口味",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_086.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_087",
+      "name": "脉动猫薄荷瓶",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_087.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_088",
+      "name": "外星人电解质水青柠口味0糖",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_088.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_089",
+      "name": "宝矿力水特",
+      "sam3_prompt": "frontmost bottle",
+      "images": [
+        {
+          "image": "images/SKU_089.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_090",
+      "name": "舒肤佳香皂纯白清香型",
+      "sam3_prompt": "frontmost white and blue box",
+      "images": [
+        {
+          "image": "images/SKU_090.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_091",
+      "name": "舒肤佳香皂芦荟呵护香型",
+      "sam3_prompt": "frontmost white and pink box",
+      "images": [
+        {
+          "image": "images/SKU_091.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_092",
+      "name": "舒肤佳香皂柠檬清新香型",
+      "sam3_prompt": "frontmost white and yellow box",
+      "images": [
+        {
+          "image": "images/SKU_092.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_093",
+      "name": "汰渍肥皂",
+      "sam3_prompt": "frontmost orange Tide package",
+      "images": [
+        {
+          "image": "images/SKU_093.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_094",
+      "name": "杯子",
+      "sam3_prompt": "cup",
+      "images": [
+        {
+          "image": "images/SKU_094.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_095",
+      "name": "舒克牙膏竹炭薄荷",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_095.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_096",
+      "name": "舒克牙膏柠檬百香果",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_096.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_097",
+      "name": "舒克牙膏海盐薄荷",
+      "sam3_prompt": "frontmost box",
+      "images": [
+        {
+          "image": "images/SKU_097.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_098",
+      "name": "冷酸灵云感觉牙刷",
+      "sam3_prompt": "toothbrush package",
+      "images": [
+        {
+          "image": "images/SKU_098.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_099",
+      "name": "Dove沐浴泡泡樱花甜香",
+      "sam3_prompt": "frontmost red bottle with long neck",
+      "images": [
+        {
+          "image": "images/SKU_099.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_100",
+      "name": "Dove沐浴泡泡白桃果香",
+      "sam3_prompt": "frontmost bottle with long neck",
+      "images": [
+        {
+          "image": "images/SKU_100.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_101",
+      "name": "Dove沐浴泡泡清甜奶香",
+      "sam3_prompt": "frontmost bottle with long neck",
+      "images": [
+        {
+          "image": "images/SKU_101.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_102",
+      "name": "威露士",
+      "sam3_prompt": "frontmost bottle with neck",
+      "images": [
+        {
+          "image": "images/SKU_102.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_103",
+      "name": "Dove沐浴乳",
+      "sam3_prompt": "frontmost white tube",
+      "images": [
+        {
+          "image": "images/SKU_103.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_104",
+      "name": "拖鞋",
+      "sam3_prompt": "package",
+      "images": [
+        {
+          "image": "images/SKU_104.jpg",
+          "instance_count": 2
+        }
+      ],
+      "instance_count": 2,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_105",
+      "name": "Dove沐浴泡泡樱花甜香袋装",
+      "sam3_prompt": "frontmost pink and white pack",
+      "images": [
+        {
+          "image": "images/SKU_105.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_106",
+      "name": "半亩花田洗发水",
+      "sam3_prompt": "frontmost beige bottle",
+      "images": [
+        {
+          "image": "images/SKU_106.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    },
+    {
+      "task_type": "MISPLACED",
+      "sku_id": "SKU_107",
+      "name": "心相印厨房纸巾",
+      "sam3_prompt": "top green package",
+      "images": [
+        {
+          "image": "images/SKU_107.jpg",
+          "instance_count": 1
+        }
+      ],
+      "instance_count": 1,
+      "status": "detected"
+    }
+  ]
+}

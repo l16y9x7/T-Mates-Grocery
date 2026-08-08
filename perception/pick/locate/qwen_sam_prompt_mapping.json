@@ -5,7 +5,7 @@
   },
   "Dove沐浴泡泡樱花甜香": {
     "qwen3_prompt": "找到图片中从上往下第一排货架的红色Dove沐浴露，输出一个完整的bbox。返回格式：{\"name\": \"红色Dove沐浴露\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost bottle with long neck"
+    "sam3_prompt": "frontmost container with long neck"
   },
   "Dove沐浴泡泡樱花甜香袋装": {
     "qwen3_prompt": "找到图片中从上往下第二排货架上的所有Dove包装袋，输出一个完整的bbox。返回格式：{\"name\": \"Dove包装袋\", \"bbox\": [x1, y1, x2, y2]}",
@@ -13,11 +13,11 @@
   },
   "Dove沐浴泡泡清甜奶香": {
     "qwen3_prompt": "找到图片中从上往下第一排货架的蓝色Dove沐浴露，输出一个完整的bbox。返回格式：{\"name\": \"蓝色Dove沐浴露\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost bottle with long neck"
+    "sam3_prompt": "frontmost container with long neck"
   },
   "Dove沐浴泡泡白桃果香": {
     "qwen3_prompt": "找到图片中从上往下第一排货架的棕色Dove沐浴露，输出一个完整的bbox。返回格式：{\"name\": \"棕色Dove沐浴露\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost bottle with long neck"
+    "sam3_prompt": "frontmost container with long neck"
   },
   "Lay's乐事薯片墨西哥鸡汁番茄味": {
     "qwen3_prompt": "找到图片中货架第一排的红色乐事薯片，输出满足条件的红色乐事薯片的bbox。返回格式：{\"name\": \"红色乐事薯片\", \"bbox\": [x1, y1, x2, y2]}",
@@ -65,7 +65,7 @@
   },
   "农心碗面": {
     "qwen3_prompt": "找到图片中从上往下第二层货架上的白色辛拉面碗堆，输出满足条件的所有白色辛拉面碗堆的bbox，每一堆分开。返回格式：{\"name\": \"白色辛拉面碗堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "topmost noodle cup"
+    "sam3_prompt": "topmost white noodle cup"
   },
   "冷酸灵云感觉牙刷": {
     "qwen3_prompt": "找到图片中从上往下第二排货架的牙刷堆，输出一个完整的bbox。返回格式：{\"name\": \"牙刷堆\", \"bbox\": [x1, y1, x2, y2]}",
@@ -73,7 +73,7 @@
   },
   "半亩花田洗发水": {
     "qwen3_prompt": "找到图片中从上往下第二排货架上的所有半亩花田洗发水瓶，输出bbox。返回格式：{\"name\": \"半亩花田洗发水瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost beige bottle"
+    "sam3_prompt": "frontmost cyan bottle"
   },
   "卫龙辣条": {
     "qwen3_prompt": "找到图片中货架第二排的辣条，输出满足条件的辣条的bbox。返回格式：{\"name\": \"辣条\", \"bbox\": [x1, y1, x2, y2]}",
@@ -81,7 +81,7 @@
   },
   "双汇王中王火腿肠": {
     "qwen3_prompt": "找到图片中最上层货架的火腿肠堆，输出满足条件的所有火腿肠堆的bbox。返回格式：{\"name\": \"火腿肠堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "topmost sausage package"
+    "sam3_prompt": "topmost sausage"
   },
   "可口可乐罐装": {
     "qwen3_prompt": "找到图中顶层货架上所有的可口可乐堆，返回一个完整包含所有可口可乐堆的大bbox。最终返回格式：{\"name\": \"可口可乐堆\", \"bbox\": [x1, y1, x2, y2]}",
@@ -165,7 +165,7 @@
   },
   "威露士": {
     "qwen3_prompt": "找到图片中从上往下第一排货架上的白瓶粉盖Walch威露士，输出一个完整的bbox。返回格式：{\"name\": \"威露士\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost bottle with neck"
+    "sam3_prompt": "frontmost container with neck"
   },
   "宝矿力水特": {
     "qwen3_prompt": "找到图片中从上往下第二层的蓝色不透明宝矿力水特水瓶堆，输出完整的bbox。返回格式：{\"name\": \"蓝色不透明宝矿力水特水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
@@ -193,15 +193,15 @@
   },
   "康师傅老坛酸菜牛肉面": {
     "qwen3_prompt": "找到图片中从上往下第一层货架的紫色康师傅拉面桶堆，输出满足条件的所有紫色康师傅拉面桶堆的bbox，每一堆分开。返回格式：{\"name\": \"紫色康师傅拉面桶堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "topmost noodle cup"
+    "sam3_prompt": "topmost purple noodle cup"
   },
   "康师傅香辣牛肉面": {
     "qwen3_prompt": "找到图片中从上往下第一层货架的橙色康师傅拉面桶堆，输出满足条件的所有橙色康师傅拉面桶堆的bbox，每一堆分开。返回格式：{\"name\": \"橙色康师傅拉面桶堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "topmost noodle cup"
+    "sam3_prompt": "topmost orange noodle cup"
   },
   "康师傅鲜虾鱼板面": {
     "qwen3_prompt": "找到图片中从上往下第一层货架的蓝色康师傅拉面桶堆，输出满足条件的所有蓝色康师傅拉面桶堆的bbox，每一堆分开。返回格式：{\"name\": \"蓝色康师傅拉面桶堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "topmost noodle cup"
+    "sam3_prompt": "topmost blue noodle cup"
   },
   "得宝纸巾": {
     "qwen3_prompt": "找到图片中最上层货架的蓝色小纸巾包堆，输出满足条件的所有蓝色小纸巾包堆的bbox，每一堆分开。返回格式：{\"name\": \"蓝色小纸巾包堆\", \"bbox\": [x1, y1, x2, y2]}",
@@ -325,7 +325,7 @@
   },
   "草原红太阳烧烤酱香辣": {
     "qwen3_prompt": "找到图片中顶层货架的红色烧烤酱袋子堆，输出满足条件的所有红色烧烤酱袋子堆的bbox，每一堆分开。返回格式：{\"name\": \"红色烧烤酱袋子堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost red package"
+    "sam3_prompt": "frontmost red sauce package"
   },
   "蒙牛纯牛奶": {
     "qwen3_prompt": "找到图片中最上层货架的绿白纯牛奶堆，输出满足条件的所有纯牛奶堆的bbox，每一堆都分开。返回格式：{\"name\": \"纯牛奶堆\", \"bbox\": [x1, y1, x2, y2]",
@@ -377,11 +377,11 @@
   },
   "草原红太阳烧烤料香辣味": {
     "qwen3_prompt": "找到图片中顶货架的红色烧烤料小瓶子，输出满足条件的所有红色烧烤料小瓶子的bbox。返回格式：{\"name\": \"红色烧烤料小瓶子\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost printed bottle"
+    "sam3_prompt": "frontmost labelled bottle"
   },
   "草原红太阳烧烤料原味": {
     "qwen3_prompt": "找到图片中顶货架的棕色烧烤料小瓶子，输出满足条件的所有棕色烧烤料小瓶子的bbox。返回格式：{\"name\": \"棕色烧烤料小瓶子\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost printed bottle"
+    "sam3_prompt": "frontmost labelled bottle"
   },
   "纯棉酒店大毛巾": {
     "qwen3_prompt": "找到图中从上往下第二层货架上所有的PICC毛巾包，返回一个完整包含所有PICC毛巾包的大bbox。最终返回格式：{\"name\": \"PICC毛巾包\", \"bbox\": [x1, y1, x2, y2]}",
