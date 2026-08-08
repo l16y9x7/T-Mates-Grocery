@@ -14,7 +14,7 @@ python api.py --host 0.0.0.0 --port 8080
 再启动定位服务：
 
 ```powershell
-cd perception/pick/locate
+cd perception
 python -m pip install -r requirements.txt
 python main.py
 ```

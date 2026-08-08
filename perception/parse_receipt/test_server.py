@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import unittest
 from unittest.mock import patch
 from urllib.error import URLError
@@ -42,9 +43,6 @@ class FakeResponse:
 
 
 class ReceiptServerTests(unittest.TestCase):
-    def setUp(self) -> None:
-        server._SKU_NAMES_CACHE.clear()
-
     def test_capture_one_frame_gets_camera_without_writing_file(self) -> None:
         image = jpeg_bytes()
         with patch("server.urlopen", return_value=FakeResponse(image)) as mocked:
@@ -54,7 +52,7 @@ class ReceiptServerTests(unittest.TestCase):
         self.assertEqual(request.method, "GET")
 
     def test_receipt_endpoint_has_no_upload_request_body(self) -> None:
-        operation = server.app.openapi()["paths"]["/receipt/parse"]["post"]
+        operation = server.app.openapi()["paths"]["/perception/parse"]["post"]
         self.assertNotIn("requestBody", operation)
 
     def test_recognize_one_frame_sends_one_image_url(self) -> None:
@@ -68,20 +66,13 @@ class ReceiptServerTests(unittest.TestCase):
             ]
         }
         with patch("server._request_qwen", return_value=qwen) as mocked:
-            items = server.recognize_frames([jpeg_bytes()], settings())
+            items = server.recognize_frame(jpeg_bytes(), settings())
         content = mocked.call_args.args[0]["messages"][1]["content"]
         self.assertEqual(sum(block["type"] == "image_url" for block in content), 1)
         self.assertEqual(mocked.call_args.args[0]["temperature"], 0)
         self.assertEqual(
             items, [{"name": "NFC桔汁", "specification": "500ml"}]
         )
-
-    def test_recognize_three_frames_keeps_multi_image_path(self) -> None:
-        qwen = {"choices": [{"message": {"content": "[]"}}]}
-        with patch("server._request_qwen", return_value=qwen) as mocked:
-            server.recognize_frames([jpeg_bytes()] * 3, settings())
-        content = mocked.call_args.args[0]["messages"][1]["content"]
-        self.assertEqual(sum(block["type"] == "image_url" for block in content), 3)
 
     def test_qwen_schema_allows_only_name_and_specification(self) -> None:
         self.assertEqual(
@@ -97,51 +88,85 @@ class ReceiptServerTests(unittest.TestCase):
 
     def test_empty_qwen_array_is_valid(self) -> None:
         self.assertEqual(server.parse_qwen_items("[]"), [])
+        self.assertEqual(
+            server.parse_qwen_items(
+                '[{"name":"NFC桔汁","specification":null}, []]'
+            ),
+            [{"name": "NFC桔汁", "specification": None}],
+        )
 
     def test_invalid_qwen_json_fails(self) -> None:
         with self.assertRaisesRegex(server.ServiceError, "严格 JSON"):
             server.parse_qwen_items("```json\n[]\n```")
 
-    def test_parse_receipt_returns_only_sku_name_and_locations(self) -> None:
-        recognized = [{"name": "NFC桔汁", "specification": "500ml"}]
-        sku_result = [{"name": "NFC桔汁", "locations": ["H1_F_L1_C01"]}]
+    def test_parse_receipt_returns_two_names_in_object(self) -> None:
+        recognized = [
+            {"name": "NFC桔汁", "specification": "500ml"},
+            {"name": "蒙牛纯牛奶", "specification": "250ml"},
+        ]
+        sku_result = ["NFC桔汁", "蒙牛纯牛奶"]
         with (
             patch("server.Settings.from_env", return_value=settings()),
             patch("server.capture_one_frame", return_value=jpeg_bytes()),
-            patch("server.recognize_frames", return_value=recognized),
+            patch("server.recognize_frame", return_value=recognized),
             patch("server.lookup_sku_items", return_value=sku_result),
         ):
-            self.assertEqual(server.parse_receipt(), sku_result)
+            self.assertEqual(server.parse_receipt().product_names, sku_result)
 
-    def test_parse_receipt_returns_empty_array_without_sku_call(self) -> None:
+    def test_parse_receipt_rejects_result_without_two_items(self) -> None:
         with (
             patch("server.Settings.from_env", return_value=settings()),
             patch("server.capture_one_frame", return_value=jpeg_bytes()),
-            patch("server.recognize_frames", return_value=[]),
+            patch("server.recognize_frame", return_value=[]),
             patch("server.lookup_sku_items") as lookup,
         ):
-            self.assertEqual(server.parse_receipt(), [])
+            with self.assertRaisesRegex(server.ServiceError, "必须识别出两个商品"):
+                server.parse_receipt()
             lookup.assert_not_called()
 
     def test_sku_exact_match_discards_specification(self) -> None:
-        product = {"name": "NFC桔汁", "locations": ["H1_F_L1_C01"]}
-        with patch("server._sku_product_for_name", return_value=product):
+        with patch("server._all_sku_names", return_value=["NFC桔汁"]):
             result = server.lookup_sku_items(
                 [{"name": "NFC桔汁", "specification": "500ml"}], settings()
             )
-        self.assertEqual(result, [product])
-        self.assertNotIn("specification", result[0])
+        self.assertEqual(result, ["NFC桔汁"])
 
-    def test_sku_edit_distance_fallback_returns_nearest_product(self) -> None:
-        expected = {
-            "name": "草原红太阳烧烤酱原味",
-            "locations": ["H1_B_L1_C07"],
-        }
+    def test_non_numeric_specification_is_appended_for_exact_match(self) -> None:
+        expected = "外星人电解质水白桃口味"
         with (
             patch(
-                "server._sku_product_for_name",
-                side_effect=[server.SKUNotFoundError("基原红太阳烧烤酱原味"), expected],
+                "server._all_sku_names",
+                return_value=["外星人电解质水青柠口味", "外星人电解质水白桃口味"],
             ),
+        ):
+            result = server.lookup_sku_items(
+                [{"name": "外星人电解质水", "specification": "白桃口味"}],
+                settings(),
+            )
+        self.assertEqual(result, [expected])
+
+    def test_exact_name_has_priority_over_non_numeric_specification(self) -> None:
+        self.assertEqual(
+            server.match_sku_name(
+                "NFC桔汁",
+                "白桃口味",
+                ["NFC桔汁", "NFC桔汁白桃口味"],
+            ),
+            "NFC桔汁",
+        )
+
+    def test_numeric_unit_specification_is_excluded_from_matching(self) -> None:
+        self.assertEqual(server.specification_for_matching("500ml"), "")
+        self.assertEqual(server.specification_for_matching("55 g"), "")
+        self.assertEqual(server.specification_for_matching("2盒"), "")
+        self.assertEqual(
+            server.specification_for_matching("白桃口味"),
+            "白桃口味",
+        )
+
+    def test_sku_edit_distance_fallback_returns_nearest_product(self) -> None:
+        expected = "草原红太阳烧烤酱原味"
+        with (
             patch(
                 "server._all_sku_names",
                 return_value=["草原红太阳烧烤料原味", "草原红太阳烧烤酱原味"],
@@ -152,6 +177,14 @@ class ReceiptServerTests(unittest.TestCase):
                 settings(),
             )
         self.assertEqual(result, [expected])
+
+    def test_default_camera_is_head_snapshot(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            configured = server.Settings.from_env()
+        self.assertEqual(
+            configured.camera_url,
+            "http://192.168.130.50:8085/camera/snapshot?camera=head&type=color",
+        )
 
     def test_camera_connection_failure_is_diagnostic(self) -> None:
         with patch("server.urlopen", side_effect=URLError("offline")):

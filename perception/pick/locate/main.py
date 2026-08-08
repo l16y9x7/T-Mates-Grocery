@@ -15,8 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
-import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
@@ -86,6 +85,7 @@ SAM_SMALLEST_MASK_MAX_RATIO = float(
 REQUEST_TIMEOUT_SECONDS = 120
 
 app = FastAPI(title="Sorting Pick Locate", version="2.0.0")
+router = APIRouter()
 
 
 class LocateRequest(BaseModel):
@@ -244,7 +244,7 @@ def uploaded_image_name(image_name: str | None) -> str:
     return normalized_name
 
 
-@app.get("/video/frame")
+@router.get("/video/frame")
 def get_video_frame(hand: str = "left") -> FileResponse:
     image_path = get_latest_rgb(hand)
     media_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
@@ -1004,12 +1004,12 @@ def make_locate_response(debug_response: LocateDebugResponse) -> LocateResponse:
     )
 
 
-@app.post("/perception/pick/locate", response_model=LocateResponse)
+@router.post("/perception/pick/locate", response_model=LocateResponse)
 def locate_product(request: LocateRequest) -> LocateResponse:
     return make_locate_response(locate_product_debug(request))
 
 
-@app.post("/perception/pick/locate/debug", response_model=LocateDebugResponse)
+@router.post("/perception/pick/locate/debug", response_model=LocateDebugResponse)
 def locate_product_debug_api(request: LocateRequest) -> LocateDebugResponse:
     return locate_product_debug(
         request,
@@ -1018,5 +1018,4 @@ def locate_product_debug_api(request: LocateRequest) -> LocateDebugResponse:
     )
 
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8083)
+app.include_router(router)

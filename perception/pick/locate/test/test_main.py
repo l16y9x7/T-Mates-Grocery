@@ -144,7 +144,7 @@ class LocateLogicTest(unittest.TestCase):
                 "http://192.168.130.59:8083/perception/pick/locate/debug",
             )
             request_payload = post_mock.call_args.kwargs["json"]
-            self.assertEqual(request_payload["name"], "SORTING")
+            self.assertEqual(request_payload["task_type"], "SORTING")
             self.assertEqual(request_payload["product_name"], "NFC桔汁")
             self.assertEqual(request_payload["hand"], "right")
             self.assertEqual(request_payload["image_name"], image_path.name)

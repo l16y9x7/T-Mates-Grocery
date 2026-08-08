@@ -3,11 +3,11 @@
 这个目录只负责一条运行链路：
 
 ```text
-POST /receipt/parse
+POST /perception/parse
   -> GET 机器人头部相机当前帧
   -> Qwen3-VL 输出商品 name + specification
-  -> SKU 服务校验商品名
-  -> 返回标准 name + locations
+  -> SKU 服务获取全量 name 并按优先级匹配
+  -> 返回包含两个标准商品名的对象
 ```
 
 调用方不上传图片。调用发生时相机看到的画面，就是本次识别的输入。
@@ -30,16 +30,16 @@ python -m pip install fastapi pillow uvicorn
 
 ## 配置
 
-真实地址只通过环境变量配置，不写入仓库：
+默认头部相机地址为 `http://192.168.130.50:8085/camera/snapshot?camera=head&type=color`。以下环境变量均可覆盖默认配置：
 
 ```bash
 export RECEIPT_CAMERA_URL='http://<camera-host>:<port>/camera/snapshot?camera=head&type=color'
+export CAMERA_TIMEOUT_SECONDS='5'
 export QWEN_BASE_URL='http://<qwen-host>:<port>/v1'
 export QWEN_MODEL='Qwen3-VL-4B-Instruct'
 export QWEN_TIMEOUT_SECONDS='120'
 export SKU_BASE_URL='http://127.0.0.1:25540'
 export SKU_TIMEOUT_SECONDS='3'
-export SKU_EDIT_DISTANCE_MAX='3'
 ```
 
 如果 Qwen 需要认证，再设置：
@@ -53,8 +53,12 @@ export QWEN_API_KEY='<api-key>'
 在本目录运行：
 
 ```bash
-uvicorn server:app --host 0.0.0.0 --port 8083
+cd ..
+python main.py
 ```
+
+`/perception/parse` 已注册到 Locate 的 FastAPI app，由同一个进程监听
+8083；不要再单独启动一个 8083 端口的 `server:app`。
 
 终端前台运行时，关闭终端或按 `Ctrl+C` 会停止服务。正式部署应由同事配置 systemd、Supervisor 或容器负责常驻和重启。
 
@@ -63,13 +67,13 @@ uvicorn server:app --host 0.0.0.0 --port 8083
 服务器本机：
 
 ```bash
-curl -X POST http://127.0.0.1:8083/receipt/parse
+curl -X POST http://127.0.0.1:8083/perception/parse
 ```
 
 Mac 已将服务器 `8083` 转发到本地 `28083` 时：
 
 ```bash
-curl -X POST http://127.0.0.1:28083/receipt/parse
+curl -X POST http://127.0.0.1:28083/perception/parse
 ```
 
 请求体为空，不需要提供图片路径。机器人必须先到达小票拍摄位姿。
@@ -85,26 +89,30 @@ Qwen 内部输出只允许：
 ]
 ```
 
-正式成功响应只保留 SKU 标准名称和位置：
+正式成功响应是一个对象，只包含两个 SKU 标准商品名：
 
 ```json
-[
-  {
-    "name": "康师傅香辣牛肉面",
-    "locations": ["H1_F_L1_C01"]
-  }
-]
+{
+  "product_names": [
+    "康师傅香辣牛肉面",
+    "NFC桔汁"
+  ]
+}
 ```
 
-Qwen 返回空数组时接口也返回 `[]`。商品名无法通过 SKU 精确匹配或编辑距离兜底时返回：
+Qwen 没有识别出两个商品时，接口返回识别错误，不返回残缺结果。
 
-```json
-{"error_code":"SKU_NOT_FOUND"}
-```
+SKU 匹配顺序：
 
-## 一帧与三帧
+1. `name` 直接命中完整 SKU name。
+2. 如果 specification 不是 `500ml`、`55g`、`2盒` 这类纯数字加单位，则尝试 `name + specification` 精确匹配。
+3. 对同样处理后的 `name + specification` 与全量 SKU name 计算编辑距离，选择距离最短者。
 
-当前 `/receipt/parse` 只 GET 一张相机图片。底层 `recognize_frames()` 已限制并支持 1–3 张同一小票图片；以后相机支持连续拍摄时，只需扩展采集函数，将三张图片一起传入，不需要重写 Qwen 和 SKU 链路。
+全量 SKU name 为空或 SKU 服务不可用时返回对应上游错误。
+
+## 单帧处理
+
+每次请求只 GET 一张头部相机快照，Qwen 请求中只包含一个 `image_url`。接口没有请求体。
 
 ## 测试
 

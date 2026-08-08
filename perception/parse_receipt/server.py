@@ -1,4 +1,4 @@
-"""Receipt parsing service: camera frame -> Qwen -> SKU locations."""
+"""Receipt parsing service: head-camera frame -> Qwen -> canonical SKU names."""
 
 from __future__ import annotations
 
@@ -6,50 +6,49 @@ import base64
 import io
 import json
 import os
+import re
 import socket
 from dataclasses import dataclass
 from typing import Any, Sequence
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.responses import JSONResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
+from pydantic import BaseModel
 
 
 MAX_CAMERA_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_EDGE = 2200
-MAX_FRAMES = 3
-DEFAULT_QWEN_BASE_URL = "http://127.0.0.1:8102/v1"
+DEFAULT_CAMERA_URL = (
+    "http://192.168.130.50:8085/camera/snapshot?camera=head&type=color"
+)
+DEFAULT_QWEN_BASE_URL = "http://211.137.21.33:25542/v1/chat/completions"
 DEFAULT_QWEN_MODEL = "Qwen3-VL-4B-Instruct"
+DEFAULT_CAMERA_TIMEOUT_SECONDS = 5.0
 DEFAULT_QWEN_TIMEOUT_SECONDS = 120.0
 DEFAULT_SKU_BASE_URL = "http://127.0.0.1:25540"
 DEFAULT_SKU_TIMEOUT_SECONDS = 3.0
-DEFAULT_SKU_EDIT_DISTANCE_MAX = 3
 
 
-SYSTEM_PROMPT = """你是零售购物小票商品解析器。
-请综合输入的同一张小票的一至三张图片，只输出严格 JSON 数组。
+SYSTEM_PROMPT = """你是零售购物小票商品解析器，解析图片中小票的文本信息。
 
-每个商品只能包含两个字段：
-- name：完整票面商品名称。
-- specification：票面规格原文；没有打印或无法确认时为 null。
+小票中有两种商品，每种商品解析两个字段：
+- 商品名称：票面商品名称的原文，注意可能有换行。
+- 规格：票面商品名称的原文，没有打印或无法确认时为 null。
 
 规则：
-1. 只识别商品明细，忽略店名、日期、时间、数量、价格、金额、折扣、合计和支付方式。
-2. 商品名称跨行打印时，按阅读顺序合并为完整名称，不能丢字。
-3. name 保留品牌、系列、品类、口味、香型和型号，不拆分 flavor，不改写或猜测。
-4. specification 只保留重量、容量、尺寸或包装规格，例如 65g、500ml、60g*10。
-5. 不合并小票中的商品行；多张图片中的同一商品不能重复输出。
-6. 整张小票无法识别时输出 []。
-7. 不输出 Markdown、说明、代码块或任何其他字段。
+1. 商品名称跨行打印时，按阅读顺序合并为完整名称，不能丢字。
+2. 不合并小票中的商品行。
+3. 确保输出的是长度为2的列表，如果只能识别一行，第二个输出空列表。
+4. 不输出 Markdown、说明、代码块或任何其他字段。
 
 输出示例：
-[{"name":"康师傅香辣牛肉面","specification":"500g"}]
+[{"name":"商品1","specification":"500g"}, {"name":"商品2","specification":"白桃乌龙味"}]
 """
 
-USER_PROMPT = """读取这张购物小票，输出商品名称和规格组成的 JSON 数组。所有图片属于同一张小票。"""
+USER_PROMPT = """解析这张购物小票。"""
 
 
 class ServiceError(Exception):
@@ -70,50 +69,43 @@ class ServiceError(Exception):
         self.upstream_status_code = upstream_status_code
 
 
-class SKUNotFoundError(ServiceError):
-    def __init__(self, name: str) -> None:
-        super().__init__(404, "sku_not_found", f"SKU 中不存在商品：{name}")
-
-
 @dataclass(frozen=True)
 class Settings:
-    camera_url: str
+    camera_url: str = DEFAULT_CAMERA_URL
+    camera_timeout_seconds: float = DEFAULT_CAMERA_TIMEOUT_SECONDS
     qwen_base_url: str = DEFAULT_QWEN_BASE_URL
     qwen_model: str = DEFAULT_QWEN_MODEL
     qwen_api_key: str | None = None
     qwen_timeout_seconds: float = DEFAULT_QWEN_TIMEOUT_SECONDS
     sku_base_url: str = DEFAULT_SKU_BASE_URL
     sku_timeout_seconds: float = DEFAULT_SKU_TIMEOUT_SECONDS
-    sku_edit_distance_max: int = DEFAULT_SKU_EDIT_DISTANCE_MAX
 
     @classmethod
     def from_env(cls) -> "Settings":
-        camera_url = _required_url("RECEIPT_CAMERA_URL")
-        qwen_base_url = _optional_url(
-            "QWEN_BASE_URL", DEFAULT_QWEN_BASE_URL
+        camera_url = os.getenv("RECEIPT_CAMERA_URL", "").strip() or DEFAULT_CAMERA_URL
+        qwen_base_url = (
+            os.getenv("QWEN_BASE_URL", "").strip()
+            or os.getenv("QWEN3_URL", "").strip()
+            or DEFAULT_QWEN_BASE_URL
         )
-        sku_base_url = _optional_url("SKU_BASE_URL", DEFAULT_SKU_BASE_URL)
-        qwen_model = os.getenv("QWEN_MODEL", DEFAULT_QWEN_MODEL).strip()
-        if not qwen_model:
-            raise ServiceError(
-                500, "configuration_error", "QWEN_MODEL 不能为空。"
-            )
+        sku_base_url = os.getenv("SKU_BASE_URL", "").strip() or DEFAULT_SKU_BASE_URL
+        qwen_model = os.getenv("QWEN_MODEL", "").strip() or DEFAULT_QWEN_MODEL
 
         api_key = os.getenv("QWEN_API_KEY")
         return cls(
             camera_url=camera_url,
+            camera_timeout_seconds=float(
+                os.getenv("CAMERA_TIMEOUT_SECONDS", DEFAULT_CAMERA_TIMEOUT_SECONDS)
+            ),
             qwen_base_url=qwen_base_url.rstrip("/"),
             qwen_model=qwen_model,
             qwen_api_key=api_key.strip() if api_key and api_key.strip() else None,
-            qwen_timeout_seconds=_positive_float(
-                "QWEN_TIMEOUT_SECONDS", DEFAULT_QWEN_TIMEOUT_SECONDS
+            qwen_timeout_seconds=float(
+                os.getenv("QWEN_TIMEOUT_SECONDS", DEFAULT_QWEN_TIMEOUT_SECONDS)
             ),
             sku_base_url=sku_base_url.rstrip("/"),
-            sku_timeout_seconds=_positive_float(
-                "SKU_TIMEOUT_SECONDS", DEFAULT_SKU_TIMEOUT_SECONDS
-            ),
-            sku_edit_distance_max=_nonnegative_int(
-                "SKU_EDIT_DISTANCE_MAX", DEFAULT_SKU_EDIT_DISTANCE_MAX
+            sku_timeout_seconds=float(
+                os.getenv("SKU_TIMEOUT_SECONDS", DEFAULT_SKU_TIMEOUT_SECONDS)
             ),
         )
 
@@ -121,18 +113,17 @@ class Settings:
 app = FastAPI(
     title="Receipt Parser",
     version="1.0.0",
-    description="Fetch one camera frame, recognize receipt items, and return SKU locations.",
+    description="Fetch one head-camera frame and return two canonical SKU names.",
 )
+router = APIRouter()
+
+
+class ParseReceiptResponse(BaseModel):
+    product_names: list[str]
 
 
 @app.exception_handler(ServiceError)
 async def handle_service_error(_: Any, error: ServiceError) -> JSONResponse:
-    if isinstance(error, SKUNotFoundError):
-        return JSONResponse(
-            status_code=404,
-            content={"error_code": "SKU_NOT_FOUND"},
-        )
-
     detail: dict[str, Any] = {
         "type": error.error_type,
         "message": error.message,
@@ -145,22 +136,22 @@ async def handle_service_error(_: Any, error: ServiceError) -> JSONResponse:
     )
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    settings = Settings.from_env()
-    return {"status": "ok", "model": settings.qwen_model}
-
-
-@app.post("/receipt/parse")
-def parse_receipt() -> list[dict[str, Any]]:
-    """Capture the current receipt frame and return canonical SKU locations."""
+@router.post("/perception/parse", response_model=ParseReceiptResponse)
+def parse_receipt() -> ParseReceiptResponse:
+    """Capture one frame and return exactly two canonical SKU names."""
 
     settings = Settings.from_env()
     frame = capture_one_frame(settings)
-    recognized_items = recognize_frames([frame], settings)
-    if not recognized_items:
-        return []
-    return lookup_sku_items(recognized_items, settings)
+    recognized_items = recognize_frame(frame, settings)
+    if len(recognized_items) != 2:
+        raise ServiceError(
+            502,
+            "qwen_output_error",
+            f"Qwen 必须识别出两个商品，当前得到 {len(recognized_items)} 个。",
+        )
+    return ParseReceiptResponse(
+        product_names=lookup_sku_items(recognized_items, settings)
+    )
 
 
 def capture_one_frame(settings: Settings) -> bytes:
@@ -172,7 +163,7 @@ def capture_one_frame(settings: Settings) -> bytes:
         method="GET",
     )
     try:
-        with urlopen(request, timeout=settings.qwen_timeout_seconds) as response:
+        with urlopen(request, timeout=settings.camera_timeout_seconds) as response:
             raw = response.read(MAX_CAMERA_BYTES + 1)
     except HTTPError as exc:
         raise ServiceError(
@@ -196,28 +187,18 @@ def capture_one_frame(settings: Settings) -> bytes:
     return raw
 
 
-def recognize_frames(
-    frames: Sequence[bytes], settings: Settings
+def recognize_frame(
+    frame: bytes, settings: Settings
 ) -> list[dict[str, str | None]]:
-    """Recognize one receipt from one to three in-memory image frames."""
-
-    if not 1 <= len(frames) <= MAX_FRAMES:
-        raise ServiceError(
-            400,
-            "invalid_frame_count",
-            f"必须提供 1 至 {MAX_FRAMES} 张同一小票图片。",
-        )
+    """Recognize one receipt from exactly one in-memory image frame."""
 
     content: list[dict[str, Any]] = [
-        {"type": "text", "text": USER_PROMPT}
+        {"type": "text", "text": USER_PROMPT},
+        {
+            "type": "image_url",
+            "image_url": {"url": image_bytes_to_data_url(frame)},
+        },
     ]
-    for frame in frames:
-        content.append(
-            {
-                "type": "image_url",
-                "image_url": {"url": image_bytes_to_data_url(frame)},
-            }
-        )
 
     payload = {
         "model": settings.qwen_model,
@@ -291,6 +272,9 @@ def parse_qwen_items(content: str) -> list[dict[str, str | None]]:
     items: list[dict[str, str | None]] = []
     for index, item in enumerate(value):
         label = f"items[{index}]"
+        if item == []:
+            # Prompt 约定：只识别出一行时，第二项可以是空列表。
+            continue
         if not isinstance(item, dict) or set(item) != {"name", "specification"}:
             raise ServiceError(
                 502,
@@ -326,43 +310,77 @@ def parse_qwen_items(content: str) -> list[dict[str, str | None]]:
 
 def lookup_sku_items(
     items: Sequence[dict[str, str | None]], settings: Settings
-) -> list[dict[str, Any]]:
-    """Map each Qwen name to one canonical SKU name and its locations."""
+) -> list[str]:
+    """Match Qwen items against the complete SKU name list in priority order."""
 
-    results: list[dict[str, Any]] = []
+    sku_names = _all_sku_names(settings)
+    if not sku_names:
+        raise ServiceError(502, "sku_response_error", "SKU 名称列表为空。")
+    results: list[str] = []
     for item in items:
         recognized_name = item["name"]
         assert isinstance(recognized_name, str)
-        try:
-            product = _sku_product_for_name(recognized_name, settings)
-        except SKUNotFoundError:
-            candidate = _best_sku_name(recognized_name, settings)
-            if candidate is None:
-                raise SKUNotFoundError(recognized_name)
-            product = _sku_product_for_name(candidate, settings)
-        results.append(
-            {"name": product["name"], "locations": product["locations"]}
+        matched_name = match_sku_name(
+            recognized_name,
+            item.get("specification"),
+            sku_names,
         )
+        results.append(matched_name)
     return results
 
 
-_SKU_NAMES_CACHE: dict[str, list[str]] = {}
+_NUMERIC_UNIT_SPECIFICATION = re.compile(
+    r"^\s*\d+(?:\.\d+)?\s*"
+    r"(?:ml|毫升|l|升|g|克|kg|千克|斤|两|mm|毫米|cm|厘米|m|米|oz|盎司|"
+    r"片|包|袋|盒|瓶|罐|支|个|枚|卷|抽)"
+    r"(?:\s*[x×*]\s*\d+(?:\s*(?:片|包|袋|盒|瓶|罐|支|个|枚|卷|抽))?)?\s*$",
+    re.IGNORECASE,
+)
 
 
-def _best_sku_name(name: str, settings: Settings) -> str | None:
-    ranked = sorted(
-        (_edit_distance(name, sku_name), sku_name)
-        for sku_name in _all_sku_names(settings)
+def specification_for_matching(specification: str | None) -> str:
+    """Exclude pure numeric-unit specifications such as 500ml or 55g."""
+
+    if not isinstance(specification, str):
+        return ""
+    normalized = specification.strip()
+    if not normalized or _NUMERIC_UNIT_SPECIFICATION.fullmatch(normalized):
+        return ""
+    return normalized
+
+
+def match_sku_name(
+    name: str,
+    specification: str | None,
+    sku_names: Sequence[str],
+) -> str:
+    """Apply exact name, exact name+specification, then nearest edit distance."""
+
+    normalized_name = name.strip()
+    available_names = [sku_name.strip() for sku_name in sku_names if sku_name.strip()]
+    if not available_names:
+        raise ServiceError(502, "sku_response_error", "SKU 名称列表为空。")
+
+    # Priority 1: the recognized name itself is already a canonical SKU name.
+    if normalized_name in available_names:
+        return normalized_name
+
+    # Priority 2: append a meaningful flavor/style specification, but ignore
+    # simple size specifications such as 500ml, 55g, or 2盒.
+    effective_specification = specification_for_matching(specification)
+    combined_name = normalized_name + effective_specification
+    if combined_name in available_names:
+        return combined_name
+
+    # Priority 3: always choose the shortest edit distance using the same
+    # specification rule. Lexicographic name is a deterministic tie breaker.
+    return min(
+        available_names,
+        key=lambda sku_name: (_edit_distance(combined_name, sku_name), sku_name),
     )
-    if not ranked or ranked[0][0] > settings.sku_edit_distance_max:
-        return None
-    return ranked[0][1]
 
 
 def _all_sku_names(settings: Settings) -> list[str]:
-    cached = _SKU_NAMES_CACHE.get(settings.sku_base_url)
-    if cached is not None:
-        return list(cached)
     value = _request_sku_json("/sku/get_all_names", settings)
     if not isinstance(value, list) or not all(
         isinstance(name, str) for name in value
@@ -371,36 +389,7 @@ def _all_sku_names(settings: Settings) -> list[str]:
             502, "sku_response_error", "SKU 名称列表必须是字符串数组。"
         )
     names = [name.strip() for name in value if name.strip()]
-    _SKU_NAMES_CACHE[settings.sku_base_url] = names
-    return list(names)
-
-
-def _sku_product_for_name(name: str, settings: Settings) -> dict[str, Any]:
-    value = _request_sku_json(
-        f"/sku/search_by_name?{urlencode({'name': name})}", settings
-    )
-    if not isinstance(value, dict):
-        raise ServiceError(
-            502, "sku_response_error", "SKU 查询响应必须是 JSON 对象。"
-        )
-    product_name = value.get("name")
-    locations = value.get("locations")
-    if not isinstance(product_name, str) or not product_name.strip():
-        raise ServiceError(
-            502, "sku_response_error", "SKU 响应缺少有效 name。"
-        )
-    if (
-        not isinstance(locations, list)
-        or not locations
-        or not all(
-            isinstance(location, str) and location
-            for location in locations
-        )
-    ):
-        raise ServiceError(
-            502, "sku_response_error", "SKU 响应缺少有效 locations。"
-        )
-    return {"name": product_name.strip(), "locations": locations}
+    return names
 
 
 def _request_qwen(payload: dict[str, Any], settings: Settings) -> dict[str, Any]:
@@ -410,8 +399,11 @@ def _request_qwen(payload: dict[str, Any], settings: Settings) -> dict[str, Any]
     }
     if settings.qwen_api_key:
         headers["Authorization"] = f"Bearer {settings.qwen_api_key}"
+    qwen_url = settings.qwen_base_url.rstrip("/")
+    if not qwen_url.endswith("/chat/completions"):
+        qwen_url += "/chat/completions"
     request = Request(
-        f"{settings.qwen_base_url}/chat/completions",
+        qwen_url,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers=headers,
         method="POST",
@@ -436,19 +428,13 @@ def _request_sku_json(path: str, settings: Settings) -> Any:
         headers={"Accept": "application/json"},
         method="GET",
     )
-    try:
-        return _read_json(
-            request,
-            settings.sku_timeout_seconds,
-            connection_type="sku_connection_error",
-            response_type="sku_response_error",
-            service_name="SKU",
-        )
-    except ServiceError as exc:
-        if exc.upstream_status_code == 404:
-            name = path.split("name=", 1)[-1]
-            raise SKUNotFoundError(name) from exc
-        raise
+    return _read_json(
+        request,
+        settings.sku_timeout_seconds,
+        connection_type="sku_connection_error",
+        response_type="sku_response_error",
+        service_name="SKU",
+    )
 
 
 def _read_json(
@@ -505,44 +491,6 @@ def _edit_distance(left: str, right: str) -> int:
     return previous[-1]
 
 
-def _required_url(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise ServiceError(500, "configuration_error", f"缺少环境变量 {name}。")
-    return _validate_url(name, value)
-
-
-def _optional_url(name: str, default: str) -> str:
-    return _validate_url(name, os.getenv(name, default).strip())
-
-
-def _validate_url(name: str, value: str) -> str:
-    if not value.startswith(("http://", "https://")):
-        raise ServiceError(
-            500, "configuration_error", f"{name} 必须以 http:// 或 https:// 开头。"
-        )
-    return value
-
-
-def _positive_float(name: str, default: float) -> float:
-    raw = os.getenv(name, str(default))
-    try:
-        value = float(raw)
-    except ValueError as exc:
-        raise ServiceError(
-            500, "configuration_error", f"{name} 必须是数字。"
-        ) from exc
-    if value <= 0:
-        raise ServiceError(500, "configuration_error", f"{name} 必须大于 0。")
-    return value
-
-
-def _nonnegative_int(name: str, default: int) -> int:
-    raw = os.getenv(name, str(default))
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise ServiceError(500, "configuration_error", f"{name} 必须是整数。") from exc
-    if value < 0:
-        raise ServiceError(500, "configuration_error", f"{name} 不能小于 0。")
-    return value
+# Keep a standalone app for isolated development and unit tests. Production
+# registers the router on perception/pick/locate/main.py's shared 8083 app.
+app.include_router(router)
