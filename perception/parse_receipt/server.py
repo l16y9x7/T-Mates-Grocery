@@ -5,17 +5,21 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 import os
 import re
 import socket
 import sys
+import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit, urlunsplit
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
@@ -47,6 +51,48 @@ DEFAULT_QWEN_TIMEOUT_SECONDS = 120.0
 DEFAULT_SKU_BASE_URL = CONFIG_SKU_API_URL
 DEFAULT_SKU_TIMEOUT_SECONDS = 3.0
 
+# Reuse Uvicorn's configured error logger so diagnostics always reach the same
+# terminal/file handler as the HTTP access log.
+logger = logging.getLogger("uvicorn.error")
+
+ERROR_CONTEXT = {
+    "camera_connection_error": (
+        "camera_capture",
+        True,
+        "检查相机服务是否启动，并确认相机主机、端口和网络可达。",
+    ),
+    "camera_response_error": (
+        "camera_capture",
+        True,
+        "检查相机接口是否返回非空的 JPEG/PNG 图片。",
+    ),
+    "qwen_connection_error": (
+        "qwen_recognition",
+        True,
+        "检查 Qwen 服务地址、端口和网络连接。",
+    ),
+    "qwen_response_error": (
+        "qwen_recognition",
+        True,
+        "检查 Qwen 服务状态及 OpenAI 兼容响应格式。",
+    ),
+    "qwen_output_error": (
+        "qwen_output_validation",
+        False,
+        "确认小票画面清晰且包含两个商品，并检查模型原始输出格式。",
+    ),
+    "sku_connection_error": (
+        "sku_lookup",
+        True,
+        "检查 SKU 服务是否已在配置端口启动。",
+    ),
+    "sku_response_error": (
+        "sku_lookup",
+        True,
+        "检查 /sku/get_all_names 是否返回非空 JSON 字符串数组。",
+    ),
+}
+
 
 SYSTEM_PROMPT = """你是零售购物小票商品解析器，解析图片中小票的文本信息。
 
@@ -77,12 +123,28 @@ class ServiceError(Exception):
         message: str,
         *,
         upstream_status_code: int | None = None,
+        stage: str | None = None,
+        upstream: str | None = None,
+        retryable: bool | None = None,
+        hint: str | None = None,
+        elapsed_ms: float | None = None,
+        timeout_seconds: float | None = None,
     ) -> None:
         super().__init__(message)
+        default_stage, default_retryable, default_hint = ERROR_CONTEXT.get(
+            error_type,
+            ("unknown", False, "查看服务端日志和异常堆栈。"),
+        )
         self.status_code = status_code
         self.error_type = error_type
         self.message = message
         self.upstream_status_code = upstream_status_code
+        self.stage = stage or default_stage
+        self.upstream = upstream
+        self.retryable = default_retryable if retryable is None else retryable
+        self.hint = hint or default_hint
+        self.elapsed_ms = elapsed_ms
+        self.timeout_seconds = timeout_seconds
 
 
 @dataclass(frozen=True)
@@ -138,17 +200,77 @@ class ParseReceiptResponse(BaseModel):
     product_names: list[str]
 
 
+def _request_id(request: FastAPIRequest) -> str:
+    supplied = request.headers.get("X-Request-ID", "").strip()
+    if supplied and len(supplied) <= 64 and re.fullmatch(r"[A-Za-z0-9._-]+", supplied):
+        return supplied
+    return uuid.uuid4().hex
+
+
+def _safe_upstream_url(url: str) -> str:
+    """Return an upstream URL without query parameters or credentials."""
+
+    parsed = urlsplit(url)
+    hostname = parsed.hostname or ""
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    netloc = hostname
+    if parsed.port is not None:
+        netloc += f":{parsed.port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, "", ""))
+
+
+def _elapsed_ms(started_at: float) -> float:
+    return round((time.perf_counter() - started_at) * 1000, 1)
+
+
 @app.exception_handler(ServiceError)
-async def handle_service_error(_: Any, error: ServiceError) -> JSONResponse:
+async def handle_service_error(
+    request: FastAPIRequest,
+    error: ServiceError,
+) -> JSONResponse:
+    request_id = _request_id(request)
     detail: dict[str, Any] = {
         "type": error.error_type,
         "message": error.message,
+        "stage": error.stage,
+        "retryable": error.retryable,
+        "hint": error.hint,
+        "request_id": request_id,
     }
     if error.upstream_status_code is not None:
         detail["upstream_status_code"] = error.upstream_status_code
+    if error.upstream is not None:
+        detail["upstream"] = error.upstream
+    if error.elapsed_ms is not None:
+        detail["elapsed_ms"] = error.elapsed_ms
+    if error.timeout_seconds is not None:
+        detail["timeout_seconds"] = error.timeout_seconds
+
+    client = request.client.host if request.client else "unknown"
+    logger.error(
+        "request_id=%s client=%s method=%s path=%s status=%s "
+        "type=%s stage=%s upstream=%s upstream_status=%s retryable=%s "
+        "elapsed_ms=%s timeout_seconds=%s message=%s hint=%s",
+        request_id,
+        client,
+        request.method,
+        request.url.path,
+        error.status_code,
+        error.error_type,
+        error.stage,
+        error.upstream or "-",
+        error.upstream_status_code or "-",
+        error.retryable,
+        error.elapsed_ms if error.elapsed_ms is not None else "-",
+        error.timeout_seconds if error.timeout_seconds is not None else "-",
+        error.message,
+        error.hint,
+    )
     return JSONResponse(
         status_code=error.status_code,
         content={"error": detail},
+        headers={"X-Request-ID": request_id},
     )
 
 
@@ -173,6 +295,8 @@ def parse_receipt() -> ParseReceiptResponse:
 def capture_one_frame(settings: Settings) -> bytes:
     """GET one current camera snapshot without writing it to disk."""
 
+    started_at = time.perf_counter()
+    upstream = _safe_upstream_url(settings.camera_url)
     request = Request(
         settings.camera_url,
         headers={"Accept": "image/jpeg,image/png,image/*"},
@@ -187,18 +311,39 @@ def capture_one_frame(settings: Settings) -> bytes:
             "camera_response_error",
             f"相机接口返回 HTTP {exc.code}。",
             upstream_status_code=exc.code,
+            upstream=upstream,
+            retryable=exc.code >= 500,
+            elapsed_ms=_elapsed_ms(started_at),
+            timeout_seconds=settings.camera_timeout_seconds,
         ) from exc
     except (URLError, TimeoutError, socket.timeout) as exc:
         reason = getattr(exc, "reason", exc)
         raise ServiceError(
-            502, "camera_connection_error", f"无法连接相机接口：{reason}"
+            502,
+            "camera_connection_error",
+            f"无法连接相机接口：{reason}",
+            upstream=upstream,
+            elapsed_ms=_elapsed_ms(started_at),
+            timeout_seconds=settings.camera_timeout_seconds,
         ) from exc
 
     if not raw:
-        raise ServiceError(502, "camera_response_error", "相机接口返回空图片。")
+        raise ServiceError(
+            502,
+            "camera_response_error",
+            "相机接口返回空图片。",
+            upstream=upstream,
+            elapsed_ms=_elapsed_ms(started_at),
+            timeout_seconds=settings.camera_timeout_seconds,
+        )
     if len(raw) > MAX_CAMERA_BYTES:
         raise ServiceError(
-            502, "camera_response_error", "相机图片超过 20MB 限制。"
+            502,
+            "camera_response_error",
+            "相机图片超过 20MB 限制。",
+            upstream=upstream,
+            elapsed_ms=_elapsed_ms(started_at),
+            timeout_seconds=settings.camera_timeout_seconds,
         )
     return raw
 
@@ -433,7 +578,10 @@ def _request_qwen(payload: dict[str, Any], settings: Settings) -> dict[str, Any]
     )
     if not isinstance(value, dict):
         raise ServiceError(
-            502, "qwen_response_error", "Qwen 响应顶层必须是 JSON 对象。"
+            502,
+            "qwen_response_error",
+            "Qwen 响应顶层必须是 JSON 对象。",
+            upstream=_safe_upstream_url(qwen_url),
         )
     return value
 
@@ -461,6 +609,8 @@ def _read_json(
     response_type: str,
     service_name: str,
 ) -> Any:
+    started_at = time.perf_counter()
+    upstream = _safe_upstream_url(request.full_url)
     try:
         with urlopen(request, timeout=timeout) as response:
             raw = response.read()
@@ -470,18 +620,33 @@ def _read_json(
             response_type,
             f"{service_name} 返回 HTTP {exc.code}。",
             upstream_status_code=exc.code,
+            upstream=upstream,
+            retryable=exc.code >= 500,
+            elapsed_ms=_elapsed_ms(started_at),
+            timeout_seconds=timeout,
         ) from exc
     except (URLError, TimeoutError, socket.timeout) as exc:
         reason = getattr(exc, "reason", exc)
         raise ServiceError(
-            502, connection_type, f"无法连接 {service_name}：{reason}"
+            502,
+            connection_type,
+            f"无法连接 {service_name}：{reason}",
+            upstream=upstream,
+            elapsed_ms=_elapsed_ms(started_at),
+            timeout_seconds=timeout,
         ) from exc
 
     try:
         return json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ServiceError(
-            502, response_type, f"{service_name} 返回的内容不是有效 UTF-8 JSON。"
+            502,
+            response_type,
+            f"{service_name} 返回的内容不是有效 UTF-8 JSON。",
+            upstream=upstream,
+            retryable=False,
+            elapsed_ms=_elapsed_ms(started_at),
+            timeout_seconds=timeout,
         ) from exc
 
 

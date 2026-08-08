@@ -96,6 +96,29 @@ Qwen 内部输出只允许：
 
 Qwen 没有识别出两个商品时，接口返回识别错误，不返回残缺结果。
 
+失败响应包含可用于定位上下游故障的结构化信息，并通过 `X-Request-ID` 响应头返回
+同一个请求编号。例如相机服务不可达时：
+
+```json
+{
+  "error": {
+    "type": "camera_connection_error",
+    "message": "无法连接相机接口：connection refused",
+    "stage": "camera_capture",
+    "retryable": true,
+    "hint": "检查相机服务是否启动，并确认相机主机、端口和网络可达。",
+    "request_id": "3fde0122bcb34cb294b65d726816f971",
+    "upstream": "http://192.168.130.50:8085/camera/snapshot",
+    "elapsed_ms": 3012.4,
+    "timeout_seconds": 5.0
+  }
+}
+```
+
+服务端终端会打印对应的单行错误日志，包含请求来源、HTTP 状态、失败阶段、上游状态、
+耗时及提示。客户端也可以传入合法的 `X-Request-ID`，便于跨服务追踪。上游 URL 的
+认证信息和查询参数不会写入响应或日志。
+
 SKU 匹配顺序：
 
 1. `name` 直接命中完整 SKU name。

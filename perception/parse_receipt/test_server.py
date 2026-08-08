@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
@@ -10,6 +11,7 @@ from unittest.mock import patch
 from urllib.error import URLError
 
 from PIL import Image
+from starlette.requests import Request as StarletteRequest
 
 import server
 
@@ -188,8 +190,63 @@ class ReceiptServerTests(unittest.TestCase):
 
     def test_camera_connection_failure_is_diagnostic(self) -> None:
         with patch("server.urlopen", side_effect=URLError("offline")):
-            with self.assertRaisesRegex(server.ServiceError, "无法连接相机接口"):
+            with self.assertRaisesRegex(
+                server.ServiceError,
+                "无法连接相机接口",
+            ) as raised:
                 server.capture_one_frame(settings())
+        error = raised.exception
+        self.assertEqual(error.stage, "camera_capture")
+        self.assertEqual(error.upstream, "http://camera.test/snapshot")
+        self.assertTrue(error.retryable)
+        self.assertIsNotNone(error.elapsed_ms)
+        self.assertEqual(error.timeout_seconds, 5.0)
+
+    def test_service_error_response_and_log_contain_diagnostics(self) -> None:
+        request = StarletteRequest(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/perception/parse",
+                "raw_path": b"/perception/parse",
+                "query_string": b"",
+                "headers": [(b"x-request-id", b"receipt-test-123")],
+                "client": ("192.168.130.59", 45800),
+                "server": ("127.0.0.1", 8083),
+            }
+        )
+        error = server.ServiceError(
+            502,
+            "camera_connection_error",
+            "无法连接相机接口：connection refused",
+            upstream="http://192.168.130.50:8085/camera/snapshot",
+            elapsed_ms=3012.4,
+            timeout_seconds=5.0,
+        )
+
+        with self.assertLogs("uvicorn.error", level="ERROR") as logs:
+            response = asyncio.run(server.handle_service_error(request, error))
+
+        body = json.loads(response.body)
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.headers["x-request-id"], "receipt-test-123")
+        self.assertEqual(body["error"]["stage"], "camera_capture")
+        self.assertEqual(body["error"]["request_id"], "receipt-test-123")
+        self.assertEqual(body["error"]["elapsed_ms"], 3012.4)
+        self.assertEqual(body["error"]["timeout_seconds"], 5.0)
+        self.assertTrue(body["error"]["retryable"])
+        self.assertIn("request_id=receipt-test-123", logs.output[0])
+        self.assertIn("stage=camera_capture", logs.output[0])
+
+    def test_upstream_url_redacts_credentials_and_query(self) -> None:
+        self.assertEqual(
+            server._safe_upstream_url(
+                "http://user:secret@camera.test:8085/snapshot?token=secret"
+            ),
+            "http://camera.test:8085/snapshot",
+        )
 
     def test_non_image_camera_response_is_rejected_in_memory(self) -> None:
         with self.assertRaisesRegex(server.ServiceError, "不是有效 JPEG/PNG"):
