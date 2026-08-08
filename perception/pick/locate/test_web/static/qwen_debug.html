@@ -3,62 +3,103 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Qwen3 bbox 直接测试</title>
-    <link rel="stylesheet" href="/static/qwen_debug.css" />
+    <title>Qwen3 / SAM3 Crop 直接测试</title>
+    <link rel="stylesheet" href="/static/qwen_debug.css?v=4" />
   </head>
   <body>
     <main>
       <header>
         <div>
-          <p class="eyebrow">QWEN3-VL DIRECT REQUEST</p>
-          <h1>Qwen3 bbox 直接测试</h1>
-          <p>粘贴图片和 Prompt，绕过 Locate、SKU 与 SAM3，直接查看 Qwen3 输出。</p>
+          <p class="eyebrow">QWEN3-VL → CROP → SAM3</p>
+          <h1>Qwen3 / SAM3 Crop 直接测试</h1>
+          <p>输入图片会自动调整为头部摄像头的 1280 × 720，左侧用 Qwen3 检测 bbox，右侧选择 bbox 裁图后运行 SAM3。</p>
         </div>
         <a href="/">返回 Locate Debug</a>
       </header>
 
-      <section class="controls">
-        <label class="prompt">
-          <span>Prompt</span>
-          <textarea id="prompt" rows="9" placeholder='只返回JSON：{"name":"目标","bbox":[x1,y1,x2,y2]}'></textarea>
-        </label>
+      <section class="image-controls">
         <div class="image-input">
           <span>测试图片</span>
-          <button id="pasteZone" type="button">点击这里后按 Ctrl+V 粘贴图片</button>
-          <label class="file-button">或选择图片<input id="fileInput" type="file" accept="image/*" /></label>
+          <div id="pasteZone" class="paste-zone" role="button" tabindex="0" contenteditable="true">点击这里后按 Ctrl+V 粘贴图片</div>
+          <input id="fileInput" class="file-input" type="file" accept="image/*" />
           <small id="imageStatus">尚未载入图片</small>
         </div>
-        <label class="temperature">temperature
-          <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.5" />
-        </label>
-        <label class="coordinate">bbox 坐标
-          <select id="coordinateMode">
-            <option value="normalized">0–1000 归一化</option>
-            <option value="pixel">原图像素</option>
-          </select>
-        </label>
-        <button id="run" class="run" type="button">请求 Qwen3 并绘制 bbox</button>
-        <span id="requestStatus"></span>
       </section>
 
-      <section class="results">
-        <article class="viewer">
-          <h2>检测结果</h2>
-          <div class="canvas-wrap">
-            <canvas id="canvas"></canvas>
-            <span id="empty">请先粘贴图片</span>
+      <section class="workspace">
+        <article class="panel qwen-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="engine">QWEN3-VL</p>
+              <h2>bbox 检测</h2>
+            </div>
           </div>
-        </article>
-        <article class="output">
-          <h2>实际发送的 Prompt</h2>
+
+          <label>
+            <span>Qwen3 Prompt</span>
+            <textarea id="prompt" rows="8" placeholder='只返回JSON：{"name":"目标","bbox":[x1,y1,x2,y2]}'></textarea>
+          </label>
+          <div class="inline-controls">
+            <label>temperature
+              <input id="temperature" type="number" min="0" max="2" step="0.1" value="0.5" />
+            </label>
+            <label>bbox 坐标
+              <select id="coordinateMode">
+                <option value="normalized">0–1000 归一化</option>
+                <option value="pixel">原图像素</option>
+              </select>
+            </label>
+          </div>
+          <button id="runQwen" class="run qwen-run" type="button">请求 Qwen3 并绘制 bbox</button>
+          <span id="qwenStatus" class="status"></span>
+
+          <h3>Qwen3 检测结果</h3>
+          <div class="canvas-wrap">
+            <canvas id="qwenCanvas"></canvas>
+            <span id="qwenEmpty">请先粘贴图片</span>
+          </div>
+
+          <h3>实际发送的 Prompt</h3>
           <pre id="promptUsed">等待请求</pre>
-          <h2>解析后的 bbox</h2>
+          <h3>解析后的 bbox</h3>
           <pre id="detections">[]</pre>
-          <h2>Qwen3 原始输出</h2>
+          <h3>Qwen3 原始输出</h3>
           <pre id="rawOutput">等待请求</pre>
+        </article>
+
+        <article class="panel sam-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="engine">SAM3</p>
+              <h2>Qwen Crop 精分割</h2>
+            </div>
+          </div>
+
+          <label>
+            <span>SAM3 Prompt</span>
+            <textarea id="samPrompt" rows="8" placeholder="输入用于分割 crop 的目标描述"></textarea>
+          </label>
+          <label>
+            <span>Qwen3 bbox</span>
+            <select id="detectionSelect" disabled>
+              <option value="">请先运行 Qwen3</option>
+            </select>
+          </label>
+          <p class="hint">按所选 Qwen bbox 向四周外扩 10% 后裁图。</p>
+          <button id="runSam" class="run sam-run" type="button" disabled>在 Qwen Crop 上运行 SAM3</button>
+          <span id="samStatus" class="status"></span>
+
+          <h3>SAM3 crop bbox / mask</h3>
+          <div class="canvas-wrap">
+            <canvas id="samCanvas"></canvas>
+            <span id="samEmpty">先运行 Qwen3 获取 crop</span>
+          </div>
+
+          <h3>Crop 与映射结果</h3>
+          <pre id="samResult">[]</pre>
         </article>
       </section>
     </main>
-    <script src="/static/qwen_debug.js"></script>
+    <script src="/static/qwen_debug.js?v=4"></script>
   </body>
 </html>
