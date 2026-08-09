@@ -4,11 +4,12 @@ import argparse
 import json
 import mimetypes
 import os
+import re
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 import uvicorn
-from fastapi import FastAPI, Query, Request
+from fastapi import Body, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -18,6 +19,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CATALOG_PATH = ROOT / "products.json"
 IMAGES_ROOT = (ROOT / "images").resolve()
+LOCATION_PATTERN = re.compile(
+    r"^H(?P<shelf>[12])_(?P<face>[FB])_L(?P<level>[1-5])_C(?P<column>\d{2})$"
+)
+CandidatePoseType = Literal["", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
 
 
 class HealthResponse(BaseModel):
@@ -29,6 +34,11 @@ class ProductResponse(BaseModel):
     name: str
     images: list[str]
     locations: list[str]
+
+
+class CandidateSkuRequest(BaseModel):
+    location_id: str
+    pose_type: CandidatePoseType
 
 
 class ErrorResponse(BaseModel):
@@ -130,6 +140,57 @@ class SkuCatalog:
 
     def product_for_location(self, location: str) -> dict[str, Any] | None:
         return self._copy_product(self._by_location.get(location.strip().upper()))
+
+    def candidate_products(
+        self,
+        location_id: str,
+        pose_type: CandidatePoseType,
+    ) -> list[list[dict[str, Any]]] | None:
+        """Return unique products for each visible row, ordered left to right."""
+
+        normalized_location = location_id.strip().upper()
+        requested = LOCATION_PATTERN.fullmatch(normalized_location)
+        if requested is None:
+            raise ValueError("invalid location_id")
+        if normalized_location not in self._by_location:
+            return None
+
+        if pose_type == "SHELF_VIEW_UPPER":
+            levels = (1, 2)
+        elif pose_type == "SHELF_VIEW_LOWER":
+            levels = (3, 4, 5)
+        else:
+            levels = (int(requested.group("level")),)
+
+        shelf = requested.group("shelf")
+        face = requested.group("face")
+        rows: list[list[dict[str, Any]]] = []
+        for level in levels:
+            slots: list[tuple[int, dict[str, Any]]] = []
+            for location, product in self._by_location.items():
+                parsed = LOCATION_PATTERN.fullmatch(location)
+                if parsed is None:
+                    continue
+                if (
+                    parsed.group("shelf") == shelf
+                    and parsed.group("face") == face
+                    and int(parsed.group("level")) == level
+                ):
+                    slots.append((int(parsed.group("column")), product))
+            slots.sort(key=lambda item: item[0])
+
+            seen_skus: set[str] = set()
+            row: list[dict[str, Any]] = []
+            for _, product in slots:
+                sku_id = product["sku_id"]
+                if sku_id in seen_skus:
+                    continue
+                seen_skus.add(sku_id)
+                copied = self._copy_product(product)
+                if copied is not None:
+                    row.append(copied)
+            rows.append(row)
+        return rows
 
     def images_for_name(self, name: str) -> list[str] | None:
         normalized_name = name.strip()
@@ -246,6 +307,25 @@ def create_app(catalog_path: Path = DEFAULT_CATALOG_PATH) -> FastAPI:
         if images is None:
             raise ApiError(404, "SKU_NOT_FOUND")
         return images
+
+    @app.get(
+        "/sku/get_candidate_SKU",
+        response_model=list[list[ProductResponse]],
+        responses=ERROR_RESPONSES,
+    )
+    def get_candidate_sku(
+        request: CandidateSkuRequest = Body(...),
+    ) -> list[list[ProductResponse]]:
+        try:
+            rows = catalog.candidate_products(request.location_id, request.pose_type)
+        except ValueError as error:
+            raise ApiError(400, "INVALID_LOCATION_ID") from error
+        if rows is None:
+            raise ApiError(404, "LOCATION_NOT_FOUND")
+        return [
+            [ProductResponse(**product) for product in row]
+            for row in rows
+        ]
 
     @app.get("/sku/get_all_names", response_model=list[str])
     def get_all_names() -> list[str]:

@@ -1,8 +1,8 @@
 """Unified shelf-inspection API and algorithm fusion entry point.
 
 The public endpoint currently runs the training-free comparison algorithm.  The
-pipeline keeps per-algorithm results separate from fused findings so additional
-detectors can be added without changing the HTTP response shape.
+pipeline keeps localization details internally; the HTTP response exposes the
+stable product-oriented contract that a later Qwen recognition stage will fill.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Literal, Protocol, Sequence
 import cv2
 import numpy as np
 from fastapi import APIRouter, FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 if __package__:
     from .comparison_based import ComparisonConfig, detect_shortage
@@ -46,9 +46,32 @@ class InspectRequest(BaseModel):
     """Two shelf images and the inspection task to run."""
 
     task_type: TaskType
+    location_id: str = Field(min_length=1)
     baseline_image_base64: str = Field(min_length=1)
     current_image_base64: str = Field(min_length=1)
     reference_item_area: float | None = Field(default=None, gt=0)
+
+    @field_validator("location_id")
+    @classmethod
+    def normalize_location_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("location_id must not be blank")
+        return normalized
+
+
+class ShortageProductFinding(BaseModel):
+    shortage_product_name: str
+
+
+class MisplacedProductFinding(BaseModel):
+    misplaced_product_name: str
+    gt_product_name: str
+
+
+InspectApiResponse = (
+    list[ShortageProductFinding] | list[MisplacedProductFinding]
+)
 
 
 class Finding(BaseModel):
@@ -80,6 +103,7 @@ class AlgorithmResult(BaseModel):
 
 
 class InspectResponse(BaseModel):
+    location_id: str
     task_type: TaskType
     has_anomaly: bool
     image_size: list[int]
@@ -90,6 +114,7 @@ class InspectResponse(BaseModel):
 
 @dataclass(frozen=True)
 class InspectionContext:
+    location_id: str
     task_type: TaskType
     baseline: np.ndarray
     current: np.ndarray
@@ -172,6 +197,7 @@ class InspectionPipeline:
 
         findings = fuse_findings(successful)
         return InspectResponse(
+            location_id=context.location_id,
             task_type=context.task_type,
             has_anomaly=bool(findings),
             image_size=[1280, 720],
@@ -186,6 +212,7 @@ def inspect_images(
     baseline: np.ndarray,
     current: np.ndarray,
     *,
+    location_id: str,
     reference_item_area: float | None = None,
     pipeline: InspectionPipeline | None = None,
 ) -> InspectResponse:
@@ -193,11 +220,15 @@ def inspect_images(
 
     if task_type not in {"SHORTAGE", "MISPLACED"}:
         raise ValueError("task_type must be SHORTAGE or MISPLACED")
+    location_id = location_id.strip()
+    if not location_id:
+        raise ValueError("location_id must not be blank")
     if reference_item_area is not None and reference_item_area <= 0:
         raise ValueError("reference_item_area must be positive")
     _validate_image(baseline, "baseline")
     _validate_image(current, "current")
     context = InspectionContext(
+        location_id=location_id,
         task_type=task_type,
         baseline=baseline,
         current=current,
@@ -206,21 +237,43 @@ def inspect_images(
     return (pipeline or InspectionPipeline()).inspect(context)
 
 
-@router.post("/perception/inspect", response_model=InspectResponse)
-def inspect_shelf(request: InspectRequest) -> InspectResponse:
+@router.post("/perception/inspect", response_model=InspectApiResponse)
+def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
     """Compare a full-shelf reference image with the current shelf image."""
 
     baseline = decode_image(request.baseline_image_base64, "baseline_image_base64")
     current = decode_image(request.current_image_base64, "current_image_base64")
     try:
-        return inspect_images(
+        result = inspect_images(
             request.task_type,
             baseline,
             current,
+            location_id=request.location_id,
             reference_item_area=request.reference_item_area,
         )
     except RuntimeError as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
+    return build_product_findings(request.task_type, result.findings)
+
+
+def build_product_findings(
+    task_type: TaskType,
+    localized_findings: Sequence[Finding],
+) -> InspectApiResponse:
+    """Build the public contract; Qwen will populate names in a later stage."""
+
+    if task_type == "SHORTAGE":
+        return [
+            ShortageProductFinding(shortage_product_name="")
+            for _ in localized_findings
+        ]
+    return [
+        MisplacedProductFinding(
+            misplaced_product_name="",
+            gt_product_name="",
+        )
+        for _ in localized_findings
+    ]
 
 
 def decode_image(value: str, field_name: str) -> np.ndarray:

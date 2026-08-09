@@ -81,6 +81,7 @@ python api.py --host 0.0.0.0 --port 8080
 | `GET` | `/sku/search_by_location` | `location` | 完整 SKU 商品对象 |
 | `GET` | `/sku/get_image` | `name` | 商品图片相对路径列表 |
 | `GET` | `/sku/get_all_names` | 无 | 所有商品名称列表 |
+| `GET` | `/sku/get_candidate_SKU` | JSON 请求体：`location_id`、`pose_type` | 按货架层分组的候选 SKU |
 | `GET` | `/images/...` | 无 | 获取图片文件 |
 | `GET` | `/docs` | 无 | FastAPI 自动接口文档 |
 
@@ -131,6 +132,52 @@ GET /sku/get_all_names
 
 ```json
 ["NFC桔汁", "蒙牛纯牛奶", "纯甄酸奶"]
+```
+
+获取当前相机姿态下可能出现的候选 SKU：
+
+```http
+GET /sku/get_candidate_SKU
+Content-Type: application/json
+
+{
+  "location_id": "H2_F_L4_C05",
+  "pose_type": "SHELF_VIEW_UPPER"
+}
+```
+
+`location_id` 格式为 `H1_F_L1_C01`：`H` 是货架编号，`F/B` 是正反面，
+`L1–L5` 从上到下表示货架层，`C01` 开始表示面对货架时从左到右的商品位。
+
+`pose_type` 取值：
+
+- `""`：只返回 `location_id` 所在层；
+- `"SHELF_VIEW_UPPER"`：返回 `L1`、`L2`；
+- `"SHELF_VIEW_LOWER"`：返回 `L3`、`L4`、`L5`。
+
+响应外层数组按层从上到下排列，每层商品按照货位列号从左到右排列；同一商品占据
+多个相邻货位时只返回一次。每项包含商品标准名称、参考图片和货位，可以直接作为
+Qwen 的候选输入：
+
+```json
+[
+  [
+    {
+      "sku_id": "SKU_001",
+      "name": "NFC桔汁",
+      "images": ["images/SKU_001.jpg"],
+      "locations": ["H1_F_L1_C01"]
+    }
+  ],
+  [
+    {
+      "sku_id": "SKU_008",
+      "name": "蒙牛纯牛奶",
+      "images": ["images/SKU_008.jpg"],
+      "locations": ["H1_F_L2_C01"]
+    }
+  ]
+]
 ```
 
 商品不存在时返回 `404`：
