@@ -1,0 +1,91 @@
+{
+  "has_shortage": true,
+  "image_size": [
+    1280,
+    720
+  ],
+  "difference_mode": "chroma",
+  "threshold": 54.400000000000006,
+  "minimum_shortage_area": 1382.4,
+  "alignment": {
+    "attempted": true,
+    "success": true,
+    "matches": 2406,
+    "inliers": 2147,
+    "reason": "",
+    "homography": [
+      [
+        0.9724441838960216,
+        0.04502025512382137,
+        -2.2066832285763947
+      ],
+      [
+        -0.026888176329751982,
+        0.9902204387752784,
+        18.925675275711182
+      ],
+      [
+        -2.3201063883614616e-05,
+        4.5562695835352613e-07,
+        1.0
+      ]
+    ]
+  },
+  "shortages": [
+    {
+      "bbox": [
+        367,
+        272,
+        80,
+        71
+      ],
+      "contour_area": 2196.5,
+      "changed_pixels": 2399,
+      "area_ratio_to_reference": null,
+      "center": [
+        407,
+        307
+      ],
+      "mean_luminance_difference": 55.884118382659445,
+      "mean_chroma_difference": 74.76240100041684,
+      "chroma_dominance_ratio": 0.6656940391829929
+    },
+    {
+      "bbox": [
+        143,
+        245,
+        75,
+        54
+      ],
+      "contour_area": 2063.5,
+      "changed_pixels": 2195,
+      "area_ratio_to_reference": null,
+      "center": [
+        180,
+        272
+      ],
+      "mean_luminance_difference": 37.68564920273349,
+      "mean_chroma_difference": 72.65922551252848,
+      "chroma_dominance_ratio": 0.7608200455580866
+    }
+  ],
+  "bbox_format": [
+    "x",
+    "y",
+    "width",
+    "height"
+  ],
+  "artifacts": {
+    "baseline": "01_baseline.jpg",
+    "aligned_current": "02_aligned_current.jpg",
+    "luminance_difference": "03a_luminance_difference.png",
+    "chroma_difference": "03b_chroma_difference.png",
+    "difference": "03_difference.png",
+    "difference_heatmap": "04_difference_heatmap.jpg",
+    "binary_mask": "05_binary_mask.png",
+    "baseline_bboxes": "06_baseline_bboxes.jpg",
+    "current_bboxes": "07_current_bboxes.jpg",
+    "difference_bboxes": "08_difference_bboxes.jpg",
+    "comparison_bboxes": "09_comparison_bboxes.jpg"
+  }
+}

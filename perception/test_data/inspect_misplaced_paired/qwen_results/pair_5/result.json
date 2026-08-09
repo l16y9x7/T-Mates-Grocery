@@ -1,0 +1,64 @@
+{
+  "pair_id": "5",
+  "before": "test_data\\inspect_misplaced_paired\\5_1.jpg",
+  "after": "test_data\\inspect_misplaced_paired\\5_2.jpg",
+  "image_size": [
+    1280,
+    720
+  ],
+  "bbox_format": [
+    "x",
+    "y",
+    "width",
+    "height"
+  ],
+  "model": "Qwen3-VL-4B-Instruct",
+  "has_difference": true,
+  "summary": "下层货架右侧出现一个粉色包装盒，上层货架中间的白色盒子被移至左侧，且中间位置出现一个银色包装盒。",
+  "changes": [
+    {
+      "type": "added",
+      "object": "粉色包装盒",
+      "before_bbox": null,
+      "after_bbox": [
+        500,
+        719,
+        80,
+        1
+      ],
+      "confidence": 0.95,
+      "description": "下层货架右侧新增一个粉色包装盒。"
+    },
+    {
+      "type": "moved",
+      "object": "白色包装盒",
+      "before_bbox": [
+        455,
+        398,
+        50,
+        100
+      ],
+      "after_bbox": [
+        260,
+        398,
+        50,
+        100
+      ],
+      "confidence": 0.95,
+      "description": "上层货架中间的白色盒子被移至左侧。"
+    },
+    {
+      "type": "added",
+      "object": "银色包装盒",
+      "before_bbox": null,
+      "after_bbox": [
+        270,
+        398,
+        50,
+        100
+      ],
+      "confidence": 0.95,
+      "description": "上层货架中间位置新增一个银色包装盒。"
+    }
+  ]
+}

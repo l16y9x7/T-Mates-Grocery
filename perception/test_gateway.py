@@ -18,6 +18,7 @@ class PerceptionGatewayTest(unittest.TestCase):
         self.assertIn("/perception/pick/check", paths)
         self.assertIn("/perception/place/check", paths)
         self.assertIn("/perception/parse", paths)
+        self.assertIn("/perception/inspect", paths)
 
 
 if __name__ == "__main__":

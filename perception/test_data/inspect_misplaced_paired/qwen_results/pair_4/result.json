@@ -1,0 +1,19 @@
+{
+  "pair_id": "4",
+  "before": "test_data\\inspect_misplaced_paired\\4_1.jpg",
+  "after": "test_data\\inspect_misplaced_paired\\4_2.jpg",
+  "image_size": [
+    1280,
+    720
+  ],
+  "bbox_format": [
+    "x",
+    "y",
+    "width",
+    "height"
+  ],
+  "model": "Qwen3-VL-4B-Instruct",
+  "has_difference": false,
+  "summary": "",
+  "changes": []
+}

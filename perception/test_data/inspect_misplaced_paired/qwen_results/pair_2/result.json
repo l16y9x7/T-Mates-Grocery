@@ -1,0 +1,38 @@
+{
+  "pair_id": "2",
+  "before": "test_data\\inspect_misplaced_paired\\2_1.jpg",
+  "after": "test_data\\inspect_misplaced_paired\\2_2.jpg",
+  "image_size": [
+    1280,
+    720
+  ],
+  "bbox_format": [
+    "x",
+    "y",
+    "width",
+    "height"
+  ],
+  "model": "Qwen3-VL-4B-Instruct",
+  "has_difference": true,
+  "summary": "下层货架上，原为奥利奥包装的区域被替换为一包好友趣薯片。",
+  "changes": [
+    {
+      "type": "replaced",
+      "object": "奥利奥饼干盒",
+      "before_bbox": [
+        628,
+        557,
+        652,
+        163
+      ],
+      "after_bbox": [
+        557,
+        627,
+        720,
+        93
+      ],
+      "confidence": 0.95,
+      "description": "原位于下层货架中间偏右的奥利奥饼干盒被替换为一包好友趣薯片。"
+    }
+  ]
+}

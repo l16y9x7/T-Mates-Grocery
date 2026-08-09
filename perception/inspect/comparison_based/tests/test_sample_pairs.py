@@ -10,20 +10,31 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from comparison_based import detect_shortage  # noqa: E402
+from comparison_based import ComparisonConfig, detect_shortage  # noqa: E402
 
 
 class SuppliedSamplePairsTest(unittest.TestCase):
     data_dir = Path(__file__).resolve().parents[3] / "test_data" / "inspect_shortage_paired"
+    misplaced_data_dir = (
+        Path(__file__).resolve().parents[3]
+        / "test_data"
+        / "inspect_misplaced_paired"
+    )
 
     # Expected centers are deliberately tolerant: this is a regression guard,
     # not pixel-perfect ground truth segmentation.
     expected_centers = {
-        1: (694, 858),
-        2: (720, 647),
-        3: (758, 475),
-        4: (541, 334),
+        1: (617, 572),
+        2: (640, 431),
+        3: (674, 317),
+        4: (481, 223),
     }
+
+    def load_test_image(self, path: Path) -> np.ndarray:
+        encoded = np.fromfile(path, dtype=np.uint8)
+        image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+        self.assertIsNotNone(image)
+        return cv2.resize(image, (1280, 720), interpolation=cv2.INTER_LINEAR)
 
     def test_all_supplied_pairs_find_the_removed_item(self) -> None:
         if not self.data_dir.exists():
@@ -31,10 +42,17 @@ class SuppliedSamplePairsTest(unittest.TestCase):
 
         for pair, expected_center in self.expected_centers.items():
             with self.subTest(pair=pair):
-                result = detect_shortage(
-                    self.data_dir / f"{pair}_1.jpg",
-                    self.data_dir / f"{pair}_2.jpg",
+                baseline = self.load_test_image(
+                    self.data_dir / f"{pair}_1.jpg"
                 )
+                current = self.load_test_image(
+                    self.data_dir / f"{pair}_2.jpg"
+                )
+                result = detect_shortage(
+                    baseline,
+                    current,
+                )
+                self.assertEqual(result.image_size, (1280, 720))
                 self.assertTrue(result.alignment.success)
                 self.assertEqual(len(result.shortages), 1)
                 center = result.shortages[0].center
@@ -46,9 +64,7 @@ class SuppliedSamplePairsTest(unittest.TestCase):
             self.skipTest("supplied paired sample images are not available")
 
         for pair in self.expected_centers:
-            encoded = np.fromfile(self.data_dir / f"{pair}_1.jpg", dtype=np.uint8)
-            baseline = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-            self.assertIsNotNone(baseline)
+            baseline = self.load_test_image(self.data_dir / f"{pair}_1.jpg")
             height, width = baseline.shape[:2]
 
             for shift in (0, 2, 5, 10, 20):
@@ -67,6 +83,28 @@ class SuppliedSamplePairsTest(unittest.TestCase):
                     self.assertTrue(result.alignment.success)
                     self.assertFalse(result.has_shortage)
                     self.assertEqual(result.shortages, [])
+
+    def test_color_sensitive_mode_finds_only_swapped_middle_oreo_boxes(self) -> None:
+        if not self.misplaced_data_dir.exists():
+            self.skipTest("supplied misplaced sample images are not available")
+
+        result = detect_shortage(
+            self.misplaced_data_dir / "3_1.jpg",
+            self.misplaced_data_dir / "3_2.jpg",
+            ComparisonConfig(
+                difference_mode="chroma",
+                min_chroma_dominance_ratio=0.35,
+            ),
+        )
+
+        self.assertEqual(len(result.shortages), 2)
+        regions = sorted(result.shortages, key=lambda region: region.center[0])
+        self.assertLessEqual(abs(regions[0].center[0] - 870), 30)
+        self.assertLessEqual(abs(regions[1].center[0] - 988), 30)
+        self.assertTrue(
+            all(region.chroma_dominance_ratio >= 0.35 for region in regions)
+        )
+        self.assertTrue(all(region.center[0] < 1050 for region in regions))
 
 
 if __name__ == "__main__":

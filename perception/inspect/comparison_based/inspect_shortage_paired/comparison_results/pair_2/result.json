@@ -1,0 +1,67 @@
+{
+  "has_shortage": true,
+  "image_size": [
+    1440,
+    1080
+  ],
+  "threshold": 57.0,
+  "minimum_shortage_area": 2332.8,
+  "alignment": {
+    "attempted": true,
+    "success": true,
+    "matches": 1548,
+    "inliers": 1371,
+    "reason": "",
+    "homography": [
+      [
+        0.9763564153794831,
+        -0.02149950300113599,
+        6.283079598103553
+      ],
+      [
+        0.0032839892758209956,
+        0.9516626160521362,
+        51.97158727026955
+      ],
+      [
+        -1.0482037610998099e-06,
+        -3.3448968343237696e-05,
+        1.0
+      ]
+    ]
+  },
+  "shortages": [
+    {
+      "bbox": [
+        598,
+        572,
+        244,
+        150
+      ],
+      "contour_area": 18320.5,
+      "changed_pixels": 18596,
+      "area_ratio_to_reference": null,
+      "center": [
+        720,
+        647
+      ]
+    }
+  ],
+  "bbox_format": [
+    "x",
+    "y",
+    "width",
+    "height"
+  ],
+  "artifacts": {
+    "baseline": "01_baseline.jpg",
+    "aligned_current": "02_aligned_current.jpg",
+    "difference": "03_difference.png",
+    "difference_heatmap": "04_difference_heatmap.jpg",
+    "binary_mask": "05_binary_mask.png",
+    "baseline_bboxes": "06_baseline_bboxes.jpg",
+    "current_bboxes": "07_current_bboxes.jpg",
+    "difference_bboxes": "08_difference_bboxes.jpg",
+    "comparison_bboxes": "09_comparison_bboxes.jpg"
+  }
+}

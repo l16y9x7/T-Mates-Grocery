@@ -1,0 +1,56 @@
+{
+  "pair_id": "6",
+  "before": "test_data\\inspect_misplaced_paired\\6_1.jpg",
+  "after": "test_data\\inspect_misplaced_paired\\6_2.jpg",
+  "image_size": [
+    1280,
+    720
+  ],
+  "bbox_format": [
+    "x",
+    "y",
+    "width",
+    "height"
+  ],
+  "model": "Qwen3-VL-4B-Instruct",
+  "has_difference": true,
+  "summary": "货架上部分商品位置发生互换，特别是中间层的青柠味和葡萄味饮料瓶位置对调。",
+  "changes": [
+    {
+      "type": "swapped",
+      "object": "青柠味饮料瓶",
+      "before_bbox": [
+        268,
+        200,
+        100,
+        200
+      ],
+      "after_bbox": [
+        620,
+        200,
+        100,
+        200
+      ],
+      "confidence": 0.95,
+      "description": "原位于中间层左侧的青柠味饮料瓶与右侧葡萄味饮料瓶位置互换。"
+    },
+    {
+      "type": "swapped",
+      "object": "葡萄味饮料瓶",
+      "before_bbox": [
+        620,
+        200,
+        100,
+        200
+      ],
+      "after_bbox": [
+        268,
+        200,
+        100,
+        200
+      ],
+      "confidence": 0.95,
+      "description": "原位于中间层右侧的葡萄味饮料瓶与左侧青柠味饮料瓶位置互换。"
+    }
+  ]
+}
