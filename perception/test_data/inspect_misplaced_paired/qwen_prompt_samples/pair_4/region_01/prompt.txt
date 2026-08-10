@@ -1,0 +1,47 @@
+=== SYSTEM ===
+你会看到一个货架局部区域，以及当前货架范围内可能出现的候选 SKU 名称和标准图。
+
+任务：
+1. 尝试识别局部区域中心位置当前实际放置的商品，填写 misplaced_product_name。
+2. 尝试根据左右相邻商品的排列识别该位置通常应放的商品，填写 gt_product_name。
+
+要求：
+1. 两个商品名称都只能逐字复制候选列表中的标准名称。
+2. 任意一个名称无法可靠判断时，对应字段返回 UNKNOWN，不要猜测。
+3. 不要假设两件商品一定发生互换，也不要仅根据颜色相似度推断标准商品。
+
+只输出严格 JSON，不要输出 Markdown、代码块或任何说明：
+{
+  "misplaced_product_name": "候选标准名称或UNKNOWN",
+  "gt_product_name": "候选标准名称或UNKNOWN",
+  "confidence": 0.0
+}
+
+=== USER ===
+任务=MISPLACED，location_id=H2_B_L1_C01，pose_type='SHELF_VIEW_UPPER'。请只审核下面这一张扩展后的货架局部图。
+候选商品按画面货架层从上到下分组：
+第 1 行：舒肤佳香皂纯白清香型、舒肤佳香皂芦荟呵护香型、舒肤佳香皂柠檬清新香型、汰渍肥皂、杯子
+第 2 行：舒克牙膏竹炭薄荷、舒克牙膏柠檬百香果、舒克牙膏海盐薄荷、冷酸灵云感觉牙刷、杯子
+所有输出商品名必须从以上名称中逐字选择。
+扩展后的当前货架局部图；重点查看中心商品及左右相邻商品：
+[IMAGE 1]
+下面是候选 SKU 标准图：
+CANDIDATE 1: sku_id=SKU_090; name=舒肤佳香皂纯白清香型; 可见行序号=1
+[IMAGE 2]
+CANDIDATE 2: sku_id=SKU_091; name=舒肤佳香皂芦荟呵护香型; 可见行序号=1
+[IMAGE 3]
+CANDIDATE 3: sku_id=SKU_092; name=舒肤佳香皂柠檬清新香型; 可见行序号=1
+[IMAGE 4]
+CANDIDATE 4: sku_id=SKU_093; name=汰渍肥皂; 可见行序号=1
+[IMAGE 5]
+CANDIDATE 5: sku_id=SKU_094; name=杯子; 可见行序号=1,2
+[IMAGE 6]
+CANDIDATE 6: sku_id=SKU_095; name=舒克牙膏竹炭薄荷; 可见行序号=2
+[IMAGE 7]
+CANDIDATE 7: sku_id=SKU_096; name=舒克牙膏柠檬百香果; 可见行序号=2
+[IMAGE 8]
+CANDIDATE 8: sku_id=SKU_097; name=舒克牙膏海盐薄荷; 可见行序号=2
+[IMAGE 9]
+CANDIDATE 9: sku_id=SKU_098; name=冷酸灵云感觉牙刷; 可见行序号=2
+[IMAGE 10]
+请按系统消息规定的简单 JSON 格式返回这一张局部图的结果。

@@ -4,6 +4,8 @@ import json
 import mimetypes
 import os
 import re
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import requests
@@ -41,6 +43,10 @@ LOCATE_DEBUG_URL = os.getenv(
 )
 QWEN_SAMPLE_COUNT = 3
 QWEN_TEMPERATURE = 0.7
+QWEN_INFER_DATASETS = {
+    "shortage": ROOT.parents[2] / "test_data" / "inspect_shortage_paired",
+    "misplaced": ROOT.parents[2] / "test_data" / "inspect_misplaced_paired",
+}
 
 app = FastAPI(title="Qwen3 / SAM3 Prompt Test Web")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -55,6 +61,21 @@ class DirectQwenRequest(BaseModel):
     prompt: str
     image_base64: str
     temperature: float = Field(default=0.5, ge=0, le=2)
+
+
+class SavedQwenInferRequest(BaseModel):
+    dataset: str
+    pair_number: int = Field(ge=1)
+    region_index: int = Field(ge=1)
+    prompt: str
+    temperature: float = Field(default=0.0, ge=0, le=2)
+
+
+class SaveSavedQwenPromptRequest(BaseModel):
+    dataset: str
+    pair_number: int = Field(ge=1)
+    region_index: int = Field(ge=1)
+    prompt: str
 
 
 class SaveQwenPromptRequest(BaseModel):
@@ -109,6 +130,187 @@ def index() -> FileResponse:
 @app.get("/qwen-debug")
 def qwen_debug_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "qwen_debug.html")
+
+
+@app.get("/qwen-infer")
+def qwen_infer_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "qwen_infer.html")
+
+
+@app.get("/api/qwen-infer/samples")
+def list_qwen_infer_samples() -> dict:
+    samples = []
+    for dataset, dataset_root in QWEN_INFER_DATASETS.items():
+        prompt_root = dataset_root / "qwen_prompt_samples"
+        for manifest_path in sorted(prompt_root.glob("pair_*/manifest.json")):
+            manifest = load_json_file(manifest_path, "Qwen 样例 manifest")
+            sample_version = manifest_path.stat().st_mtime_ns
+            pair_number = int(manifest.get("pair_number", 0))
+            regions = []
+            for region in manifest.get("regions", []):
+                if not isinstance(region, dict):
+                    continue
+                region_index = int(region.get("region_index", 0))
+                region_root = manifest_path.parent / f"region_{region_index:02d}"
+                override_path = region_root / "prompt_override.txt"
+                prompt_path = override_path if override_path.is_file() else region_root / "prompt.txt"
+                prompt = read_text_file(prompt_path, "Qwen 样例 Prompt")
+                result_path = region_root / "qwen_infer_result.json"
+                result_stale = (
+                    result_path.is_file()
+                    and result_path.stat().st_mtime_ns < sample_version
+                )
+                last_result = (
+                    load_json_file(result_path, "Qwen 样例推理结果")
+                    if result_path.is_file() and not result_stale
+                    else None
+                )
+                regions.append(
+                    {
+                        "region_index": region_index,
+                        "bbox": region.get("bbox", []),
+                        "prompt": prompt,
+                        "prompt_source": "override" if override_path.is_file() else "generated",
+                        "result_stale": result_stale,
+                        "expanded_image_url": qwen_infer_file_url(
+                            dataset,
+                            pair_number,
+                            str(region.get("prompt_image_1", "")),
+                            sample_version,
+                        ),
+                        "last_result": last_result,
+                    }
+                )
+            candidate_images = []
+            for candidate in manifest.get("candidate_images", []):
+                if not isinstance(candidate, dict):
+                    continue
+                candidate_images.append(
+                    {
+                        **candidate,
+                        "url": qwen_infer_file_url(
+                            dataset,
+                            pair_number,
+                            str(candidate.get("path", "")),
+                            sample_version,
+                        ),
+                    }
+                )
+            samples.append(
+                {
+                    "dataset": dataset,
+                    "task_type": manifest.get("task_type"),
+                    "pair_number": pair_number,
+                    "location_id": manifest.get("location_id"),
+                    "pose_type": manifest.get("pose_type"),
+                    "regions": regions,
+                    "candidate_images": candidate_images,
+                    "baseline_url": f"/api/qwen-infer/source/{dataset}/{pair_number}/baseline",
+                    "current_url": f"/api/qwen-infer/source/{dataset}/{pair_number}/current",
+                }
+            )
+    return {"samples": samples}
+
+
+@app.get("/api/qwen-infer/file/{dataset}/{pair_number}/{relative_path:path}")
+def get_qwen_infer_file(
+    dataset: str,
+    pair_number: int,
+    relative_path: str,
+) -> FileResponse:
+    pair_root, _ = load_qwen_sample(dataset, pair_number)
+    path = resolve_descendant(pair_root, relative_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Qwen 样例文件不存在")
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type)
+
+
+@app.get("/api/qwen-infer/source/{dataset}/{pair_number}/{version}")
+def get_qwen_infer_source(
+    dataset: str,
+    pair_number: int,
+    version: str,
+) -> FileResponse:
+    dataset_root = qwen_infer_dataset_root(dataset)
+    suffix = {"baseline": 1, "current": 2}.get(version)
+    if suffix is None:
+        raise HTTPException(status_code=400, detail="version 只能是 baseline 或 current")
+    path = dataset_root / f"{pair_number}_{suffix}.jpg"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="样例原图不存在")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.post("/api/qwen-infer/prompt")
+def save_qwen_infer_prompt(request: SaveSavedQwenPromptRequest) -> dict:
+    prompt = request.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt 不能为空")
+    _, region_root, _, _ = load_qwen_region(
+        request.dataset,
+        request.pair_number,
+        request.region_index,
+    )
+    validate_saved_prompt(prompt)
+    path = region_root / "prompt_override.txt"
+    write_text_atomic(path, prompt.rstrip() + "\n", "Qwen 样例 Prompt")
+    return {"saved": True, "prompt_source": "override", "path": str(path)}
+
+
+@app.post("/api/qwen-infer/run")
+def run_saved_qwen_infer(request: SavedQwenInferRequest) -> dict:
+    prompt = request.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt 不能为空")
+    manifest, region_root, region, pair_root = load_qwen_region(
+        request.dataset,
+        request.pair_number,
+        request.region_index,
+    )
+    system_prompt, user_content = build_saved_qwen_messages(
+        prompt,
+        pair_root,
+        region,
+        manifest.get("candidate_images", []),
+    )
+    started_at = time.perf_counter()
+    try:
+        raw_output = call_qwen_messages(
+            system_prompt,
+            user_content,
+            temperature=request.temperature,
+        )
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail=f"Qwen3 请求失败: {error}") from error
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=502, detail=f"Qwen3 响应格式错误: {error}") from error
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000, 1)
+    try:
+        parsed_result = parse_first_json(raw_output)
+        parse_error = None
+    except (TypeError, ValueError) as error:
+        parsed_result = None
+        parse_error = str(error)
+    result = {
+        "dataset": request.dataset,
+        "task_type": manifest.get("task_type"),
+        "pair_number": request.pair_number,
+        "region_index": request.region_index,
+        "temperature": request.temperature,
+        "elapsed_ms": elapsed_ms,
+        "created_at": datetime.now(UTC).isoformat(),
+        "prompt_used": prompt,
+        "parsed_result": parsed_result,
+        "raw_output": raw_output,
+        "parse_error": parse_error,
+    }
+    write_json_atomic(
+        region_root / "qwen_infer_result.json",
+        result,
+        "Qwen 样例推理结果",
+    )
+    return result
 
 
 @app.get("/api/images")
@@ -374,6 +576,221 @@ def call_qwen(
     if not isinstance(content, str):
         raise TypeError("choices[0].message.content 不是字符串")
     return content
+
+
+def qwen_infer_dataset_root(dataset: str) -> Path:
+    try:
+        return QWEN_INFER_DATASETS[dataset.strip().lower()]
+    except KeyError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"dataset 只能是: {', '.join(QWEN_INFER_DATASETS)}",
+        ) from error
+
+
+def load_qwen_sample(dataset: str, pair_number: int) -> tuple[Path, dict]:
+    dataset_root = qwen_infer_dataset_root(dataset)
+    pair_root = dataset_root / "qwen_prompt_samples" / f"pair_{pair_number}"
+    manifest_path = pair_root / "manifest.json"
+    if not manifest_path.is_file():
+        raise HTTPException(status_code=404, detail="Qwen pair 样例不存在")
+    return pair_root, load_json_file(manifest_path, "Qwen 样例 manifest")
+
+
+def load_qwen_region(
+    dataset: str,
+    pair_number: int,
+    region_index: int,
+) -> tuple[dict, Path, dict, Path]:
+    pair_root, manifest = load_qwen_sample(dataset, pair_number)
+    regions = manifest.get("regions")
+    if not isinstance(regions, list):
+        raise HTTPException(status_code=500, detail="Qwen 样例 manifest 缺少 regions")
+    region = next(
+        (
+            item
+            for item in regions
+            if isinstance(item, dict) and item.get("region_index") == region_index
+        ),
+        None,
+    )
+    if region is None:
+        raise HTTPException(status_code=404, detail="Qwen region 样例不存在")
+    region_root = pair_root / f"region_{region_index:02d}"
+    if not region_root.is_dir():
+        raise HTTPException(status_code=404, detail="Qwen region 目录不存在")
+    return manifest, region_root, region, pair_root
+
+
+def resolve_descendant(root: Path, relative_path: str) -> Path:
+    normalized = relative_path.strip().replace("\\", "/")
+    if not normalized:
+        raise HTTPException(status_code=400, detail="样例文件路径不能为空")
+    relative = Path(normalized)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise HTTPException(status_code=400, detail="样例文件路径不合法")
+    root = root.resolve()
+    resolved = (root / relative).resolve()
+    if not resolved.is_relative_to(root):
+        raise HTTPException(status_code=400, detail="样例文件路径不合法")
+    return resolved
+
+
+def qwen_infer_file_url(
+    dataset: str,
+    pair_number: int,
+    relative_path: str,
+    version: int | None = None,
+) -> str:
+    normalized = relative_path.replace("\\", "/").lstrip("/")
+    url = f"/api/qwen-infer/file/{dataset}/{pair_number}/{normalized}"
+    return f"{url}?v={version}" if version is not None else url
+
+
+def read_text_file(path: Path, label: str) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"读取{label}失败: {error}") from error
+
+
+def load_json_file(path: Path, label: str) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=500, detail=f"读取{label}失败: {error}") from error
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=500, detail=f"{label}必须是 JSON 对象")
+    return value
+
+
+def write_text_atomic(path: Path, value: str, label: str) -> None:
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        temporary_path.write_text(value, encoding="utf-8")
+        temporary_path.replace(path)
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"保存{label}失败: {error}") from error
+
+
+def write_json_atomic(path: Path, value: dict, label: str) -> None:
+    write_text_atomic(
+        path,
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        label,
+    )
+
+
+def validate_saved_prompt(prompt: str) -> tuple[str, str]:
+    match = re.fullmatch(
+        r"\s*=== SYSTEM ===\s*\n(.*?)\n\s*=== USER ===\s*\n(.*?)\s*",
+        prompt,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Prompt 必须保留 === SYSTEM === 和 === USER === 两个区块",
+        )
+    system_prompt = match.group(1).strip()
+    user_prompt = match.group(2).strip()
+    if not system_prompt or not user_prompt:
+        raise HTTPException(status_code=400, detail="SYSTEM/USER Prompt 不能为空")
+    return system_prompt, user_prompt
+
+
+def build_saved_qwen_messages(
+    prompt: str,
+    pair_root: Path,
+    region: dict,
+    candidate_images: list,
+) -> tuple[str, list[dict]]:
+    system_prompt, user_prompt = validate_saved_prompt(prompt)
+    image_paths = [
+        resolve_descendant(pair_root, str(region.get("prompt_image_1", "")))
+    ]
+    for candidate in candidate_images:
+        if not isinstance(candidate, dict):
+            raise HTTPException(status_code=500, detail="候选图片 manifest 格式错误")
+        image_paths.append(
+            resolve_descendant(pair_root, str(candidate.get("path", "")))
+        )
+    if any(not path.is_file() for path in image_paths):
+        raise HTTPException(status_code=404, detail="Prompt 引用的输入图片不存在")
+
+    markers = [int(value) for value in re.findall(r"\[IMAGE\s+(\d+)\]", user_prompt)]
+    expected = list(range(1, len(image_paths) + 1))
+    if markers != expected:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Prompt 图片标记必须依次为 [IMAGE 1] 到 [IMAGE {len(image_paths)}]",
+        )
+
+    content: list[dict] = []
+    for part in re.split(r"(\[IMAGE\s+\d+\])", user_prompt):
+        marker = re.fullmatch(r"\[IMAGE\s+(\d+)\]", part)
+        if marker is None:
+            if part:
+                content.append({"type": "text", "text": part})
+            continue
+        path = image_paths[int(marker.group(1)) - 1]
+        media_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{encoded}"},
+            }
+        )
+    return system_prompt, content
+
+
+def call_qwen_messages(
+    system_prompt: str,
+    user_content: list[dict],
+    *,
+    temperature: float,
+) -> str:
+    response = requests.post(
+        QWEN3_URL,
+        json={
+            "model": QWEN3_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": temperature,
+            "max_tokens": 800,
+        },
+        timeout=120,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as error:
+        detail = response.text.strip()[:1200]
+        suffix = f"；上游响应: {detail}" if detail else ""
+        raise requests.HTTPError(
+            f"HTTP {response.status_code} {response.reason}{suffix}",
+            response=response,
+        ) from error
+    content = response.json()["choices"][0]["message"]["content"]
+    if not isinstance(content, str):
+        raise TypeError("choices[0].message.content 不是字符串")
+    return content
+
+
+def parse_first_json(content: str) -> dict | list:
+    if not isinstance(content, str):
+        raise TypeError("Qwen 输出不是字符串")
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"[\[{]", content):
+        try:
+            value, _ = decoder.raw_decode(content[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, (dict, list)):
+            return value
+    raise ValueError("Qwen 输出中没有找到 JSON 对象或数组")
 
 
 @app.post("/api/sam3")

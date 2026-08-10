@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Qwen Inspection 样例推理</title>
+    <link rel="stylesheet" href="/static/qwen_infer.css?v=1" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">INSPECTION · QWEN3-VL</p>
+          <h1>Qwen 样例推理</h1>
+          <p>选择已有 shortage / misplaced pair，逐个 bbox 调整 Prompt 并查看推理结果。</p>
+        </div>
+        <nav>
+          <a href="/qwen-debug">Qwen / SAM3 Debug</a>
+          <a href="/">Locate Debug</a>
+        </nav>
+      </header>
+
+      <section class="toolbar card">
+        <label>
+          <span>任务</span>
+          <select id="taskSelect">
+            <option value="SHORTAGE">SHORTAGE</option>
+            <option value="MISPLACED">MISPLACED</option>
+          </select>
+        </label>
+        <label>
+          <span>Pair</span>
+          <select id="pairSelect"></select>
+        </label>
+        <label>
+          <span>Bbox region</span>
+          <select id="regionSelect"></select>
+        </label>
+        <label>
+          <span>temperature</span>
+          <input id="temperature" type="number" min="0" max="2" step="0.1" value="0" />
+        </label>
+        <button id="runButton" class="primary" type="button">运行当前 region</button>
+        <span id="runStatus" class="status">正在读取样例…</span>
+      </section>
+
+      <section class="result-layout">
+        <article class="card result-card">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">RESULT</p>
+              <h2>识别结果</h2>
+            </div>
+            <span id="resultMeta" class="meta">尚未运行</span>
+          </div>
+          <pre id="parsedResult" class="result-json">等待推理</pre>
+          <h3>Qwen 原始输出</h3>
+          <pre id="rawOutput">等待推理</pre>
+        </article>
+
+        <article class="card prompt-card">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">PROMPT</p>
+              <h2>当前 region Prompt</h2>
+            </div>
+            <span id="promptSource" class="meta"></span>
+          </div>
+          <textarea id="promptInput" spellcheck="false"></textarea>
+          <div class="prompt-actions">
+            <button id="savePromptButton" type="button">保存此样例 Prompt</button>
+            <span id="saveStatus" class="status"></span>
+          </div>
+          <p class="hint">需要保留 SYSTEM / USER 区块以及连续的 [IMAGE N] 标记；保存为样例 override，不修改公共 Prompt 模板。</p>
+        </article>
+      </section>
+
+      <section class="card input-section">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">MODEL INPUTS</p>
+            <h2>实际发送给 Qwen 的图片</h2>
+          </div>
+          <span id="inputCount" class="meta"></span>
+        </div>
+        <p class="section-note">IMAGE 1 是当前 bbox 扩展图；其余图片是候选 SKU 标准图，顺序与 Prompt 完全一致。</p>
+        <div id="modelInputs" class="image-grid"></div>
+      </section>
+
+      <section class="card source-section">
+        <div class="section-heading">
+          <div>
+            <p class="section-label muted-label">LOCALIZATION ONLY</p>
+            <h2>对比算法来源图片</h2>
+          </div>
+          <span class="not-sent">不会发送给 Qwen</span>
+        </div>
+        <div class="source-grid">
+          <figure>
+            <figcaption>缺货/放错前 · baseline</figcaption>
+            <img id="baselineImage" alt="baseline" />
+          </figure>
+          <figure>
+            <figcaption>当前图片 · current</figcaption>
+            <img id="currentImage" alt="current" />
+          </figure>
+        </div>
+      </section>
+    </main>
+    <script src="/static/qwen_infer.js?v=2"></script>
+  </body>
+</html>

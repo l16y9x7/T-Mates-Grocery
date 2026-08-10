@@ -17,6 +17,7 @@ Content-Type: application/json
 {
   "task_type": "SHORTAGE",
   "location_id": "H1_F",
+  "pose_type": "SHELF_VIEW_UPPER",
   "baseline_image_base64": "<满货基准图的 base64 或 data URL>",
   "current_image_base64": "<当前巡检图的 base64 或 data URL>",
   "reference_item_area": 12000
@@ -25,6 +26,8 @@ Content-Type: application/json
 
 - `task_type` 支持 `SHORTAGE` 和 `MISPLACED`。
 - `location_id` 是当前巡检点位 ID，必填；后续用于查询该位置允许出现的商品。
+- `pose_type` 必填，支持 `""`、`SHELF_VIEW_UPPER` 和 `SHELF_VIEW_LOWER`，与
+  `location_id` 一起用于查询当前画面候选 SKU。
 - `reference_item_area` 可省略。
 - 图片输入和现有对比算法阈值参数保持不变。
 
@@ -47,10 +50,9 @@ Content-Type: application/json
 ]
 ```
 
-当前版本尚未接入 Qwen 商品语义识别，因此数组元素数量由对比算法检测到的 bbox 数量
-决定，商品名暂时返回空字符串。bbox 仍保存在内部 `InspectResponse` 中，接入 Qwen 后
-可直接使用变化区域、周围商品以及 `location_id` 对应候选商品完成识别，而不需要修改
-HTTP 输出结构。
+对比算法先定位 bbox，随后 Qwen 审核器使用 `location_id + pose_type` 获取候选商品，
+再通过 `/sku/get_image` 获取标准图。Qwen 只能返回候选集合中的标准商品名；无法确认、
+候选外名称、重复区域以及实际商品与标准商品相同的放错结果都会被拒绝或过滤。
 
 ## 启动
 
