@@ -1,0 +1,200 @@
+INFO:     Started server process [1151531]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8083 (Press CTRL+C to quit)
+INFO:     Started server process [1205963]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8083 (Press CTRL+C to quit)
+INFO:     192.168.130.66:43314 - "GET / HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:43328 - "GET /receipt/parse HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:43334 - "GET /health HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:43342 - "GET /docs HTTP/1.1" 200 OK
+INFO:     192.168.130.66:43356 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     192.168.130.66:43360 - "GET /perception/parse HTTP/1.1" 405 Method Not Allowed
+INFO:     192.168.130.66:36430 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     192.168.130.66:36436 - "POST /perception/parse HTTP/1.1" 502 Bad Gateway
+INFO:     192.168.130.66:36440 - "GET /docs HTTP/1.1" 200 OK
+INFO:     192.168.130.66:35682 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     192.168.130.66:35692 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     192.168.130.66:33252 - "GET / HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33258 - "GET /health HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33266 - "GET /healthz HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33282 - "GET /status HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33284 - "GET /config HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33286 - "GET /settings HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33294 - "GET /env HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33300 - "GET /camera HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33306 - "GET /camera/url HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33308 - "GET /docs HTTP/1.1" 200 OK
+INFO:     192.168.130.66:33316 - "GET /redoc HTTP/1.1" 200 OK
+INFO:     192.168.130.66:33322 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     192.168.130.66:33338 - "GET /perception/health HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33350 - "GET /perception/config HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33360 - "GET /receipt/health HTTP/1.1" 404 Not Found
+INFO:     192.168.130.66:33372 - "GET /video/frame HTTP/1.1" 400 Bad Request
+INFO:     192.168.130.66:33386 - "GET /video/frame?hand=left HTTP/1.1" 400 Bad Request
+INFO:     192.168.130.54:2795 - "POST /perception/parse HTTP/1.1" 200 OK
+INFO:     192.168.130.66:33204 - "POST /perception/parse HTTP/1.1" 200 OK
+INFO:     192.168.130.66:33212 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     192.168.130.54:2999 - "POST /perception/parse HTTP/1.1" 200 OK
+INFO:     192.168.130.66:39496 - "POST /perception/parse HTTP/1.1" 200 OK
+INFO:     192.168.130.59:45800 - "POST /perception/parse HTTP/1.1" 502 Bad Gateway
+INFO:     192.168.130.59:34616 - "POST /perception/parse HTTP/1.1" 502 Bad Gateway
+INFO:     127.0.0.1:47618 - "POST /perception/parse HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54574 - "POST /perception/parse HTTP/1.1" 502 Bad Gateway
+INFO:     192.168.130.59:37862 - "POST /perception/parse HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54578 - "POST /perception/parse HTTP/1.1" 502 Bad Gateway
+INFO:     127.0.0.1:32858 - "POST /perception/parse HTTP/1.1" 200 OK
+INFO:     127.0.0.1:32862 - "POST /perception/parse HTTP/1.1" 200 OK
+INFO:     127.0.0.1:37772 - "POST /perception/parse HTTP/1.1" 200 OK
+INFO:     192.168.130.59:44192 - "POST /perception/parse HTTP/1.1" 200 OK
+INFO:     192.168.130.59:57292 - "POST /perception/parse HTTP/1.1" 200 OK
+INFO:     192.168.130.59:50306 - "POST /perception/parse HTTP/1.1" 502 Bad Gateway
+INFO:     Started server process [1413517]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8083 (Press CTRL+C to quit)
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:58330 - "POST /perception/pick/locate HTTP/1.1" 502 Bad Gateway
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:50914 - "POST /perception/pick/locate HTTP/1.1" 502 Bad Gateway
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:34030 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的黄色小青柠汁，输出满足条件的所有黄色小青柠汁的bbox。返回格式：{"name": "黄色小青柠汁", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的黄色小青柠汁，输出满足条件的所有黄色小青柠汁的bbox。返回格式：{"name": "黄色小青柠汁", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的黄色小青柠汁，输出满足条件的所有黄色小青柠汁的bbox。返回格式：{"name": "黄色小青柠汁", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:37774 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的黄色小青柠汁，输出满足条件的所有黄色小青柠汁的bbox。返回格式：{"name": "黄色小青柠汁", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的黄色小青柠汁，输出满足条件的所有黄色小青柠汁的bbox。返回格式：{"name": "黄色小青柠汁", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的黄色小青柠汁，输出满足条件的所有黄色小青柠汁的bbox。返回格式：{"name": "黄色小青柠汁", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:50458 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的黄色小青柠汁，输出满足条件的所有黄色小青柠汁的bbox。返回格式：{"name": "黄色小青柠汁", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的黄色小青柠汁，输出满足条件的所有黄色小青柠汁的bbox。返回格式：{"name": "黄色小青柠汁", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的黄色小青柠汁，输出满足条件的所有黄色小青柠汁的bbox。返回格式：{"name": "黄色小青柠汁", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:59022 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二层货架的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{"name": "美年达饮料堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:51564 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有绿色绿豆饼杯，输出一个完整的bbox。返回格式：{"name": "绿色绿豆饼杯堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有绿色绿豆饼杯，输出一个完整的bbox。返回格式：{"name": "绿色绿豆饼杯堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有绿色绿豆饼杯，输出一个完整的bbox。返回格式：{"name": "绿色绿豆饼杯堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:54516 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:55288 - "POST /perception/pick/locate HTTP/1.1" 404 Not Found
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:54944 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:43892 - "POST /perception/pick/locate HTTP/1.1" 404 Not Found
+[Locate Qwen3] prompt before request:
+找到图片中这个货架从上往下第二排的蓝色透明水瓶堆，输出完整的bbox。返回格式：{"name": "蓝色透明水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中这个货架从上往下第二排的蓝色透明水瓶堆，输出完整的bbox。返回格式：{"name": "蓝色透明水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中这个货架从上往下第二排的蓝色透明水瓶堆，输出完整的bbox。返回格式：{"name": "蓝色透明水瓶堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.59:34800 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有东方树叶水瓶堆，输出东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.123:58091 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色东方树叶水瓶堆，输出黄色东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色东方树叶水瓶堆，输出黄色东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色东方树叶水瓶堆，输出黄色东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.123:59818 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色东方树叶水瓶堆，输出黄色东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色东方树叶水瓶堆，输出黄色东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色东方树叶水瓶堆，输出黄色东方树叶水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色东方树叶水瓶堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.123:59735 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色水瓶堆，输出黄色水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色水瓶堆，输出黄色水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色水瓶堆，输出黄色水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色水瓶堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.123:50225 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色水瓶堆，输出黄色水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色水瓶堆，输出黄色水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有黄色水瓶堆，输出黄色水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色水瓶堆", "bbox": [x1, y1, x2, y2]}
+INFO:     192.168.130.123:50236 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+Traceback (most recent call last):
+  File "/data/T-Mates-Grocery/perception/main.py", line 30, in <module>
+    inspect_spec.loader.exec_module(inspect_api)
+  File "<frozen importlib._bootstrap_external>", line 999, in exec_module
+  File "<frozen importlib._bootstrap>", line 488, in _call_with_frames_removed
+  File "/data/T-Mates-Grocery/perception/inspect/main.py", line 19, in <module>
+    import cv2
+ModuleNotFoundError: No module named 'cv2'
+INFO:     Started server process [1669004]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8083 (Press CTRL+C to quit)
+INFO:     Started server process [1760975]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8083 (Press CTRL+C to quit)
+INFO:     192.168.130.123:51967 - "POST /perception/pick/locate/debug HTTP/1.1" 400 Bad Request
+INFO:     192.168.130.123:62366 - "POST /perception/pick/locate/debug HTTP/1.1" 400 Bad Request
+INFO:     192.168.130.123:62763 - "POST /perception/pick/locate/debug HTTP/1.1" 400 Bad Request
+INFO:     192.168.130.123:62764 - "POST /perception/pick/locate/debug HTTP/1.1" 400 Bad Request
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1760975]

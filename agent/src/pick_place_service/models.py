@@ -87,6 +87,7 @@ class PickPlaceSettings(BaseModel):
     manipulation_url: str = Field(min_length=1)
     camera_url: str = Field(min_length=1)
     pick_camera: str = Field(min_length=1, default="head")
+    pick_cameras: dict[Literal["left", "right"], str] = Field(default_factory=dict)
     place_camera: str = Field(min_length=1, default="head")
     # 正式配置按相机 ID 选择标定；calibration_file 仅兼容旧配置和单元测试。
     calibration_files: dict[str, str] = Field(default_factory=dict)
@@ -107,6 +108,13 @@ class PickPlaceSettings(BaseModel):
         if not calibration:
             raise ValueError(f"未配置相机 {camera} 的标定文件")
         return calibration
+
+    def camera_for(self, operation: str, hand: str) -> str:
+        """按操作和手臂选择相机；旧配置继续回退到单一 pick_camera。"""
+
+        if operation == "pick":
+            return self.pick_cameras.get(hand.lower(), self.pick_camera)
+        return self.place_camera
 
 
 class FrameBundle(BaseModel):

@@ -34,8 +34,24 @@ const task1ResultCard = document.querySelector("#task1ResultCard");
 const task1ResultStatus = document.querySelector("#task1ResultStatus");
 const task1ResultBody = document.querySelector("#task1ResultBody");
 const task1OperationKey = document.querySelector("#task1OperationKey");
+const pickVisual = document.querySelector("#pickVisual");
+const pickVisualCanvas = document.querySelector("#pickVisualCanvas");
+const pickVisualStatus = document.querySelector("#pickVisualStatus");
+const pickPoseStatus = document.querySelector("#pickPoseStatus");
+const pickPoseValues = document.querySelector("#pickPoseValues");
+const pickPoseMeta = document.querySelector("#pickPoseMeta");
+const task1Visual = document.querySelector("#task1Visual");
+const task1VisualCanvas = document.querySelector("#task1VisualCanvas");
+const task1VisualStatus = document.querySelector("#task1VisualStatus");
+const task1PoseStatus = document.querySelector("#task1PoseStatus");
+const task1PoseValues = document.querySelector("#task1PoseValues");
+const task1PoseMeta = document.querySelector("#task1PoseMeta");
 let eventSource = null;
 let task1EventSource = null;
+let visualPoller = null;
+let task1VisualPoller = null;
+let refreshVisual = null;
+let refreshTask1Visual = null;
 
 const CUSTOM_VALUE = "__custom__";
 const POSES_REQUIRING_SHELF_LEVEL = new Set([
@@ -110,12 +126,150 @@ function setBusy(busy) {
 }
 
 function resetView() {
+  stopVisualPolling();
   emptyState.hidden = true;
   timeline.hidden = false;
   timeline.replaceChildren();
   resultCard.hidden = true;
+  pickVisual.hidden = true;
+  resetVisualPanel(pickVisualCanvas, pickVisualStatus, pickPoseStatus, pickPoseValues, pickPoseMeta);
   operationKey.textContent = "-";
   setError();
+}
+
+function resetVisualPanel(canvas, status, poseStatus, poseValues, poseMeta) {
+  const context = canvas.getContext("2d");
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  status.textContent = "等待图像";
+  poseStatus.textContent = "等待位姿估计";
+  poseValues.replaceChildren(Object.assign(document.createElement("span"), { className: "pose-empty", textContent: "位姿估计完成后显示" }));
+  poseMeta.textContent = "";
+}
+
+function formatPoseValue(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(3) : "-";
+}
+
+function drawMaskOverlay(context, mask, width, height) {
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = width;
+  maskCanvas.height = height;
+  const maskContext = maskCanvas.getContext("2d", { willReadFrequently: true });
+  maskContext.drawImage(mask, 0, 0, width, height);
+  const pixels = maskContext.getImageData(0, 0, width, height);
+  const overlay = maskContext.createImageData(width, height);
+  for (let index = 0; index < pixels.data.length; index += 4) {
+    const value = pixels.data[index];
+    if (value > 20) {
+      overlay.data[index] = 217;
+      overlay.data[index + 1] = 242;
+      overlay.data[index + 2] = 107;
+      overlay.data[index + 3] = Math.min(115, value);
+    }
+  }
+  maskContext.putImageData(overlay, 0, 0);
+  context.drawImage(maskCanvas, 0, 0, width, height);
+}
+
+function renderPose(visual, poseStatus, poseValues, poseMeta) {
+  const pose = Array.isArray(visual.pose) && visual.pose.length === 6 ? visual.pose : null;
+  if (!pose) {
+    poseStatus.textContent = "等待位姿估计";
+    return;
+  }
+  poseStatus.textContent = "已完成";
+  poseValues.replaceChildren();
+  ["X", "Y", "Z", "RX", "RY", "RZ"].forEach((label, index) => {
+    const cell = document.createElement("div");
+    cell.className = "pose-cell";
+    const name = document.createElement("span");
+    name.textContent = label;
+    const value = document.createElement("strong");
+    value.textContent = formatPoseValue(pose[index]);
+    cell.append(name, value);
+    poseValues.append(cell);
+  });
+  const meta = [visual.frame, visual.pose_unit, visual.rotation_order].filter(Boolean);
+  poseMeta.textContent = meta.join(" · ");
+}
+
+function drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, imageCache) {
+  if (!visual || !visual.available) return;
+  const context = canvas.getContext("2d");
+  const imageData = visual.image_data;
+  if (imageData && imageData !== imageCache.imageData) {
+    imageCache.imageData = imageData;
+    imageCache.image = new Image();
+    imageCache.image.onload = () => drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, imageCache);
+    imageCache.image.src = imageData;
+  }
+  if (imageCache.image?.complete) {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(imageCache.image, 0, 0, canvas.width, canvas.height);
+    if (visual.mask_data && visual.mask_data !== imageCache.maskData) {
+      imageCache.maskData = visual.mask_data;
+      imageCache.mask = new Image();
+      imageCache.mask.onload = () => drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, imageCache);
+      imageCache.mask.src = visual.mask_data;
+    }
+    if (imageCache.mask?.complete) {
+      context.save();
+      drawMaskOverlay(context, imageCache.mask, canvas.width, canvas.height);
+      context.restore();
+    }
+    if (Array.isArray(visual.bbox) && visual.bbox.length === 4) {
+      const space = Number(visual.bbox_coordinate_space) || 1000;
+      const scaleX = canvas.width / space;
+      const scaleY = canvas.height / space;
+      const [x1, y1, x2, y2] = visual.bbox.map(Number);
+      context.save();
+      context.strokeStyle = "#d9f26b";
+      context.lineWidth = 3;
+      context.strokeRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
+      context.fillStyle = "#d9f26b";
+      context.font = "600 13px ui-monospace, monospace";
+      context.fillText("BBOX", x1 * scaleX + 6, Math.max(18, y1 * scaleY - 7));
+      context.restore();
+    }
+    status.textContent = visual.mask_data ? "RGB + MASK + BBOX" : visual.image_data ? "RGB + BBOX" : "定位结果";
+  }
+  renderPose(visual, poseStatus, poseValues, poseMeta);
+}
+
+function beginVisualPolling(taskId, endpoint, panel, canvas, status, poseStatus, poseValues, poseMeta, isTask1 = false) {
+  const imageCache = {};
+  const poll = async () => {
+    try {
+      const response = await fetch(`${endpoint}/${taskId}/visual`, { cache: "no-store" });
+      if (!response.ok) return;
+      const visual = await response.json();
+      if (visual.available) panel.hidden = false;
+      drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, imageCache);
+    } catch (_) { /* SSE remains the source of flow status if polling is unavailable. */ }
+  };
+  poll();
+  const timer = window.setInterval(poll, 700);
+  if (isTask1) {
+    task1VisualPoller = timer;
+    refreshTask1Visual = poll;
+  } else {
+    visualPoller = timer;
+    refreshVisual = poll;
+  }
+}
+
+async function stopVisualPolling(isTask1 = false, refresh = false) {
+  const timer = isTask1 ? task1VisualPoller : visualPoller;
+  if (timer) window.clearInterval(timer);
+  const finalRefresh = isTask1 ? refreshTask1Visual : refreshVisual;
+  if (refresh && finalRefresh) await finalRefresh();
+  if (isTask1) {
+    task1VisualPoller = null;
+    refreshTask1Visual = null;
+  } else {
+    visualPoller = null;
+    refreshVisual = null;
+  }
 }
 
 function eventLabel(event) {
@@ -152,10 +306,13 @@ function setTask1Error(message = "") {
 }
 
 function resetTask1View() {
+  stopVisualPolling(true);
   task1EmptyState.hidden = true;
   task1Timeline.hidden = false;
   task1Timeline.replaceChildren();
   task1ResultCard.hidden = true;
+  task1Visual.hidden = true;
+  resetVisualPanel(task1VisualCanvas, task1VisualStatus, task1PoseStatus, task1PoseValues, task1PoseMeta);
   task1OperationKey.textContent = "-";
   setTask1Error();
 }
@@ -311,13 +468,15 @@ form.addEventListener("submit", async (event) => {
   try {
     const task = await startPick(payload);
     operationKey.textContent = task.operation_key;
+    beginVisualPolling(task.task_id, "/api/pick", pickVisual, pickVisualCanvas, pickVisualStatus, pickPoseStatus, pickPoseValues, pickPoseMeta);
     eventSource = new EventSource(task.events_url);
     eventSource.addEventListener("flow", (message) => {
       try { addFlowEvent(JSON.parse(message.data)); } catch (_) { /* ignore malformed event */ }
     });
-    eventSource.addEventListener("result", (message) => {
+    eventSource.addEventListener("result", async (message) => {
       try { showResult(JSON.parse(message.data)); } catch (_) { setError("任务结果格式无效"); }
       setBusy(false);
+      await stopVisualPolling(false, true);
       eventSource.close();
       eventSource = null;
     });
@@ -345,13 +504,15 @@ task1Form.addEventListener("submit", async (event) => {
   try {
     const task = await startTask1({ pick_count: Number(task1PickCount.value) });
     task1OperationKey.textContent = task.operation_key;
+    beginVisualPolling(task.task_id, "/api/task1", task1Visual, task1VisualCanvas, task1VisualStatus, task1PoseStatus, task1PoseValues, task1PoseMeta, true);
     task1EventSource = new EventSource(task.events_url);
     task1EventSource.addEventListener("flow", (message) => {
       try { addFlowEvent(JSON.parse(message.data), task1Timeline); } catch (_) { /* ignore malformed event */ }
     });
-    task1EventSource.addEventListener("result", (message) => {
+    task1EventSource.addEventListener("result", async (message) => {
       try { showTask1Result(JSON.parse(message.data)); } catch (_) { setTask1Error("任务一结果格式无效"); }
       setTask1Busy(false);
+      await stopVisualPolling(true, true);
       task1EventSource.close();
       task1EventSource = null;
     });

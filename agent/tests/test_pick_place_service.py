@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import httpx
 import pytest
-from pathlib import Path
 
 from pick_place_service.app import create_app
 from pick_place_service.models import (
@@ -51,6 +53,9 @@ class FakeSubagents:
 
 
 class FakeFrames:
+    def __init__(self) -> None:
+        self.cameras: list[str] = []
+
     async def capture(
         self,
         camera: str,
@@ -58,6 +63,7 @@ class FakeFrames:
         operation: str,
         mask_base64: str | None = None,
     ) -> FrameBundle:
+        self.cameras.append(camera)
         return FrameBundle(rgb="rgb", depth="depth", camera="camera", mask="mask.pgm")
 
 
@@ -70,6 +76,35 @@ def make_app(fake: FakeSubagents):
     )
     orchestrator = PickPlaceOrchestrator(settings, fake, FakeFrames())
     return create_app(settings, orchestrator=orchestrator)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hand", ["left", "right", "LEFT", "RIGHT"])
+async def test_operation_started_event_uses_public_request_fields(tmp_path: Path, hand: str) -> None:
+    fake = FakeSubagents()
+    frames = FakeFrames()
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://manipulation",
+        camera_url="http://camera",
+        calibration_file="camera.json",
+        log_dir=str(tmp_path),
+        pick_cameras={"left": "left_wrist", "right": "right_wrist"},
+    )
+    orchestrator = PickPlaceOrchestrator(settings, fake, frames)
+    request = PickPlaceRequest(task_type="SORTING", product_name="舒克牙膏海盐薄荷", hand=hand)
+
+    await orchestrator.run(request, "pick", f"operation-{hand}")
+
+    [log_dir] = list(tmp_path.iterdir())
+    started = json.loads((log_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert started["event"] == "operation"
+    assert started["status"] == "started"
+    assert started["task_type"] == "SORTING"
+    assert started["product_name"] == "舒克牙膏海盐薄荷"
+    assert started["hand"] == hand.lower()
+    assert "kind" not in started
+    assert frames.cameras == [f"{hand.lower()}_wrist"]
 
 
 @pytest.mark.asyncio

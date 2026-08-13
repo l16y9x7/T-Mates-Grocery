@@ -126,10 +126,10 @@ Content-Type: application/json
 机器人移动控制默认调用以下真实服务：
 
 ```text
-位姿准备：      http://192.168.8.9:8084/pose/prepare
-位姿健康检查：  http://192.168.8.9:8084/pose/health
-导航移动：      http://192.168.8.9:8081/navigation/navigate
-导航健康检查：  http://192.168.8.9:8081/navigation/health
+位姿准备：      http://192.168.1.226:8084/pose/prepare
+位姿健康检查：  http://192.168.1.226:8084/pose/health
+导航移动：      http://192.168.1.226:8081/navigation/navigate
+导航健康检查：  http://192.168.1.226:8081/navigation/health
 ```
 
 如需使用其他机器人地址，请直接修改 `web/config.yaml` 中的 `services.navigation_url` 和 `services.pose_url`。

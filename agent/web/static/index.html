@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1514" />
     <title>取放流程控制台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260808-4" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260813-1" />
   </head>
   <body>
     <main class="shell">
@@ -57,6 +57,17 @@
             <span>执行日志将在此处实时出现</span>
           </div>
           <div id="timeline" class="timeline" hidden></div>
+          <section id="pickVisual" class="operation-visual" hidden>
+            <div class="operation-visual-heading"><span>感知结果</span><span id="pickVisualStatus">等待图像</span></div>
+            <div class="operation-visual-grid">
+              <div class="image-stage"><canvas id="pickVisualCanvas" width="640" height="480"></canvas><span class="image-caption">RGB · MASK · BBOX</span></div>
+              <div class="pose-summary">
+                <div class="pose-summary-heading"><span>6D 位姿</span><span id="pickPoseStatus">等待位姿估计</span></div>
+                <div id="pickPoseValues" class="pose-values"><span class="pose-empty">位姿估计完成后显示</span></div>
+                <div id="pickPoseMeta" class="pose-meta"></div>
+              </div>
+            </div>
+          </section>
           <div id="resultCard" class="result-card" hidden>
             <div><span>最终响应</span><strong id="resultStatus">-</strong></div>
             <pre id="resultBody">-</pre>
@@ -90,6 +101,17 @@
             <span>导航、位姿、识别、SKU 转换和抓取日志将在此处实时出现</span>
           </div>
           <div id="task1Timeline" class="timeline" hidden></div>
+          <section id="task1Visual" class="operation-visual" hidden>
+            <div class="operation-visual-heading"><span>感知结果</span><span id="task1VisualStatus">等待图像</span></div>
+            <div class="operation-visual-grid">
+              <div class="image-stage"><canvas id="task1VisualCanvas" width="640" height="480"></canvas><span class="image-caption">RGB · MASK · BBOX</span></div>
+              <div class="pose-summary">
+                <div class="pose-summary-heading"><span>6D 位姿</span><span id="task1PoseStatus">等待位姿估计</span></div>
+                <div id="task1PoseValues" class="pose-values"><span class="pose-empty">位姿估计完成后显示</span></div>
+                <div id="task1PoseMeta" class="pose-meta"></div>
+              </div>
+            </div>
+          </section>
           <div id="task1ResultCard" class="result-card" hidden>
             <div><span>最终响应</span><strong id="task1ResultStatus">-</strong></div>
             <pre id="task1ResultBody">-</pre>
@@ -170,6 +192,6 @@
       </section>
       <footer><span>8086 PICK/PLACE ORCHESTRATOR</span><span id="footerUrl">-</span></footer>
     </main>
-    <script src="/static/app.js?v=20260808-4" defer></script>
+    <script src="/static/app.js?v=20260813-1" defer></script>
   </body>
 </html>
