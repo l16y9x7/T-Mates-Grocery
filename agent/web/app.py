@@ -143,6 +143,20 @@ def _find_log_dir(operation_key: str) -> Path | None:
     return sorted(candidates, key=lambda path: path.name)[-1] if candidates else None
 
 
+def _find_task1_pick_log_dir(operation_key: str) -> Path | None:
+    """Find the newest 8086 child operation created by a task-one run."""
+
+    if not LOG_ROOT.exists():
+        return None
+    prefix = f"-{_safe_key(operation_key)}_task1.pick."
+    candidates = [
+        path
+        for path in LOG_ROOT.iterdir()
+        if path.is_dir() and prefix in path.name and path.name.endswith(".pick")
+    ]
+    return sorted(candidates, key=lambda path: path.name)[-1] if candidates else None
+
+
 def _log_file_data(log_dir: Path, relative_path: str) -> str | None:
     """Return a data URI for a file inside the current operation log."""
 
@@ -529,7 +543,8 @@ async def task1_visual(task_id: str) -> dict[str, object]:
     state = TASKS.get(task_id)
     if state is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
-    return _operation_visual(_find_log_dir(state.operation_key))
+    log_dir = _find_task1_pick_log_dir(state.operation_key) or _find_log_dir(state.operation_key)
+    return _operation_visual(log_dir)
 
 
 @app.post("/api/locate")

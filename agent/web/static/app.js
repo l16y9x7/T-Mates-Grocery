@@ -50,6 +50,8 @@ let eventSource = null;
 let task1EventSource = null;
 let visualPoller = null;
 let task1VisualPoller = null;
+let refreshVisual = null;
+let refreshTask1Visual = null;
 
 const CUSTOM_VALUE = "__custom__";
 const POSES_REQUIRING_SHELF_LEVEL = new Set([
@@ -247,15 +249,27 @@ function beginVisualPolling(taskId, endpoint, panel, canvas, status, poseStatus,
   };
   poll();
   const timer = window.setInterval(poll, 700);
-  if (isTask1) task1VisualPoller = timer;
-  else visualPoller = timer;
+  if (isTask1) {
+    task1VisualPoller = timer;
+    refreshTask1Visual = poll;
+  } else {
+    visualPoller = timer;
+    refreshVisual = poll;
+  }
 }
 
-function stopVisualPolling(isTask1 = false) {
+async function stopVisualPolling(isTask1 = false, refresh = false) {
   const timer = isTask1 ? task1VisualPoller : visualPoller;
   if (timer) window.clearInterval(timer);
-  if (isTask1) task1VisualPoller = null;
-  else visualPoller = null;
+  const finalRefresh = isTask1 ? refreshTask1Visual : refreshVisual;
+  if (refresh && finalRefresh) await finalRefresh();
+  if (isTask1) {
+    task1VisualPoller = null;
+    refreshTask1Visual = null;
+  } else {
+    visualPoller = null;
+    refreshVisual = null;
+  }
 }
 
 function eventLabel(event) {
@@ -459,10 +473,10 @@ form.addEventListener("submit", async (event) => {
     eventSource.addEventListener("flow", (message) => {
       try { addFlowEvent(JSON.parse(message.data)); } catch (_) { /* ignore malformed event */ }
     });
-    eventSource.addEventListener("result", (message) => {
+    eventSource.addEventListener("result", async (message) => {
       try { showResult(JSON.parse(message.data)); } catch (_) { setError("任务结果格式无效"); }
       setBusy(false);
-      stopVisualPolling();
+      await stopVisualPolling(false, true);
       eventSource.close();
       eventSource = null;
     });
@@ -495,10 +509,10 @@ task1Form.addEventListener("submit", async (event) => {
     task1EventSource.addEventListener("flow", (message) => {
       try { addFlowEvent(JSON.parse(message.data), task1Timeline); } catch (_) { /* ignore malformed event */ }
     });
-    task1EventSource.addEventListener("result", (message) => {
+    task1EventSource.addEventListener("result", async (message) => {
       try { showTask1Result(JSON.parse(message.data)); } catch (_) { setTask1Error("任务一结果格式无效"); }
       setTask1Busy(false);
-      stopVisualPolling(true);
+      await stopVisualPolling(true, true);
       task1EventSource.close();
       task1EventSource = null;
     });

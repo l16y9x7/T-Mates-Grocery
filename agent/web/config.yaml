@@ -9,8 +9,8 @@ services:
   task1_url: http://127.0.0.1:8108/task1/run
   locate_url: http://127.0.0.1:8083/perception/pick/locate
   perception_url: http://127.0.0.1:8083
-  navigation_url: http://168.192.1.226:8081
-  pose_url: http://168.192.1.226:8084
+  navigation_url: http://192.168.1.226:8081
+  pose_url: http://192.168.1.226:8084
 
 request_timeout_seconds: 900
 

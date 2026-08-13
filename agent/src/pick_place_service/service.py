@@ -533,23 +533,36 @@ class PickPlaceOrchestrator:
         log_dir = _create_operation_log(self.settings, request, kind, operation_key)
         log_token = _ACTIVE_LOG_DIR.set(log_dir)
         try:
-            _append_log_event("operation", "started", kind=kind, product_name=request.product_name)
+            _append_log_event(
+                "operation",
+                "started",
+                task_type=request.task_type.value,
+                product_name=request.product_name,
+                hand=request.normalized_hand,
+            )
             _save_log_json(
                 "request.json",
-                {"kind": kind, "operation_key": operation_key, "request": request.model_dump(mode="json")},
+                {
+                    "task_type": request.task_type.value,
+                    "product_name": request.product_name,
+                    "hand": request.normalized_hand,
+                    "operation_key": operation_key,
+                    "request": request.model_dump(mode="json"),
+                },
             )
             _append_log_event("定位", "started")
             located = await self.subagents.locate(request, kind)
             _append_log_event("定位", "succeeded", bbox=located.bbox, has_mask=bool(located.mask))
             step = "取图"
-            _append_log_event("取图", "started")
+            camera = self.settings.camera_for(kind, request.normalized_hand)
+            _append_log_event("取图", "started", camera=camera)
             frame = await self.frames.capture(
-                self.settings.pick_camera if kind == "pick" else self.settings.place_camera,
+                camera,
                 located.bbox,
                 operation_key,
                 located.mask,
             )
-            _append_log_event("取图", "succeeded", camera=self.settings.pick_camera if kind == "pick" else self.settings.place_camera)
+            _append_log_event("取图", "succeeded", camera=camera)
             step = "位姿估计"
             _append_log_event("位姿估计", "started")
             pose = await self.subagents.estimate_pose(request, kind, frame)
@@ -773,7 +786,9 @@ def _create_operation_log(
     (directory / "operation.json").write_text(
         json.dumps(
             {
-                "kind": kind,
+                "task_type": request.task_type.value,
+                "product_name": request.product_name,
+                "hand": request.normalized_hand,
                 "operation_key": operation_key,
                 "request": request.model_dump(mode="json"),
                 "created_at": datetime.now().isoformat(timespec="milliseconds"),
