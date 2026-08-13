@@ -1,0 +1,18 @@
+services:
+  navigation: http://192.168.130.50:8081
+  perception: http://127.0.0.1:8083
+  pose: http://192.168.8.9:8082
+  pick_place: http://127.0.0.1:8086
+  sku: http://127.0.0.1:25540
+
+receipt_viewpoint: receipt_viewpoint
+log_dir: log
+
+timeouts:
+  connect_seconds: 3
+  health_seconds: 5
+  receipt_seconds: 120
+  sku_seconds: 10
+  navigation_seconds: 600
+  pose_seconds: 300
+  pick_seconds: 600

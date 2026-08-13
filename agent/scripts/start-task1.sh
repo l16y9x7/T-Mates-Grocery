@@ -11,4 +11,4 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 cd "$PROJECT_ROOT"
-exec uv run --project "$PROJECT_ROOT" --frozen python -m agent.mock_server "$@"
+exec uv run --project "$PROJECT_ROOT" --frozen python -m task1_service "$@"

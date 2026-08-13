@@ -18,7 +18,7 @@ from tests.mock_services import MockServices
 
 
 # 测试复用生产配置的数据结构与货位表，只缩短耗时相关配置。
-CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "agent.yaml"
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "agent.mock.yaml"
 
 
 def make_test_settings() -> AgentSettings:
@@ -65,11 +65,30 @@ async def test_sorting_success() -> None:
     assert result["status"] == "SUCCEEDED"
     assert result["held_items"] == {}
     assert all(job["picked"] and job["placed"] for job in result["jobs"])
-    pick_calls = mock.calls(path="/manipulation/pick")
-    place_calls = mock.calls(path="/manipulation/place")
+    pick_calls = mock.calls(path="/pick")
+    place_calls = mock.calls(path="/place")
     assert [call.payload["hand"] for call in pick_calls] == ["LEFT", "RIGHT"]
     assert [call.payload["hand"] for call in place_calls] == ["LEFT", "RIGHT"]
+    assert len(mock.calls(path="/perception/parse")) == 1
+    assert [call.payload["location"] for call in mock.calls(path="/sku/name")] == [
+        "H1_F_L1_C01",
+        "H1_F_L1_C02",
+    ]
     assert mock.calls(path="/navigation/navigate")[-1].payload == {"target_id": "task_boundary"}
+
+    receipt_navigation_index = next(
+        index
+        for index, call in enumerate(mock.requests)
+        if call.path == "/navigation/navigate"
+        and call.payload == {"target_id": "receipt_viewpoint"}
+    )
+    receipt_pose_index = next(
+        index
+        for index, call in enumerate(mock.requests)
+        if call.path == "/pose/prepare"
+        and call.payload == {"pose_type": "RECEIPT_VIEW"}
+    )
+    assert receipt_navigation_index < receipt_pose_index
 
 
 @pytest.mark.asyncio
@@ -77,15 +96,53 @@ async def test_shortage_success_across_inspection_points() -> None:
     """补货任务应跨货架面累计两处缺货，再完成两项补货作业。"""
 
     mock = MockServices()
-    mock.inspection_results = [[], ["H1_F_L2_C01"], ["H2_B_L3_C02"]]
+    mock.inspection_results = [
+        [], [],  # 第一个巡检点：上半部、下半部
+        ["H1_F_L2_C01"], [],  # 第二个巡检点
+        ["H2_B_L3_C02"], [],  # 第三个巡检点
+    ]
 
     result = await run_task(TaskType.SHORTAGE, settings=make_test_settings(), transport=mock.transport)
 
     assert result["status"] == "SUCCEEDED"
     assert result["findings"] == ["H1_F_L2_C01", "H2_B_L3_C02"]
     assert [job["hand"] for job in result["jobs"]] == ["LEFT", "RIGHT"]
-    assert len(mock.calls(path="/areas/inspect")) == 3
+    assert len(mock.calls(path="/perception/inspect")) == 6
     assert all(job["placed"] for job in result["jobs"])
+
+    first_point_events = [
+        (index, call)
+        for index, call in enumerate(mock.requests)
+        if (
+            call.path == "/navigation/navigate"
+            and call.payload == {"target_id": "H1_F_INSPECT"}
+        )
+        or (
+            call.path == "/pose/prepare"
+            and call.payload["pose_type"] in {"SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"}
+        )
+        or call.path == "/perception/inspect"
+    ]
+    first_nav = next(index for index, call in first_point_events if call.path == "/navigation/navigate")
+    first_upper_pose = next(
+        index
+        for index, call in first_point_events
+        if call.path == "/pose/prepare"
+        and call.payload["pose_type"] == "SHELF_VIEW_UPPER"
+    )
+    first_upper_capture = next(
+        index for index, call in first_point_events if call.path == "/perception/inspect"
+    )
+    first_lower_pose = next(
+        index
+        for index, call in first_point_events
+        if call.path == "/pose/prepare"
+        and call.payload["pose_type"] == "SHELF_VIEW_LOWER"
+    )
+    first_lower_capture = [
+        index for index, call in first_point_events if call.path == "/perception/inspect"
+    ][1]
+    assert first_nav < first_upper_pose < first_upper_capture < first_lower_pose < first_lower_capture
 
 
 @pytest.mark.asyncio
@@ -93,7 +150,7 @@ async def test_misplaced_success_uses_fixed_swap_order() -> None:
     """乱放归位必须按左抓、右抓、左放、右放完成两件商品互换。"""
 
     mock = MockServices()
-    mock.inspection_results = [[], ["H1_F_L1_C01", "H1_F_L1_C02"]]
+    mock.inspection_results = [[], [], ["H1_F_L1_C01"], ["H1_F_L1_C02"]]
 
     result = await run_task(TaskType.MISPLACED, settings=make_test_settings(), transport=mock.transport)
 
@@ -101,16 +158,17 @@ async def test_misplaced_success_uses_fixed_swap_order() -> None:
     manipulation_calls = [
         call
         for call in mock.requests
-        if call.path in {"/manipulation/pick", "/manipulation/place"}
+        if call.path in {"/pick", "/place"}
     ]
     assert [(call.path, call.payload["hand"]) for call in manipulation_calls] == [
-        ("/manipulation/pick", "LEFT"),
-        ("/manipulation/pick", "RIGHT"),
-        ("/manipulation/place", "LEFT"),
-        ("/manipulation/place", "RIGHT"),
+        ("/pick", "LEFT"),
+        ("/pick", "RIGHT"),
+        ("/place", "LEFT"),
+        ("/place", "RIGHT"),
     ]
     assert manipulation_calls[0].payload["product_name"] == "矿泉水"
     assert manipulation_calls[1].payload["product_name"] == "可口可乐"
+    assert len(mock.calls(path="/perception/inspect")) == 4
     navigation_targets = [
         call.payload["target_id"]
         for call in mock.calls(path="/navigation/navigate")
@@ -147,13 +205,14 @@ async def test_health_checks_use_module_specific_paths() -> None:
     health_calls = {
         (call.service, call.path)
         for call in mock.requests
-        if call.method == "GET"
+        if call.method == "GET" and call.path.endswith("/health")
     }
     assert health_calls == {
         ("navigation", "/navigation/health"),
-        ("manipulation", "/manipulation/health"),
+        ("pick_place", "/health"),
         ("perception", "/perception/health"),
         ("pose", "/pose/health"),
+        ("sku", "/sku/health"),
     }
 
 
@@ -169,7 +228,8 @@ async def test_non_2xx_fails_without_retry() -> None:
     assert result["status"] == "FAILED"
     assert result["error_code"] == "EXECUTION_FAILED"
     assert len(mock.calls(path="/navigation/navigate")) == 1
-    assert not mock.calls(path="/manipulation/pick")
+    assert not mock.calls(path="/pose/prepare")
+    assert not mock.calls(path="/pick")
 
 
 @pytest.mark.asyncio
@@ -208,7 +268,8 @@ async def test_two_timeouts_stop_with_unknown_result() -> None:
     first_key = navigation_calls[0].headers["idempotency-key"]
     assert {call.headers["idempotency-key"] for call in navigation_calls} == {first_key}
     assert mock.actual_action_counts[first_key] == 1
-    assert not mock.calls(path="/manipulation/pick")
+    assert not mock.calls(path="/pose/prepare")
+    assert not mock.calls(path="/pick")
 
 
 @pytest.mark.asyncio
@@ -217,8 +278,8 @@ async def test_shortage_keeps_inspecting_beyond_two_passes() -> None:
 
     mock = MockServices()
     mock.inspection_results = [
-        *[[] for _ in range(6)],
-        ["H1_F_L2_C01", "H2_B_L3_C02"],
+        *[[] for _ in range(12)],
+        ["H1_F_L2_C01", "H2_B_L3_C02"], [],
     ]
     raw_settings = make_test_settings().model_dump()
     raw_settings["inspection_points"] = ["POINT_A", "POINT_B", "POINT_C"]
@@ -228,7 +289,7 @@ async def test_shortage_keeps_inspecting_beyond_two_passes() -> None:
 
     assert result["status"] == "SUCCEEDED"
     assert result["inspection_pass"] == 3
-    assert len(mock.calls(path="/areas/inspect")) == 7
+    assert len(mock.calls(path="/perception/inspect")) == 14
     inspection_navigation_targets = [
         call.payload["target_id"]
         for call in mock.calls(path="/navigation/navigate")
@@ -241,13 +302,19 @@ async def test_shortage_keeps_inspecting_beyond_two_passes() -> None:
         "POINT_B",
         "POINT_A",
     ]
-    shelf_view_calls = [
+    upper_view_calls = [
         call
         for call in mock.calls(path="/pose/prepare")
-        if call.payload["pose_type"] == "SHELF_VIEW"
+        if call.payload["pose_type"] == "SHELF_VIEW_UPPER"
     ]
-    assert len(shelf_view_calls) == 5
-    assert mock.calls(path="/manipulation/pick")
+    lower_view_calls = [
+        call
+        for call in mock.calls(path="/pose/prepare")
+        if call.payload["pose_type"] == "SHELF_VIEW_LOWER"
+    ]
+    assert len(upper_view_calls) == 7
+    assert len(lower_view_calls) == 7
+    assert mock.calls(path="/pick")
 
 
 @pytest.mark.asyncio
@@ -278,11 +345,20 @@ async def test_success_emits_clear_progress_logs(caplog: pytest.LogCaptureFixtur
 
     assert result["status"] == "SUCCEEDED"
     messages = [record.getMessage() for record in caplog.records if record.name.startswith("agent")]
-    assert any("任务开始 | task_type=SORTING" in message for message in messages)
-    assert any("步骤开始 | step=能力模块健康检查" in message for message in messages)
-    assert any("能力动作开始 | action=抓取" in message for message in messages)
-    assert any("步骤成功 | step=放置商品" in message for message in messages)
-    assert any("任务结束 | status=SUCCEEDED" in message for message in messages)
+    assert any("任务开始 | 任务=商品拣选（SORTING）" in message for message in messages)
+    assert any("检查主流程依赖的5个服务" in message for message in messages)
+    assert any(
+        "调用接口 | 用途=执行完整抓取流程" in message
+        and "接口=POST /pick" in message
+        and "入参=" in message
+        for message in messages
+    )
+    assert any(
+        "接口返回 | 服务=取放编排 | 接口=POST /place" in message and "返回=" in message
+        for message in messages
+    )
+    assert any("右手已放置" in message for message in messages)
+    assert any("任务结束 | 任务=商品拣选 | 结果=成功" in message for message in messages)
 
 
 @pytest.mark.asyncio

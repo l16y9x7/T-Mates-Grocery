@@ -32,6 +32,15 @@ from agent.models import (
 
 
 LOGGER = logging.getLogger(__name__)
+PREPARATION_DESCRIPTIONS = {
+    "RECEIPT_VIEW": "前往小票观察点并准备拍摄姿态",
+    "SHELF_VIEW_UPPER": "前往巡检点并准备货架上半部观察姿态",
+    "SHELF_VIEW_LOWER": "准备货架下半部观察姿态",
+    "SHELF_PICK_READY": "前往商品货位并准备货架抓取姿态",
+    "DELIVERY_TABLE_PLACE_READY": "前往交付台并准备放置姿态",
+    "REPLENISHMENT_TABLE_PICK_READY": "前往补货台并准备抓取姿态",
+    "SHELF_PLACE_READY": "前往目标货位并准备货架放置姿态",
+}
 
 
 def initial_state(settings: AgentSettings, task_type: TaskType) -> WorkflowState:
@@ -48,6 +57,7 @@ def initial_state(settings: AgentSettings, task_type: TaskType) -> WorkflowState
         "inspection_points": list(settings.inspection_points),
         "inspection_index": 0,
         "inspection_pass": 1,
+        "target_items": [],
         "findings": [],
         "jobs": [],
         "current_job_index": 0,
@@ -87,12 +97,12 @@ class WorkflowBuilder:
     async def check_health(self, state: WorkflowState) -> dict[str, Any]:
         """启动前检查全部能力模块，避免任务中途才发现模块不可用。"""
 
-        LOGGER.info("步骤开始 | step=能力模块健康检查")
+        LOGGER.info("开始步骤 | 内容=检查主流程依赖的5个服务是否全部就绪")
         try:
             await self.client.check_all_health()
         except AgentError as exc:
             return self._failure(exc)
-        LOGGER.info("步骤成功 | step=能力模块健康检查 | ready=4/4")
+        LOGGER.info("步骤完成 | 内容=导航、视觉、姿态、商品库和取放编排服务均已就绪")
         return {}
 
     async def prepare_receipt(self, state: WorkflowState) -> dict[str, Any]:
@@ -107,16 +117,39 @@ class WorkflowBuilder:
         )
 
     async def parse_receipt(self, state: WorkflowState) -> dict[str, Any]:
-        """商品拣选：识别外卖清单，并确认它指向两个不同的有效货位。"""
+        """商品拣选：识别商品名，并通过商品库解析唯一标准货位。"""
 
-        LOGGER.info("步骤开始 | step=识别外卖清单")
+        LOGGER.info("开始步骤 | 内容=识别小票中的两个商品")
         try:
-            slots = await self.client.parse_receipt()
-            self._validate_distinct_slots(slots)
+            receipt_items = await self.client.parse_receipt()
+            # 当前接口返回 product_names；旧版联调 Mock 返回货位数组。两者都在
+            # 这里归一化为后续作业所需的 (商品名, 标准货位) 对。
+            if all(item.startswith("H") for item in receipt_items):
+                slots = receipt_items
+                self._validate_distinct_slots(slots)
+                names = await asyncio.gather(*(self.client.sku_name(slot) for slot in slots))
+            else:
+                names = receipt_items
+                resolved = await asyncio.gather(
+                    *(self.client.sku_search_by_name(name) for name in names)
+                )
+                slots = []
+                for name, result in zip(names, resolved):
+                    if len(result.locations) != 1:
+                        raise RuleError(
+                            "AMBIGUOUS_PRODUCT_SLOT",
+                            f"商品 {name} 必须解析为唯一标准货位",
+                        )
+                    slot = result.locations[0]
+                    validate_slot_id(self.settings, slot)
+                    slots.append(slot)
+                self._validate_distinct_slots(slots)
         except AgentError as exc:
             return self._failure(exc)
-        LOGGER.info("步骤成功 | step=识别外卖清单 | product_slots=%s", slots)
-        return {"findings": slots}
+        except RuleError as exc:
+            return self._failure(exc)
+        LOGGER.info("步骤完成 | 内容=小票识别 | 商品=%s | 货位=%s", names, slots)
+        return {"target_items": names, "findings": slots}
 
     async def build_sorting_jobs(self, state: WorkflowState) -> dict[str, Any]:
         """商品拣选：将两个清单货位转换成按路线排序的搬运作业。
@@ -132,7 +165,13 @@ class WorkflowBuilder:
                 state["findings"],
                 key=lambda slot_id: self.settings.slot(slot_id).route_order,
             )
-            names = [self.settings.slot(slot_id).product_name for slot_id in slots]
+            names_by_slot = dict(zip(state.get("findings", []), state.get("target_items", [])))
+            names = [
+                names_by_slot[slot_id]
+                if slot_id in names_by_slot
+                else await self.client.sku_name(slot_id)
+                for slot_id in slots
+            ]
             if len(set(names)) != 2:
                 raise RuleError("INVALID_RECEIPT", "receipt must identify two different products")
             jobs = [
@@ -141,7 +180,7 @@ class WorkflowBuilder:
             ]
         except AgentError as exc:
             return self._failure(exc)
-        LOGGER.info("作业生成完成 | task_type=SORTING | jobs=%s", jobs)
+        LOGGER.info("生成搬运作业 | 任务=商品拣选 | %s", self._describe_jobs(jobs))
         return {"jobs": jobs, "current_job_index": 0}
 
     async def prepare_sorting_pick(self, state: WorkflowState) -> dict[str, Any]:
@@ -191,25 +230,38 @@ class WorkflowBuilder:
         return result
 
     async def prepare_inspection(self, state: WorkflowState) -> dict[str, Any]:
-        """补货/归位：前往当前巡检点，并调整为整面货架观察位姿。
+        """补货/归位：前往当前巡检点，并准备上半部货架观察位姿。
 
         奇数轮按配置顺序访问，偶数轮反向访问。新一轮的第一个点就是上一轮的最后
-        一个点，机器人位置和观察位姿均未改变，因此直接进入识别，不重复准备。
+        一个点，机器人位置不变，只需切换到上半部观察位姿。
         """
 
         target = state["inspection_points"][state["inspection_index"]]
         if self._is_repeated_pass_start(state):
             LOGGER.info(
-                "跳过重复巡检准备 | pass=%d | point=%s | reason=仍在上一轮结束点",
+                "无需移动 | 内容=机器人仍在上一轮最后一个巡检点，切换到上半部拍摄姿态 "
+                "| 巡检轮次=%d | 巡检点=%s",
                 state["inspection_pass"],
                 target,
             )
-            return {}
+            return await self._prepare_pose_only(
+                state,
+                "SHELF_VIEW_UPPER",
+                None,
+                f"{state['task_type'].lower()}.inspect.{state['inspection_pass']}."
+                f"{state['inspection_index']}.upper",
+            )
         action_prefix = (
             f"{state['task_type'].lower()}.inspect.{state['inspection_pass']}."
             f"{state['inspection_index']}"
         )
-        return await self._prepare(state, target, "SHELF_VIEW", None, action_prefix)
+        return await self._prepare(
+            state,
+            target,
+            "SHELF_VIEW_UPPER",
+            None,
+            f"{action_prefix}.upper",
+        )
 
     async def inspect_shortage(self, state: WorkflowState) -> dict[str, Any]:
         """货架补货：巡检当前货架面，并跨点位有序去重、累计缺货位。
@@ -220,12 +272,23 @@ class WorkflowBuilder:
 
         inspection_point = state["inspection_points"][state["inspection_index"]]
         LOGGER.info(
-            "步骤开始 | step=缺货识别 | pass=%d | point=%s",
+            "开始步骤 | 内容=识别当前货架上的缺货位置 | 巡检轮次=%d | 巡检点=%s",
             state["inspection_pass"],
             inspection_point,
         )
         try:
-            new_findings = await self.client.inspect(TaskType.SHORTAGE)
+            upper_findings = await self.client.inspect(TaskType.SHORTAGE)
+            lower_pose = await self._prepare_pose_only(
+                state,
+                "SHELF_VIEW_LOWER",
+                None,
+                f"shortage.inspect.{state['inspection_pass']}."
+                f"{state['inspection_index']}.lower",
+            )
+            if lower_pose.get("status") == WorkflowStatus.FAILED.value:
+                return lower_pose
+            lower_findings = await self.client.inspect(TaskType.SHORTAGE)
+            new_findings = self._merge_findings(upper_findings, lower_findings)
             if len(new_findings) > 2:
                 raise RuleError("INVALID_FINDINGS", "shortage response contains more than two slots")
             for slot_id in new_findings:
@@ -240,15 +303,15 @@ class WorkflowBuilder:
                 raise RuleError("INVALID_FINDINGS", "accumulated shortage findings exceed two slots")
             if len(merged) == 2:
                 LOGGER.info(
-                    "巡检目标已满足 | task_type=SHORTAGE | current=%s | accumulated=%s",
+                    "步骤完成 | 内容=已找到两处缺货 | 本次发现=%s | 累计结果=%s",
                     new_findings,
                     merged,
                 )
                 return {"findings": merged}
             next_position = self._advance_inspection(state)
             LOGGER.info(
-                "巡检继续 | task_type=SHORTAGE | current=%s | accumulated=%s "
-                "| next_pass=%d | next_index=%d",
+                "继续巡检 | 原因=尚未找到两处缺货 | 本次发现=%s | 累计结果=%s "
+                "| 下一轮次=%d | 下一点序号=%d",
                 new_findings,
                 merged,
                 next_position.get("inspection_pass", state["inspection_pass"]),
@@ -265,10 +328,13 @@ class WorkflowBuilder:
         """
 
         try:
+            names = await asyncio.gather(
+                *(self.client.sku_name(slot_id) for slot_id in state["findings"])
+            )
             jobs = [
                 self._job(
                     index,
-                    self.settings.slot(slot_id).product_name,
+                    names[index],
                     "replenishment_pickup",
                     slot_id,
                     self._hand(index),
@@ -277,7 +343,7 @@ class WorkflowBuilder:
             ]
         except AgentError as exc:
             return self._failure(exc)
-        LOGGER.info("作业生成完成 | task_type=SHORTAGE | jobs=%s", jobs)
+        LOGGER.info("生成搬运作业 | 任务=货架补货 | %s", self._describe_jobs(jobs))
         return {"jobs": jobs, "current_job_index": 0}
 
     async def prepare_replenishment(self, state: WorkflowState) -> dict[str, Any]:
@@ -322,23 +388,34 @@ class WorkflowBuilder:
 
         inspection_point = state["inspection_points"][state["inspection_index"]]
         LOGGER.info(
-            "步骤开始 | step=乱放识别 | pass=%d | point=%s",
+            "开始步骤 | 内容=识别当前货架上的乱放商品 | 巡检轮次=%d | 巡检点=%s",
             state["inspection_pass"],
             inspection_point,
         )
         try:
-            findings = await self.client.inspect(TaskType.MISPLACED)
+            upper_findings = await self.client.inspect(TaskType.MISPLACED)
+            lower_pose = await self._prepare_pose_only(
+                state,
+                "SHELF_VIEW_LOWER",
+                None,
+                f"misplaced.inspect.{state['inspection_pass']}."
+                f"{state['inspection_index']}.lower",
+            )
+            if lower_pose.get("status") == WorkflowStatus.FAILED.value:
+                return lower_pose
+            lower_findings = await self.client.inspect(TaskType.MISPLACED)
+            findings = self._merge_findings(upper_findings, lower_findings)
             if findings:
                 self._validate_distinct_slots(findings)
                 LOGGER.info(
-                    "巡检目标已满足 | task_type=MISPLACED | current_slot=%s | standard_slot=%s",
+                    "步骤完成 | 内容=找到需要交换归位的两个货位 | 错误货位=%s | 标准货位=%s",
                     findings[0],
                     findings[1],
                 )
                 return {"findings": findings}
             next_position = self._advance_inspection(state)
             LOGGER.info(
-                "巡检继续 | task_type=MISPLACED | current=[] | next_pass=%d | next_index=%d",
+                "继续巡检 | 原因=当前货架未发现乱放商品 | 下一轮次=%d | 下一点序号=%d",
                 next_position.get("inspection_pass", state["inspection_pass"]),
                 next_position["inspection_index"],
             )
@@ -356,17 +433,21 @@ class WorkflowBuilder:
 
         try:
             current_slot, standard_slot = state["findings"]
+            current_name, standard_name = await asyncio.gather(
+                self.client.sku_name(current_slot),
+                self.client.sku_name(standard_slot),
+            )
             jobs = [
                 self._job(
                     0,
-                    self.settings.slot(standard_slot).product_name,
+                    standard_name,
                     current_slot,
                     standard_slot,
                     "LEFT",
                 ),
                 self._job(
                     1,
-                    self.settings.slot(current_slot).product_name,
+                    current_name,
                     standard_slot,
                     current_slot,
                     "RIGHT",
@@ -375,7 +456,7 @@ class WorkflowBuilder:
         except (AgentError, ValueError) as exc:
             error = exc if isinstance(exc, AgentError) else RuleError("INVALID_FINDINGS", str(exc))
             return self._failure(error)
-        LOGGER.info("作业生成完成 | task_type=MISPLACED | jobs=%s", jobs)
+        LOGGER.info("生成搬运作业 | 任务=乱放归位 | %s", self._describe_jobs(jobs))
         return {"jobs": jobs, "current_job_index": 0}
 
     async def prepare_misplaced_pick_left(self, state: WorkflowState) -> dict[str, Any]:
@@ -432,8 +513,9 @@ class WorkflowBuilder:
         """
 
         LOGGER.info(
-            "步骤开始 | step=任务完成校验与返回判定区 | held_items=%s | jobs=%d",
-            state["held_items"],
+            "开始步骤 | 内容=确认商品全部放置且双手为空，然后返回任务判定区 | 当前持物=%s "
+            "| 作业数=%d",
+            self._describe_held_items(state["held_items"]),
             len(state["jobs"]),
         )
         if state["held_items"] or any(not job["placed"] for job in state["jobs"]):
@@ -450,24 +532,19 @@ class WorkflowBuilder:
             ),
         )
         if result.get("status") != WorkflowStatus.FAILED.value:
-            LOGGER.info("步骤成功 | step=返回任务判定区 | target=task_boundary")
+            LOGGER.info("步骤完成 | 内容=机器人已返回任务判定区")
         return result
 
     async def success(self, state: WorkflowState) -> dict[str, Any]:
         """统一成功终点：将整个任务状态置为 ``SUCCEEDED``。"""
 
-        LOGGER.info("工作流进入成功终点 | completed_jobs=%d", len(state["jobs"]))
+        LOGGER.info("工作流完成 | 结果=成功 | 已完成作业=%d", len(state["jobs"]))
         return {"status": WorkflowStatus.SUCCEEDED.value}
 
     async def fail(self, state: WorkflowState) -> dict[str, Any]:
         """统一失败终点：保留前序节点写入的错误详情，并停止状态图。"""
 
-        LOGGER.error(
-            "工作流进入失败终点 | error_code=%s | error_message=%s | action_id=%s",
-            state["error_code"],
-            state["error_message"],
-            state["current_action_id"] or "-",
-        )
+        LOGGER.debug("工作流已进入失败终点 | 错误码=%s", state["error_code"])
         return {"status": WorkflowStatus.FAILED.value}
 
     async def _prepare(
@@ -478,54 +555,43 @@ class WorkflowBuilder:
         level: str | None,
         action_prefix: str,
     ) -> dict[str, Any]:
-        """并行完成导航和位姿准备，二者都成功后才允许后续抓放。
+        """先导航到目标点，导航成功后再准备姿态。"""
 
-        ``return_exceptions=True`` 保证其中一个调用失败时仍等待另一个调用结束，避免
-        留下失控的后台物理动作。如果任一结果为“未知”，优先上报该错误，因为它比
-        一个明确失败更需要人工确认机器人现场状态。
-        """
-
+        description = PREPARATION_DESCRIPTIONS.get(pose_type, "导航到目标点并准备机器人姿态")
         LOGGER.info(
-            "步骤开始 | step=导航与位姿准备 | action_id=%s | target=%s | pose=%s | level=%s",
-            action_prefix,
+            "开始步骤 | 内容=%s | 目标=%s | 姿态=%s | 货架层=%s",
+            description,
             target_id,
             pose_type,
-            level or "-",
+            level or "无",
         )
-        results = await asyncio.gather(
-            self.client.navigate(
+        navigation = await self._physical(
+            state,
+            f"{action_prefix}.navigation",
+            lambda: self.client.navigate(
                 target_id,
                 state["task_run_id"],
                 f"{action_prefix}.navigation",
             ),
-            self.client.prepare_pose(
+        )
+        if navigation.get("status") == WorkflowStatus.FAILED.value:
+            return navigation
+        pose = await self._physical(
+            state,
+            f"{action_prefix}.pose",
+            lambda: self.client.prepare_pose(
                 pose_type,
                 level,
                 state["task_run_id"],
                 f"{action_prefix}.pose",
             ),
-            return_exceptions=True,
         )
-        # gather 返回值与输入调用顺序一致；这里只筛出异常并统一转换为状态更新。
-        errors = [result for result in results if isinstance(result, BaseException)]
-        if errors:
-            unknown = next(
-                (
-                    error
-                    for error in errors
-                    if isinstance(error, AgentError) and error.result_unknown
-                ),
-                None,
-            )
-            error = unknown or errors[0]
-            if not isinstance(error, AgentError):
-                error = AgentError("INTERNAL_ERROR", str(error))
-            return self._failure(error, action_prefix)
+        if pose.get("status") == WorkflowStatus.FAILED.value:
+            return pose
         LOGGER.info(
-            "步骤成功 | step=导航与位姿准备 | action_id=%s | target=%s | pose=%s",
-            action_prefix,
+            "步骤完成 | 内容=%s | 目标=%s",
+            description,
             target_id,
-            pose_type,
         )
         return {
             "current_action_id": action_prefix,
@@ -541,11 +607,15 @@ class WorkflowBuilder:
     ) -> dict[str, Any]:
         """机器人已经位于目标点时，只执行位姿准备，不重复发送导航。"""
 
+        pose_description = {
+            "SHELF_VIEW_UPPER": "机器人已在巡检点，仅准备货架上半部拍摄姿态",
+            "SHELF_VIEW_LOWER": "机器人已在巡检点，仅准备货架下半部拍摄姿态",
+        }.get(pose_type, "机器人已在目标点，仅准备货架放置姿态")
         LOGGER.info(
-            "步骤开始 | step=仅位姿准备 | action_id=%s | pose=%s | level=%s",
-            action_prefix,
+            "开始步骤 | 内容=%s | 姿态=%s | 货架层=%s",
+            pose_description,
             pose_type,
-            level or "-",
+            level or "无",
         )
         result = await self._physical(
             state,
@@ -559,8 +629,8 @@ class WorkflowBuilder:
         )
         if result.get("status") != WorkflowStatus.FAILED.value:
             LOGGER.info(
-                "步骤成功 | step=仅位姿准备 | action_id=%s | pose=%s",
-                action_prefix,
+                "步骤完成 | 内容=%s | 姿态=%s",
+                pose_description,
                 pose_type,
             )
         return result
@@ -569,11 +639,11 @@ class WorkflowBuilder:
         """执行一项抓取，并仅在服务确认成功后更新作业和手部占用状态。"""
 
         job = state["jobs"][index]
+        hand_name = self._hand_name(job["hand"])
         LOGGER.info(
-            "步骤开始 | step=抓取商品 | job=%s | product=%s | hand=%s | source=%s",
-            job["job_id"],
+            "开始步骤 | 内容=使用%s抓取商品 | 商品=%s | 取货位置=%s",
+            hand_name,
             job["product_name"],
-            job["hand"],
             job["source"],
         )
         # 同一只手不能同时持有两件商品，这是下发抓取动作前的本地安全前置条件。
@@ -602,9 +672,10 @@ class WorkflowBuilder:
         held_items = dict(state["held_items"])
         held_items[job["hand"]] = job["product_name"]
         LOGGER.info(
-            "步骤成功 | step=抓取商品 | job=%s | held_items=%s",
-            job["job_id"],
-            held_items,
+            "步骤完成 | 内容=%s已抓取%s | 当前持物=%s",
+            hand_name,
+            job["product_name"],
+            self._describe_held_items(held_items),
         )
         return {**result, "jobs": jobs, "held_items": held_items}
 
@@ -612,11 +683,11 @@ class WorkflowBuilder:
         """执行一项放置，并确认指定手确实持有该作业对应的商品。"""
 
         job = state["jobs"][index]
+        hand_name = self._hand_name(job["hand"])
         LOGGER.info(
-            "步骤开始 | step=放置商品 | job=%s | product=%s | hand=%s | destination=%s",
-            job["job_id"],
+            "开始步骤 | 内容=使用%s放置商品 | 商品=%s | 放置位置=%s",
+            hand_name,
             job["product_name"],
-            job["hand"],
             job["destination"],
         )
         if state["held_items"].get(job["hand"]) != job["product_name"]:
@@ -644,9 +715,10 @@ class WorkflowBuilder:
         held_items = dict(state["held_items"])
         held_items.pop(job["hand"])
         LOGGER.info(
-            "步骤成功 | step=放置商品 | job=%s | held_items=%s",
-            job["job_id"],
-            held_items,
+            "步骤完成 | 内容=%s已放置%s | 当前持物=%s",
+            hand_name,
+            job["product_name"],
+            self._describe_held_items(held_items),
         )
         return {**result, "jobs": jobs, "held_items": held_items}
 
@@ -702,6 +774,17 @@ class WorkflowBuilder:
             validate_slot_id(self.settings, slot_id)
 
     @staticmethod
+    def _merge_findings(*groups: list[str]) -> list[str]:
+        """按上下拍摄顺序合并识别结果，并保留首次出现顺序。"""
+
+        merged: list[str] = []
+        for group in groups:
+            for slot_id in group:
+                if slot_id not in merged:
+                    merged.append(slot_id)
+        return merged
+
+    @staticmethod
     def _job(
         index: int,
         product_name: str,
@@ -728,6 +811,32 @@ class WorkflowBuilder:
         return "LEFT" if index == 0 else "RIGHT"
 
     @staticmethod
+    def _hand_name(hand: Hand | str) -> str:
+        """返回日志使用的中文手部名称。"""
+
+        return "左手" if hand == "LEFT" else "右手"
+
+    @classmethod
+    def _describe_jobs(cls, jobs: list[Job]) -> str:
+        """把内部 Job 字典压缩为面向操作人员的搬运说明。"""
+
+        return "；".join(
+            f"{cls._hand_name(job['hand'])}从{job['source']}取{job['product_name']}，"
+            f"放到{job['destination']}"
+            for job in jobs
+        )
+
+    @classmethod
+    def _describe_held_items(cls, held_items: dict[str, str]) -> str:
+        """把持物字典转换为简短中文描述。"""
+
+        if not held_items:
+            return "双手为空"
+        return "，".join(
+            f"{cls._hand_name(hand)}={product}" for hand, product in held_items.items()
+        )
+
+    @staticmethod
     def _current_job(state: WorkflowState) -> Job:
         """取得作业游标当前指向的作业。"""
 
@@ -748,8 +857,7 @@ class WorkflowBuilder:
         else:
             action_status = ActionStatus.FAILED.value
         LOGGER.error(
-            "步骤失败 | action_id=%s | action_status=%s | error_code=%s | error_message=%s",
-            action_id or "-",
+            "步骤失败 | 动作结果=%s | 错误码=%s | 原因=%s",
             action_status,
             error.code,
             error.message,

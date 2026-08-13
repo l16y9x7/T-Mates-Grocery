@@ -16,16 +16,21 @@ from sys import maxsize
 import httpx
 
 from agent.client import CapabilityClient
-from agent.logging_config import bind_task_run_id, configure_logging, reset_task_run_id
+from agent.logging_config import configure_logging
 from agent.models import AgentSettings, TaskType, WorkflowState
 from agent.workflow import WorkflowBuilder, initial_state
 
 
 # 使用相对源码位置推导默认配置，避免依赖启动命令所在的当前工作目录。
-DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config" / "agent.yaml"
+DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config" / "agent.mock.yaml"
 LOGGER = logging.getLogger(__name__)
 # LangGraph 要求提供有限整数；使用系统最大整数，实际业务不设置巡检轮数上限。
 GRAPH_RECURSION_LIMIT = maxsize
+TASK_NAMES = {
+    TaskType.SORTING: "商品拣选",
+    TaskType.SHORTAGE: "货架补货",
+    TaskType.MISPLACED: "乱放归位",
+}
 
 
 async def run_task(
@@ -45,9 +50,8 @@ async def run_task(
     resolved_type = TaskType(task_type)
     resolved_settings = settings or AgentSettings.load(config_path)
     state = initial_state(resolved_settings, resolved_type)
-    context_token = bind_task_run_id(state["task_run_id"])
 
-    LOGGER.info("任务开始 | task_type=%s", resolved_type.value)
+    LOGGER.info("任务开始 | 任务=%s（%s）", TASK_NAMES[resolved_type], resolved_type.value)
     try:
         async with CapabilityClient(resolved_settings, transport=transport) as client:
             graph = WorkflowBuilder(resolved_settings, client).build(resolved_type)
@@ -57,19 +61,17 @@ async def run_task(
             )
         final_state = WorkflowState(**result)
         LOGGER.info(
-            "任务结束 | status=%s | findings=%s | jobs=%d | error_code=%s",
-            final_state["status"],
-            final_state["findings"],
+            "任务结束 | 任务=%s | 结果=%s | 作业数=%d | 错误码=%s",
+            TASK_NAMES[resolved_type],
+            "成功" if final_state["status"] == "SUCCEEDED" else "失败",
             len(final_state["jobs"]),
             final_state["error_code"] or "-",
         )
         return final_state
     except BaseException:
         # 业务错误会在工作流内转换成 FAILED；这里只记录真正逃出状态图的意外异常。
-        LOGGER.exception("任务异常中止 | task_type=%s", resolved_type.value)
+        LOGGER.exception("任务异常中止 | 任务=%s", TASK_NAMES[resolved_type])
         raise
-    finally:
-        reset_task_run_id(context_token)
 
 
 def cli() -> None:

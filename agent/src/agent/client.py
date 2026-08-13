@@ -7,12 +7,13 @@
 from __future__ import annotations
 
 import asyncio
+import json as jsonlib
 import logging
 from time import monotonic
 from typing import Any, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from agent.models import AgentError, AgentSettings, Hand, TaskType
 
@@ -20,21 +21,36 @@ from agent.models import AgentError, AgentSettings, Hand, TaskType
 LOGGER = logging.getLogger(__name__)
 SERVICE_NAMES = {
     "navigation": "导航",
-    "perception": "场景感知",
-    "pose": "位姿控制",
+    "perception": "视觉理解",
+    "pose": "躯干控制",
     "manipulation": "抓放操作",
-}
-ACTION_NAMES = {
-    "/navigation/navigate": "导航",
-    "/pose/prepare": "位姿准备",
-    "/manipulation/pick": "抓取",
-    "/manipulation/place": "放置",
+    "pick_place": "取放编排",
+    "sku": "商品库",
 }
 HEALTH_PATHS = {
     "navigation": "/navigation/health",
     "perception": "/perception/health",
     "pose": "/pose/health",
-    "manipulation": "/manipulation/health",
+    "pick_place": "/health",
+    "sku": "/sku/health",
+}
+ENDPOINT_PURPOSES = {
+    "/navigation/health": "检查导航服务是否就绪",
+    "/perception/health": "检查视觉理解服务是否就绪",
+    "/pose/health": "检查躯干控制服务是否就绪",
+    "/sku/health": "检查商品库是否就绪",
+    "/health": "检查取放编排服务是否就绪",
+    "/navigation/navigate": "导航到目标点",
+    "/pose/prepare": "准备机器人躯干姿态",
+    "/perception/parse": "识别小票中的商品货位",
+    "/perception/inspect": "识别货架上的缺货或乱放位置",
+    "/sku/search_by_name": "根据商品名查询标准货位",
+    "/sku/search_by_location": "根据货位查询商品信息",
+    "/sku/name": "兼容旧版接口：根据货位查询商品名",
+    "/sku/locations": "兼容旧版接口：根据商品名查询标准货位",
+    "/sku/images": "查询商品图片",
+    "/pick": "执行完整抓取流程",
+    "/place": "执行完整放置流程",
 }
 
 
@@ -59,6 +75,36 @@ class InspectionResponse(BaseModel):
     findings: list[str]
 
 
+class SkuNameResponse(BaseModel):
+    """商品库按货位返回的标准商品名。"""
+
+    model_config = ConfigDict(extra="forbid")
+    location: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+
+
+class SkuSearchResponse(BaseModel):
+    """商品库按商品名查询的实际响应。"""
+
+    model_config = ConfigDict(extra="forbid")
+    sku_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    images: list[str]
+    locations: list[str]
+
+
+class SkuLocationsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1)
+    locations: list[str]
+
+
+class SkuImagesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1)
+    images: list[str]
+
+
 # 小票识别接口直接返回 JSON 字符串数组，不需要为此额外声明 BaseModel。
 STRING_LIST = TypeAdapter(list[str])
 
@@ -70,7 +116,7 @@ def action_key(task_run_id: str, action_id: str) -> str:
 
 
 class CapabilityClient:
-    """封装导航、感知、姿态和操作四类能力服务。"""
+    """封装导航、感知、姿态和 8086 取放编排服务。"""
 
     def __init__(
         self,
@@ -99,10 +145,10 @@ class CapabilityClient:
         await self._client.aclose()
 
     async def check_all_health(self) -> None:
-        """并发检查所有能力模块；任一模块未就绪都禁止启动任务。"""
+        """并发检查主流程依赖；任一服务未就绪都禁止启动任务。"""
 
-        services = ("navigation", "perception", "pose", "manipulation")
-        # 四项检查彼此独立，并发执行可缩短启动等待时间。
+        services = ("navigation", "perception", "pose", "sku", "pick_place")
+        # 各项检查彼此独立，并发执行可缩短启动等待时间。
         results = await asyncio.gather(*(self._check_health(service) for service in services))
         not_ready = [service for service, status in zip(services, results) if status != "READY"]
         if not_ready:
@@ -145,21 +191,70 @@ class CapabilityClient:
         )
 
     async def parse_receipt(self) -> list[str]:
-        """识别小票上的两个目标货位，并校验响应的基本结构与数量。"""
+        """识别小票上的两个商品名，并兼容旧版货位数组响应。"""
 
         response = await self._request(
             "perception",
             "POST",
-            "/receipt/parse",
+            "/perception/parse",
             timeout_seconds=self.settings.timeouts.receipt_seconds,
         )
         try:
-            slots = STRING_LIST.validate_python(response.json())
+            payload = response.json()
+            if isinstance(payload, dict) and "product_names" in payload:
+                names = STRING_LIST.validate_python(payload["product_names"])
+                if len(names) != 2 or len(set(names)) != 2 or any(not name.strip() for name in names):
+                    raise ValueError("receipt must contain two different non-empty product names")
+                return names
+            # 本地旧 Mock 曾直接返回货位数组，保留读取能力以便联调期间平滑升级。
+            slots = STRING_LIST.validate_python(payload)
         except (ValueError, ValidationError) as exc:
-            raise AgentError("INVALID_RESPONSE", "receipt response must be a JSON string array") from exc
+            raise AgentError(
+                "INVALID_RESPONSE",
+                "receipt response must contain product_names or a legacy slot array",
+            ) from exc
         if len(slots) != 2:
             raise AgentError("INVALID_RESPONSE", "receipt response must contain exactly two slots")
         return slots
+
+    async def sku_search_by_name(self, name: str) -> SkuSearchResponse:
+        """按商品名查询 SKU；优先使用商品库当前的 ``/sku/search_by_name``。"""
+
+        try:
+            response = await self._request(
+                "sku",
+                "GET",
+                "/sku/search_by_name",
+                json={"name": name},
+                timeout_seconds=self.settings.timeouts.sku_seconds,
+            )
+            result = SkuSearchResponse.model_validate(response.json())
+            if result.name != name:
+                raise ValueError("sku response name does not match request")
+            return result
+        except AgentError as exc:
+            # 兼容仍提供旧 /sku/name 的现场网关和 Mock；正式环境应使用新接口。
+            if exc.code != "EXECUTION_FAILED":
+                raise
+            response = await self._request(
+                "sku",
+                "GET",
+                "/sku/name",
+                json={"location": name},
+                timeout_seconds=self.settings.timeouts.sku_seconds,
+            )
+            try:
+                legacy = SkuNameResponse.model_validate(response.json())
+                return SkuSearchResponse(
+                    sku_id=legacy.location,
+                    name=legacy.name,
+                    images=[],
+                    locations=[legacy.location],
+                )
+            except (ValueError, ValidationError) as legacy_exc:
+                raise exc from legacy_exc
+        except (ValueError, ValidationError) as exc:
+            raise AgentError("INVALID_RESPONSE", "sku search response is invalid") from exc
 
     async def inspect(self, task_type: TaskType) -> list[str]:
         """请求感知模块检查当前货架面，返回缺货或错放货位。"""
@@ -167,7 +262,7 @@ class CapabilityClient:
         response = await self._request(
             "perception",
             "POST",
-            "/areas/inspect",
+            "/perception/inspect",
             json={"task_type": task_type.value},
             timeout_seconds=self.settings.timeouts.inspection_seconds,
         )
@@ -175,6 +270,54 @@ class CapabilityClient:
             return InspectionResponse.model_validate(response.json()).findings
         except (ValueError, ValidationError) as exc:
             raise AgentError("INVALID_RESPONSE", "inspection response is invalid") from exc
+
+    async def sku_name(self, location: str) -> str:
+        """通过商品库查询货位对应的标准商品名。"""
+
+        response = await self._request(
+            "sku",
+            "GET",
+            "/sku/name",
+            json={"location": location},
+            timeout_seconds=self.settings.timeouts.sku_seconds,
+        )
+        try:
+            result = SkuNameResponse.model_validate(response.json())
+            if result.location.upper() != location.upper():
+                raise ValueError("sku response location does not match request")
+            return result.name
+        except (ValueError, ValidationError) as exc:
+            raise AgentError("INVALID_RESPONSE", "sku name response is invalid") from exc
+
+    async def sku_locations(self, name: str) -> list[str]:
+        """通过商品库查询商品的标准货位。"""
+
+        response = await self._request(
+            "sku",
+            "GET",
+            "/sku/locations",
+            json={"name": name},
+            timeout_seconds=self.settings.timeouts.sku_seconds,
+        )
+        try:
+            return SkuLocationsResponse.model_validate(response.json()).locations
+        except (ValueError, ValidationError) as exc:
+            raise AgentError("INVALID_RESPONSE", "sku locations response is invalid") from exc
+
+    async def sku_images(self, name: str) -> list[str]:
+        """通过商品库查询商品图片引用。"""
+
+        response = await self._request(
+            "sku",
+            "GET",
+            "/sku/images",
+            json={"name": name},
+            timeout_seconds=self.settings.timeouts.sku_seconds,
+        )
+        try:
+            return SkuImagesResponse.model_validate(response.json()).images
+        except (ValueError, ValidationError) as exc:
+            raise AgentError("INVALID_RESPONSE", "sku images response is invalid") from exc
 
     async def pick(
         self,
@@ -187,8 +330,8 @@ class CapabilityClient:
         """使用指定手抓取商品。"""
 
         await self._physical_action(
-            "manipulation",
-            "/manipulation/pick",
+            "pick_place",
+            "/pick",
             {"task_type": task_type.value, "product_name": product_name, "hand": hand},
             task_run_id,
             action_id,
@@ -206,8 +349,8 @@ class CapabilityClient:
         """使用指定手放置商品。"""
 
         await self._physical_action(
-            "manipulation",
-            "/manipulation/place",
+            "pick_place",
+            "/place",
             {"task_type": task_type.value, "product_name": product_name, "hand": hand},
             task_run_id,
             action_id,
@@ -227,7 +370,7 @@ class CapabilityClient:
             status = HealthResponse.model_validate(response.json()).status
         except (ValueError, ValidationError) as exc:
             raise AgentError("INVALID_RESPONSE", f"invalid health response from {service}") from exc
-        LOGGER.info(
+        LOGGER.debug(
             "健康检查结果 | service=%s(%s) | status=%s",
             SERVICE_NAMES[service],
             service,
@@ -239,7 +382,7 @@ class CapabilityClient:
         self,
         service: str,
         path: str,
-        payload: dict[str, str],
+        payload: dict[str, Any],
         task_run_id: str,
         action_id: str,
         timeout_seconds: float,
@@ -250,14 +393,6 @@ class CapabilityClient:
         请求可以重发，但真实机器人动作只执行一次。
         """
 
-        action_name = ACTION_NAMES[path]
-        LOGGER.info(
-            "能力动作开始 | action=%s | service=%s | action_id=%s | payload=%s",
-            action_name,
-            SERVICE_NAMES[service],
-            action_id,
-            payload,
-        )
         try:
             response = await self._request(
                 service,
@@ -269,25 +404,13 @@ class CapabilityClient:
                 result_unknown_on_exhaustion=True,
             )
             ActionResponse.model_validate(response.json())
-        except AgentError as exc:
-            LOGGER.error(
-                "能力动作失败 | action=%s | action_id=%s | error_code=%s | result_unknown=%s",
-                action_name,
-                action_id,
-                exc.code,
-                exc.result_unknown,
-            )
+        except AgentError:
             raise
         except (ValueError, ValidationError) as exc:
-            error = AgentError("INVALID_RESPONSE", f"invalid action response from {service}")
-            LOGGER.error(
-                "能力动作失败 | action=%s | action_id=%s | error_code=%s",
-                action_name,
-                action_id,
-                error.code,
-            )
-            raise error from exc
-        LOGGER.info("能力动作成功 | action=%s | action_id=%s", action_name, action_id)
+            raise AgentError(
+                "INVALID_RESPONSE",
+                f"{SERVICE_NAMES[service]}返回的动作结果格式无效",
+            ) from exc
 
     async def _request(
         self,
@@ -318,15 +441,16 @@ class CapabilityClient:
 
         # 最多尝试两次。这里只重试传输层故障，不重试明确返回的业务/HTTP 失败。
         for attempt in range(2):
-            attempt_number = attempt + 1
             started_at = monotonic()
-            LOGGER.debug(
-                "HTTP 请求开始 | service=%s | method=%s | path=%s | attempt=%d/2 | timeout=%.2fs",
+            retry_text = " | 重试=第2次" if attempt else ""
+            LOGGER.info(
+                "调用接口 | 用途=%s | 服务=%s | 接口=%s %s | 入参=%s%s",
+                ENDPOINT_PURPOSES.get(path, f"调用{SERVICE_NAMES[service]}服务"),
                 SERVICE_NAMES[service],
                 method,
                 path,
-                attempt_number,
-                timeout_seconds,
+                self._format_log_value(json),
+                retry_text,
             )
             try:
                 async with asyncio.timeout(timeout_seconds):
@@ -342,11 +466,10 @@ class CapabilityClient:
                 if attempt == 0:
                     # 短暂退避，且第二次请求继续携带完全相同的幂等键。
                     LOGGER.warning(
-                        "HTTP 请求异常，准备重试 | service=%s | path=%s | attempt=%d/2 "
-                        "| elapsed=%.3fs | error=%s",
+                        "接口调用异常，准备重试 | 服务=%s | 接口=%s %s | 耗时=%.2f秒 | 异常=%s",
                         SERVICE_NAMES[service],
+                        method,
                         path,
-                        attempt_number,
                         elapsed,
                         type(exc).__name__,
                     )
@@ -354,11 +477,11 @@ class CapabilityClient:
                     continue
                 code = "ACTION_RESULT_UNKNOWN" if result_unknown_on_exhaustion else "NETWORK_ERROR"
                 LOGGER.error(
-                    "HTTP 请求连续失败 | service=%s | path=%s | attempt=%d/2 "
-                    "| elapsed=%.3fs | error_code=%s | error=%s",
+                    "接口连续两次调用异常 | 服务=%s | 接口=%s %s | 耗时=%.2f秒 "
+                    "| 错误码=%s | 异常=%s",
                     SERVICE_NAMES[service],
+                    method,
                     path,
-                    attempt_number,
                     elapsed,
                     code,
                     type(exc).__name__,
@@ -372,23 +495,25 @@ class CapabilityClient:
             if not response.is_success:
                 error_message = self._error_message(service, response)
                 LOGGER.error(
-                    "HTTP 响应失败 | service=%s | path=%s | status_code=%d | elapsed=%.3fs",
+                    "接口返回失败 | 服务=%s | 接口=%s %s | HTTP状态=%d | 返回=%s | 耗时=%.2f秒",
                     SERVICE_NAMES[service],
+                    method,
                     path,
                     response.status_code,
+                    self._format_response(response),
                     monotonic() - started_at,
                 )
                 raise AgentError(
                     "EXECUTION_FAILED",
                     error_message,
                 )
-            LOGGER.debug(
-                "HTTP 请求成功 | service=%s | path=%s | status_code=%d | attempt=%d/2 "
-                "| elapsed=%.3fs",
+            LOGGER.info(
+                "接口返回 | 服务=%s | 接口=%s %s | HTTP状态=%d | 返回=%s | 耗时=%.2f秒",
                 SERVICE_NAMES[service],
+                method,
                 path,
                 response.status_code,
-                attempt_number,
+                self._format_response(response),
                 monotonic() - started_at,
             )
             return response
@@ -404,3 +529,21 @@ class CapabilityClient:
         except ValueError:
             error_code = "EXECUTION_FAILED"
         return f"{service} returned HTTP {response.status_code}: {error_code}"
+
+    @staticmethod
+    def _format_log_value(value: Any) -> str:
+        """把请求或响应整理为单行中文日志可读的紧凑 JSON。"""
+
+        if value is None:
+            return "无"
+        return jsonlib.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    @classmethod
+    def _format_response(cls, response: httpx.Response) -> str:
+        """优先记录 JSON 响应，非 JSON 内容限制长度后记录。"""
+
+        try:
+            return cls._format_log_value(response.json())
+        except ValueError:
+            text = response.text.strip()
+            return text[:500] if text else "无"

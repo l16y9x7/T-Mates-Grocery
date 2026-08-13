@@ -86,6 +86,7 @@ class WorkflowState(TypedDict):
     inspection_points: list[str]
     inspection_index: int
     inspection_pass: int
+    target_items: list[str]
     findings: list[str]
     # jobs 保存规划后的搬运步骤，current_job_index 指向下一项待处理作业。
     jobs: list[Job]
@@ -109,6 +110,7 @@ class TimeoutSettings(BaseModel):
 
     connect_seconds: float = Field(gt=0)
     health_seconds: float = Field(gt=0)
+    sku_seconds: float = Field(gt=0, default=10)
     receipt_seconds: float = Field(gt=0)
     inspection_seconds: float = Field(gt=0)
     navigation_seconds: float = Field(gt=0)
@@ -118,7 +120,7 @@ class TimeoutSettings(BaseModel):
 
 
 class ServiceSettings(BaseModel):
-    """四个机器人能力服务的基础 URL。"""
+    """Agent 直接依赖的能力服务基础 URL。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -126,6 +128,8 @@ class ServiceSettings(BaseModel):
     perception: str = Field(min_length=1)
     pose: str = Field(min_length=1)
     manipulation: str = Field(min_length=1)
+    pick_place: str = Field(min_length=1)
+    sku: str = Field(min_length=1)
 
 
 class ProductSlot(BaseModel):

@@ -13,7 +13,7 @@
 |Agent 编排模块<br>|Skylar<br>|State、任务规则、作业生成、流程路由和接口调用<br><br>访问摆放表|
 |头部视频流采集？|Nora|头部相机视频流获取方式：<br>cd /home/nvidia/smt/robot\_device<br>\./start\.sh start\-camera|
 
-Agent 通过 HTTP/JSON API 调用前四个能力模块，不直接调用模块内部 Python 函数，也不使用 ROS。各能力模块自行完成初始化并持续运行；Agent 只通过 `GET /health` 判断模块是否可用。
+Agent 通过 HTTP/JSON API 调用能力模块，不直接调用模块内部 Python 函数，也不使用 ROS。各能力模块自行完成初始化并持续运行；Agent 通过各模块约定的健康检查接口判断模块是否可用。主 Agent 的抓放动作统一调用 8086 的取放编排服务，8086 再调用 8083、8084、8085 完成一次完整子流程。
 
 `WorkflowState` 只在 Agent 内部流转，不作为能力接口的请求体。商品货位表、底盘固定点位表和巡检点配置由 Agent 在启动时加载并校验。
 
@@ -39,9 +39,11 @@ Agent 通过 HTTP/JSON API 调用前四个能力模块，不直接调用模块�
 
 - `POST /pose/prepare`
 
-- `POST /manipulation/pick`
+- `POST /pick`（8086）
 
-- `POST /manipulation/place`
+- `POST /place`（8086）
+
+- 8084 的 `POST /manipulation/grasp` 和 `POST /manipulation/release` 仅由 8086 内部调用，Agent 不直接调用。
 
 物理动作接口必须携带 `Idempotency-Key`，并在动作最终成功后返回：
 
@@ -93,7 +95,7 @@ GET /pose/health           ---- Mui
 {"status": "READY"}
 ```
 
-`status` 取值为 `STARTING`、`READY` 或 `ERROR`。四个模块均为 `READY` 时，Agent 才能开始任务。
+`status` 取值为 `STARTING`、`READY` 或 `ERROR`。主 Agent 直接依赖的导航、姿态、视觉、商品库以及 8086 取放编排服务均为 `READY` 时，Agent 才能开始任务。8086 自身还会检查 8083、8084、8085 的健康状态和相机列表。
 
 #### 涉及模块：底盘能力、场景理解、控制、抓放
 
@@ -127,19 +129,17 @@ POST /navigation/navigate
 #### 3\.3\.1 小票识别
 
 ```HTTP
-POST /perception/parse_receipt
+POST /perception/parse
 ```
 
 请求体：无
 
-成功响应为字符串数组，必须恰好包含两个有效的商品标准货位编号。
-
-同一个商品可能有两个货位编号，取离起点近的传出来。
+成功响应为对象，`product_names` 必须恰好包含两个不同的非空商品名。Agent 随后对每个商品名调用商品库 `GET /sku/search_by_name`，并校验返回恰好一个有效的标准货位。
 
 响应示例：
 
 ```JSON
-["H1_F_L1_C01", "H1_F_L1_C02"]
+{"product_names": ["可口可乐罐装", "百事可乐瓶装"]}
 ```
 
 ##### 涉及模块：控制、头部视频流采集、场景理解
@@ -147,7 +147,7 @@ POST /perception/parse_receipt
 ### 3\.4 货架巡检
 
 ```HTTP
-POST /areas/inspect
+POST /perception/inspect
 ```
 
 |请求字段|类型|必填|取值|
@@ -177,7 +177,7 @@ POST /areas/inspect
 
 ```JSON
 {
-  "findings": ("H1_F_L2_C04", "H1_F_L3_C02")
+  "findings":["H1_F_L1_C01","H1_F_L2_C04"]
 }
 ```
 
@@ -203,7 +203,8 @@ POST /pose/prepare
 |`pose_type`|含义|`shelf_level`|
 |---|---|---|
 |`RECEIPT_VIEW`|小票拍摄位姿|不传|
-|`SHELF_VIEW`|整面货架观察位姿|不传|
+|SHELF\_VIEW\_UPPER|整面货架观察高位姿|不传|
+|SHELF\_VIEW\_LOWER|整面货架观察低位姿|不传|
 |`SHELF_INSPECT`|定点高度观察位姿|必传|
 |`SHELF_PICK_READY`|货架抓取预备位姿|必传|
 |`REPLENISHMENT_TABLE_PICK_READY`|补货台抓取预备位姿|不传<br>|
@@ -229,16 +230,16 @@ POST /pose/prepare
 ### 3\.6 抓取
 
 ```HTTP
-POST /manipulation/pick
+POST http://192.168.130.59:8086/pick
 ```
 
 |请求字段|类型|必填|约束|
 |---|---|---|---|
-|`task_type`|string|是|`SORTING`或<br>`SHORTAGE` 或 `MISPLACED`<br>拣选、短缺、放错|
+|`task_type`|string|是<br>|`SORTING`或<br>`SHORTAGE` 或 `MISPLACED`<br>拣选、短缺、放错|
 |`product_name`|string|是|完整商品名|
 |`hand`|string|是|`LEFT` 或 `RIGHT`|
 
-调用前提：Agent 已完成导航和抓取预备位姿调整。
+调用前提：Agent 已完成导航，再完成抓取预备位姿调整；导航与位姿不能并行。
 
 `SORTING`：任务一，拣选，从货架上抓取需要的商品。
 
@@ -278,7 +279,7 @@ POST /manipulation/pick
 ### 3\.7 放置
 
 ```HTTP
-POST /manipulation/place
+POST http://192.168.130.59:8086/place
 ```
 
 |请求字段|类型|必填|约束|
@@ -287,7 +288,7 @@ POST /manipulation/place
 |`product_name`|string|是|完整商品名|
 |`hand`|string|是|`LEFT` 或 `RIGHT`|
 
-前提：Agent 已完成导航和放置预备位姿调整。抓放模块将指定手中的商品放到机器人当前工作位置，因此无需再传放置位置。
+前提：Agent 已完成导航，再完成放置预备位姿调整；导航与位姿不能并行。抓放模块将指定手中的商品放到机器人当前工作位置，因此无需再传放置位置。
 
 `SORTING`：任务一，拣选，向交付台放置商品。
 
@@ -356,7 +357,7 @@ class WorkflowState(TypedDict):
 
 - 同一物理动作的重试复用原 `Idempotency-Key`。
 
-- 导航目标和位姿已知时，Agent 并行调用导航与位姿接口，两个调用都成功后再继续。
+    - 导航目标和位姿已知时，Agent 必须先调用 `POST /navigation/navigate`，收到 `SUCCEEDED` 后再调用 `POST /pose/prepare`。两者不得并行。
 
 - 接口返回非 `2xx`、响应字段无效或本地配置校验失败时，停止当前任务并将 `status` 置为 `FAILED`。
 
@@ -368,15 +369,15 @@ class WorkflowState(TypedDict):
 
 |节点|处理|调用|成功后|
 |---|---|---|---|
-|T1\-N01|创建 State，检查四个模块均为 `READY`|`GET /health`<br>|进入 N02|
-|T1\-N02|到达小票识别位置并进入拍摄位姿|并行导航 `receipt_viewpoint`、位姿 `RECEIPT_VIEW`|进入 N03|
-|T1\-N03|识别小票；校验响应数组恰好包含两个有效的商品标准货位编号|`POST /receipt/parse`<br>|写入 `target_items`，进入 N04|
-|T1\-N04|派生并校验两个商品的导航点和层号，生成作业|本地配置|写入 `jobs`，进入 N05|
-|T1\-N05|按路径排序作业，依次分配 `LEFT`、`RIGHT`|本地处理|进入 N06|
-|T1\-N06|到达当前商品位置并进入对应层抓取预备位姿|并行导航、`SHELF_PICK_READY`|进入 N07|
-|T1\-N07|在当前工作位置抓取指定商品|`POST /manipulation/pick`|写入 `held_items`；有待取商品则回 N06，否则进入 N08|
-|T1\-N08|两件商品均持有后到达交付台<br>|并行导航 `delivery_place`、位姿 `DELIVERY_TABLE_PLACE_READY`|进入 N09|
-|T1\-N09|按 `held_items` 逐件放置商品|`POST /manipulation/place`|清除对应持物；全部放置后进入 N10|
+|T1\-N01|创建 State，检查导航、姿态、视觉、商品库和 8086 均为 `READY`|`GET /navigation/health`、`/pose/health`、`/perception/health`、`/sku/health`、8086 `GET /health`|进入 N02|
+|T1\-N02|先到达小票识别位置，再进入拍摄位姿|先导航 `POST /navigation/navigate`（`receipt_viewpoint`），成功后 `POST /pose/prepare`（`RECEIPT_VIEW`）|进入 N03|
+|T1\-N03|识别小票；校验恰好两个不同的非空商品名|`POST /perception/parse`|写入 `target_items`（商品名），进入 N04|
+|T1\-N04|通过商品名查询并校验唯一标准货位，派生导航点和层号，生成作业|商品库 `GET /sku/search_by_name`（每个商品一次）+ 本地配置|写入 `jobs`，进入 N05|
+|T1\-N05|按 `route_order` 排序作业，依次分配 `LEFT`、`RIGHT`|本地处理|进入 N06|
+|T1\-N06|先到达当前商品货位，再进入对应层抓取预备位姿|先 `POST /navigation/navigate`，成功后 `POST /pose/prepare`（`SHELF_PICK_READY` + `shelf_level`）|进入 N07|
+|T1\-N07|在当前工作位置抓取指定商品|8086 `POST /pick`（`task_type=SORTING`）|写入 `held_items`；有待取商品则回 N06，否则进入 N08|
+|T1\-N08|两件商品均持有后先到达交付台，再进入放置预备位姿|先导航 `delivery_place`，成功后准备 `DELIVERY_TABLE_PLACE_READY`|进入 N09|
+|T1\-N09|按 `held_items` 逐件放置商品|8086 `POST /place`（`task_type=SORTING`）|清除对应持物；全部放置后进入 N10|
 |T1\-N10|到达任务判定区|导航 `task_boundary`|任务成功|
 
 ### 5\.3 任务二：货架补货
@@ -386,13 +387,13 @@ class WorkflowState(TypedDict):
 |节点|处理|调用|成功后|
 |---|---|---|---|
 |T2\-N01|创建 State，检查模块，加载四个巡检点|`GET /health`、本地配置|进入 N02|
-|T2\-N02|到达当前货架面的巡检点并进入观察位姿|并行导航巡检点、位姿 `SHELF_VIEW`|进入 N03|
-|T2\-N03|识别当前货架面的全部缺货项|`POST /areas/inspect`，类型 `SHORTAGE`|进入 N04|
+|T2\-N02|先到达当前货架面的巡检点，再进入观察位姿|先导航 `POST /navigation/navigate`，成功后依次 `POST /pose/prepare`（`SHELF_VIEW_UPPER`、`SHELF_VIEW_LOWER`）|进入 N03|
+|T2\-N03|识别当前货架面的全部缺货项|`POST ``/perception/inspect`，类型 `SHORTAGE`|进入 N04|
 |T2\-N04|校验、去重并累计结果|本地处理|得到两个缺货货位则进入 N05；不足两个则巡检下一面；巡检结束仍不足两个再来一遍|
 |T2\-N05|为两个缺货货位生成补货作业，分配 `LEFT`、`RIGHT`|本地配置|进入 N06|
-|T2\-N06|到达补货台并进入抓取预备位姿|并行导航 `replenishment_pickup`、位姿 `REPLENISHMENT_TABLE_PICK_READY`|进入 N07|
-|T2\-N07|按作业逐件抓取补货商品|`POST /manipulation/pick`|写入 `held_items`；两件均持有后进入 N08|
-|T2\-N08|到达当前目标货位、进入放置预备位姿并放置|并行导航、`SHELF_PLACE_READY`，随后 `POST /manipulation/place`|完成当前作业；有剩余作业则重复 N08，否则进入 N09|
+|T2\-N06|先到达补货台，再进入抓取预备位姿|先导航 `replenishment_pickup`，成功后 `POST /pose/prepare`（`REPLENISHMENT_TABLE_PICK_READY`）|进入 N07|
+|T2\-N07|按作业逐件抓取补货商品|8086 `POST /pick`（`task_type=SHORTAGE`）|写入 `held_items`；两件均持有后进入 N08|
+|T2\-N08|先到达当前目标货位，再进入放置预备位姿并放置|先导航目标货位，成功后 `POST /pose/prepare`（`SHELF_PLACE_READY` + 层号），随后 8086 `POST /place`（`task_type=SHORTAGE`）|完成当前作业；有剩余作业则重复 N08，否则进入 N09|
 |T2\-N09|到达任务判定区|导航 `task_boundary`|任务成功|
 
 ### 5\.4 任务三：乱放归位
@@ -402,13 +403,13 @@ class WorkflowState(TypedDict):
 |节点|处理|调用|成功后|
 |---|---|---|---|
 |T3\-N01|创建 State，检查模块，加载四个巡检点|`GET /health`、本地配置|进入 N02|
-|T3\-N02|到达当前货架面的巡检点并进入观察位姿|并行导航巡检点、位姿 `SHELF_VIEW`|进入 N03|
-|T3\-N03|识别当前货架面的乱放商品|`POST /areas/inspect`，类型 `MISPLACED`|有结果则进入 N04；无结果则巡检下一面；全部巡检完成仍无结果则再来一遍|
+|T3\-N02|先到达当前货架面的巡检点，再进入观察位姿|先导航 `POST /navigation/navigate`，成功后依次 `POST /pose/prepare`（`SHELF_VIEW_UPPER`、`SHELF_VIEW_LOWER`）|进入 N03|
+|T3\-N03|识别当前货架面的乱放商品|`POST /``perception``/inspect`，类型 `MISPLACED`|有结果则进入 N04；无结果则巡检下一面；全部巡检完成仍无结果则再来一遍|
 |T3\-N04|校验 `findings` 恰好包含两个不同的有效编号，将 `findings[0]` 记为 P1、`findings[1]` 记为 P2|本地处理|派生 P1、P2 的导航点和层号，进入 N05|
-|T3\-N05|到达 P1，左手抓取应归位至 P2 的商品|并行导航、`SHELF_PICK_READY`，随后 `POST /manipulation/pick`|写入 `held_items.LEFT`，进入 N06|
-|T3\-N06|到达 P2，右手抓取应归位至 P1 的商品|并行导航、`SHELF_PICK_READY`，随后 `POST /manipulation/pick`|写入 `held_items.RIGHT`，进入 N07|
-|T3\-N07|在 P2 用左手放置第一件商品|`SHELF_PLACE_READY`，随后 `POST /manipulation/place`|清除 `held_items.LEFT`，进入 N08|
-|T3\-N08|返回 P1，用右手放置第二件商品|并行导航、`SHELF_PLACE_READY`，随后 `POST /manipulation/place`|清除 `held_items.RIGHT`，进入 N09|
+|T3\-N05|到达 P1 后进入抓取预备位姿，左手抓取应归位至 P2 的商品|先导航 P1，成功后 `POST /pose/prepare`（`SHELF_PICK_READY` + P1 层），随后 8086 `POST /pick`（`task_type=MISPLACED`）|写入 `held_items.LEFT`，进入 N06|
+|T3\-N06|到达 P2 后进入抓取预备位姿，右手抓取应归位至 P1 的商品|先导航 P2，成功后 `POST /pose/prepare`（`SHELF_PICK_READY` + P2 层），随后 8086 `POST /pick`（`task_type=MISPLACED`）|写入 `held_items.RIGHT`，进入 N07|
+|T3\-N07|在 P2 进入放置预备位姿，用左手放置第一件商品|已在 P2，调用 `POST /pose/prepare`（`SHELF_PLACE_READY` + P2 层），随后 8086 `POST /place`（`task_type=MISPLACED`）|清除 `held_items.LEFT`，进入 N08|
+|T3\-N08|返回 P1，进入放置预备位姿，用右手放置第二件商品|先导航 P1，成功后 `POST /pose/prepare`（`SHELF_PLACE_READY` + P1 层），随后 8086 `POST /place`（`task_type=MISPLACED`）|清除 `held_items.RIGHT`，进入 N09|
 |T3\-N09|到达任务判定区|导航 `task_boundary`|任务成功|
 
 ## 6\. 底盘固定点位表
@@ -430,7 +431,7 @@ class WorkflowState(TypedDict):
 
 # 内部流程
 
-## `/manipulation/pick` —— sub\-agent
+## 8086 `/pick` —— 取放子流程
 
 调用前提：Agent 已到达抓取预备位姿，已确定左右手。
 
@@ -448,14 +449,14 @@ POST /perception/pick/locate
 |`product_name`|string|是|完整商品名|
 |`hand`|string|是|left/right，影响`SORTING`策略|
 
-成功响应为\{“`product_name`”: "", "bbox": \[x1, y1, x2, y2\]\}。
+成功响应为\{"`product_name`": "", "bbox": \[x1, y1, x2, y2\], "mask": "base64 code", "image\_path": "image path"\}。
 
 \(x1, y1\), \(x2, y2\)分别为左上角和右下角坐标, 标准化到\[1, 1000\]
 
 响应示例：
 
 ```JSON
-{“product_name”: "可口可乐", "bbox": [100, 200, 200, 400]}
+{“product_name”: "可口可乐", "bbox": [100, 200, 200, 400], "mask": "base64 code", "image_path": "image path"}
 ```
 
 ### 位姿估计模块\(Stephen\)
@@ -466,7 +467,7 @@ POST /manipulation/pick_pose
 
 |请求字段|类型|必填|取值|
 |---|---|---|---|
-|`rgb`|string<br>|是|RGB 图像文件|
+|`rgb`<br>|string<br>|是|RGB 图像文件|
 |`depth`|string|是|与 RGB 对齐的深度图文件|
 |`camera`|string|是|相机参数 JSON 文件|
 |`mask`|string|是<br>|放置目标区域的掩码文件，尺寸应与 RGB 一致|
@@ -533,15 +534,11 @@ POST /perception/pick/check
 |`product_name`|string|是|完整商品名|
 |`hand`|string|是|left/right|
 
-响应为Success/Fail
+响应为\{"pick\_status":"Success"\}或者\{"pick\_status":"Fail"\}
 
 
 
-
-
-
-
-## `/manipulation/place` —— sub\-agent
+## 8086 `/place` —— 取放子流程
 
 调用前提：Agent 已到达放置预备位姿，已确定左右手。
 
@@ -652,9 +649,9 @@ POST /perception/place/check
 
 
 
-## `/area/inspect` —— sub\-agent
+## `/``perception``/inspect` —— sub\-agent
 
-流程：底盘导航\(Nora\) \+ 头部视频流 \+ 视觉巡查\(Alexander\) 完全并行，看头部摄像头视野可能需要控制\(Mui\)升降。
+流程：先由底盘导航到巡检点；导航成功后由位姿模块依次准备观察姿态，再调用视觉巡查。导航、位姿和视觉请求不得并行。
 
 建议预先定好几个导航的检查点位，需要\>=x帧检出才确定，贪心算法，确定即肯定
 
@@ -687,31 +684,42 @@ POST /perception/inspect
 
 服务器：192\.168\.130\.59
 
-|端口|接口|请求方法|请求体样例|返回|负责人|
-|---|---|---|---|---|---|
-|25540<br>\(商品库\)<br>|/sku/health|GET|\{\}|\{"status": "READY"\}|Alex|
-||/sku/locations|GET|\{"name": "NFC桔汁"\}|\{"name": "NFC桔汁", "locations": \["H1\_F\_L1\_C01"\]\}|Alex|
-||/sku/images|GET<br>|\{"name": "NFC桔汁"\}|\{"name": "NFC桔汁", "images": \[\]\}|Alex|
-||/sku/name<br>|GET<br>|\{"location": "h1\_f\_l1\_c01"\}|\{"location": "H1\_F\_L1\_C01", "name": "NFC桔汁"\}|Alex|
-|8081<br>\(导航\)|/navigation/health|GET|无|\{"status": "READY"\}|Nora|
-||/navigation/navigate||`{"target_id": "H1_F_L1_C01"}`|\{"status": "SUCCEEDED"\}<br>|Nora|
-|8082<br>\(躯干控制\)|/pose/health|GET|||Mui|
-||/pose/prepare||||Mui|
-|8083<br>\(视觉理解\)|/perception/health|GET|||Alex|
-||/perception/pick/locate||||Alex|
-||/perception/pick/check||||Alex|
-||/perception/place/locate||||Alex|
-||/perception/place/check||||Alex|
-||/perception/inspect||||Alex|
-|8084<br>\(抓放\)<br>|/manipulation/health|GET||\{"status":"READY"\}|Stephen/Mui|
-||/manipulation/pick\_pose<br>|POST<br>|\{"rgb:string","depth":"string","camera":"string","mask":"string"\}<br>|\{"pose": \[x, y, z, rx, ry, rz\],<br>"corners\_mm": \[\[x, y, z\], "\.\.\.共8个角点"\],<br>"frame": "camera",<br>"pose\_unit": "mm\_rad",<br>"rotation\_order": "zyx" \}|Stephen|
-||/manipulation/grasp||||Mui|
-||/manipulation/place\_pose<br>|POST<br>|\{"rgb:string","depth":"string","camera":"string","mask":"string"\}<br>|\{"pose": \[x, y, z, rx, ry, rz\],<br>"corners\_mm": \[\[x, y, z\], "\.\.\.共8个角点"\],<br>"frame": "camera",<br>"pose\_unit": "mm\_rad",<br>"rotation\_order": "zyx" \}|Stephen<br>|
-||/manipulation/release||||Mui|
-|8085<br>\(视频流获取\)|/camera/health<br><br>|GET|无|\{"status":"READY"\}|Kai|
-||/camera/list|GET<br>|无<br>|各相机 color/depth 在线状态与分辨率||
-||/camera/snapshot|GET|camera=head\&type=color|image/jpeg||
-||/camera/stream|GET|camera=right\_wrist\&type=depth|||
+> 以现场联调接口为准：商品库查询使用 `/sku/search_by_name`、`/sku/search_by_location`；主 Agent 的抓放使用 8086 的 `/pick`、`/place`。8083 的 `/perception/inspect`、`/perception/place/locate` 和 8084 的 `/manipulation/release` 当前不可用，因此任务二、任务三只能在巡检接口补齐后执行，放置动作须先完成 8086 `/place` 联调。
 
+|端口|接口|请求方法|请求体样例|返回|负责人|是否ready|
+|---|---|---|---|---|---|---|
+|25540<br>\(商品库\)<br>|/sku/health|GET|\{\}|\{"status": "READY"\}|Alex|ready|
+||/sku/search\_by\_SKU<br>|GET|\{"sku": "SKU\_088"\}<br>|\{<br>"sku\_id": "SKU\_088",<br>"name": "外星人电解质水青柠口味0糖",<br>"images": \[<br>"images/SKU\_088\.jpg"<br>\],<br>"locations": \[<br>"H2\_F\_L4\_C05"<br>\]<br>\}|Alex<br>|ready|
+||/sku/search\_by\_name|GET<br>|\{"name": "外星人电解质水青柠口味0糖"\}|\{<br>"sku\_id": "SKU\_088",<br>"name": "外星人电解质水青柠口味0糖",<br>"images": \[<br>"images/SKU\_088\.jpg"<br>\],<br>"locations": \[<br>"H2\_F\_L4\_C05"<br>\]<br>\}|Alex|ready|
+||/sku/search\_by\_location<br>|GET<br>|\{"location": "H2\_F\_L4\_C05"\}|\{<br>"sku\_id": "SKU\_088",<br>"name": "外星人电解质水青柠口味0糖",<br>"images": \[<br>"images/SKU\_088\.jpg"<br>\],<br>"locations": \[<br>"H2\_F\_L4\_C05"<br>\]<br>\}|Alex|ready|
+||/sku/get\_image|GET|\{"name": "外星人电解质水青柠口味0糖"\}|\["images/SKU\_088\.jpg"\]<br>|Alex|ready|
+||/sku/get\_all\_names|GET|\{\}|\[\]|Alex|ready|
+|8081<br>\(导航\)|/navigation/health|GET|无|\{"status": "READY"\}|Nora|ready|
+||/navigation/navigate<br>||`{"target_id": "H1_F_L1_C01"}`|\{"status": "SUCCEEDED"\}<br>|Nora|需要Skylar确认<br>补货缺失、交付台缺失|
+|8082<br>\(躯干控制\)|/pose/health|GET|无|\{<br>"status": "READY"<br>\}|Mui|ready|
+||/pose/prepare||\{<br>"pose\_type": "SHELF\_VIEW\_UPPER"<br>\}|\{<br>"status": "SUCCEEDED",<br>"executed": true,<br>"pose\_type": "SHELF\_VIEW\_UPPER",<br>"shelf\_level": null,<br>"memory\_point": "扫上"<br>\}|Mui|通，需要测试小票点位，功能和skylar对齐<br><br>补货、交付台缺失|
+|8083<br>\(视觉理解\)<br>|/perception/health|GET|||Alex|ready|
+||/perception/pick/locate<br>|GET|\{“product\_name”: "可口可乐罐装", "task\_type": "SORTING", "hand": "left"\}|\{“product\_name”: "可口可乐", "bbox": \[100, 200, 200, 400\], "mask": "base64 code", "image\_path": "image path"\}|Alex<br>|SORTING \+ 放错 货架上识别<br>补货缺失<br>|
+||/perception/pick/check||\{“product\_name”: "可口可乐罐装", "task\_type": "SORTING", "hand": "left"\}|\{"pick\_status":"Success"\}<br>|Alex|有，待测试<br>|
+||/perception/place/locate||||Alex|缺失|
+||/perception/place/check||\{“product\_name”: "可口可乐罐装", "task\_type": "SORTING", "hand": "left"\}|\{"place\_status":"Success"\}<br>|Alex|有，待测试<br>|
+||/perception/parse|POST|\{\}|\{"product\_names": \["可口可乐罐装", "百事可乐瓶装"\]\}|Alex|有，待测试|
+||/perception/inspect||||Alex|缺失|
+|8084<br>\(抓放\)<br>|/manipulation/health|GET||\{"status":"READY"\}|Stephen/Mui|有|
+||/manipulation/pick\_pose<br>|POST<br>|\{"rgb:string","depth":"string","camera":"string","mask":"string"\}<br>|\{"pose": \[x, y, z, rx, ry, rz\],<br>"corners\_mm": \[\[x, y, z\], "\.\.\.共8个角点"\],<br>"frame": "camera",<br>"pose\_unit": "mm\_rad",<br>"rotation\_order": "zyx" \}|Stephen|有<br>|
+||/manipulation/grasp||\{<br>"task\_type": "SORTING",<br>"pose": \[<br>139\.006868,<br>13\.573344,<br>497\.991979,<br>\-2\.442349,<br>\-1\.529998,<br>\-0\.794928<br>\],<br>"hand": "LEFT",<br>"product\_type": "bottle",<br>"frame": "camera",<br>"pose\_unit": "mm\_rad",<br>"rotation\_order": "zyx"<br>\}|成功：\{<br>"status": "SUCCEEDED",<br>"executed": true,<br>"operation": "GRASP\_POSITION",<br>"reachable": true,<br>"tool\_length\_mm": 200\.0,<br>"tool\_axis": "\+Z",<br>"input\_orientation\_ignored": true,<br>"message": "夹具末端已移动到目标物体中心；未执行夹爪闭合"<br>\}<br>失败：\{<br>"error\_code": "UNREACHABLE",<br>"message": "目标法兰Pose逆向运动学失败",<br>"status": "UNREACHABLE",<br>"reachable": false,<br>"executed\_pose\_arm\_base\_mm\_deg": \[<br>420\.0,<br>180\.0,<br>120\.0,<br>\-90\.0,<br>0\.0,<br>\-90\.0<br>\]<br>\}|Mui|有，能通，需要抓取策略|
+||/manipulation/place\_pose<br>|POST<br>|\{"rgb:string","depth":"string","camera":"string","mask":"string"\}<br>|\{"pose": \[x, y, z, rx, ry, rz\],<br>"corners\_mm": \[\[x, y, z\], "\.\.\.共8个角点"\],<br>"frame": "camera",<br>"pose\_unit": "mm\_rad",<br>"rotation\_order": "zyx" \}|Stephen<br>|有，但是需要测试<br>|
+||/manipulation/release||\{<br>"task\_type": "SHORTAGE",<br>"pose": \[<br>139\.006868,<br>13\.573344,<br>497\.991979,<br>\-2\.442349,<br>\-1\.529998,<br>\-0\.794928<br>\],<br>"hand": "LEFT",<br>"product\_type": "bottle",<br>"frame": "camera",<br>"pose\_unit": "mm\_rad",<br>"rotation\_order": "zyx"<br>\}|\{<br>"error\_code": "NOT\_IMPLEMENTED",<br>"message": "放置动作执行尚待补充",<br>"status": "TODO",<br>"operation": "RELEASE",<br>"todo": \[<br>"RELEASE\_EXECUTION"<br>\]<br>\}|Mui|缺失|
+|8085<br>\(视频流获取\)|/camera/health<br><br>|GET|无|\{"status":"READY"\}<br>|Kai<br>|有<br>|
+||/camera/list|GET<br>|无<br>|各相机 color/depth 在线状态与分辨率||有<br>|
+||/camera/snapshot<br>|GET|camera=head\&type=color|image/jpeg<br>||有<br>|
+||/camera/stream|GET|camera=right\_wrist\&type=depth|视频流||有|
+|8086<br>（Agent流程）|/pick|POST<br>|POST /pick<br>Content\-Type: application/json<br>Idempotency\-Key: task\-20260807\-0001:pick<br><br>\{<br>"task\_type": "SORTING",<br>"product\_name": "可口可乐",<br>"hand": "LEFT"<br>\}|成功响应（HTTP `200`）：<br><br>\{"status":"SUCCEEDED"\}<br>|skylar<br>|已调通|
+||/place|POST<br>|POST /place<br>Content\-Type: application/json<br>Idempotency\-Key: task\-20260807\-0001:place<br>\{<br>  "task\_type": "SHORTAGE",<br>  "product\_name": "可口可乐",<br>  "hand": "left"<br>\}<br>|成功响应（HTTP `200`）：<br><br>\{"status":"SUCCEEDED"\}<br>|skylar<br>|未调通|
+||||||||
 
+# 容错机制
 
+1、导航失败
+
+2、

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import threading
 import time
 from collections import Counter, defaultdict, deque
@@ -18,12 +19,16 @@ PORTS = {
     "perception": 8102,
     "pose": 8103,
     "manipulation": 8104,
+    "pick_place": 8106,
+    "sku": 8107,
 }
 SERVICE_NAMES = {
     "navigation": "导航模块",
     "perception": "场景理解模块",
     "pose": "位姿控制模块",
     "manipulation": "抓放模块",
+    "pick_place": "取放编排模块",
+    "sku": "商品库",
 }
 ACTION_NAMES = {
     "receipt": "小票识别",
@@ -37,12 +42,13 @@ LOG_LOCK = threading.Lock()
 PHYSICAL_ENDPOINTS = {
     "/navigation/navigate": "navigation",
     "/pose/prepare": "pose",
-    "/manipulation/pick": "pick",
-    "/manipulation/place": "place",
+    "/pick": "pick",
+    "/place": "place",
 }
 SCENARIOS = (
     "success",
     "slow",
+    "random-delay",
     "health-error",
     "navigation-failure",
     "late-findings",
@@ -66,6 +72,8 @@ def scenario_config(name: str) -> dict[str, Any]:
             "perception": "READY",
             "pose": "READY",
             "manipulation": "READY",
+            "pick_place": "READY",
+            "sku": "READY",
         },
         "receipt": ["H1_F_L1_C01", "H1_F_L1_C02"],
         "inspections": {
@@ -81,6 +89,7 @@ def scenario_config(name: str) -> dict[str, Any]:
             "place": [0.05],
         },
         "failures": {},
+        "random_delay_range": None,
     }
 
     if name == "slow":
@@ -94,6 +103,8 @@ def scenario_config(name: str) -> dict[str, Any]:
                 "place": [2.0],
             }
         )
+    elif name == "random-delay":
+        config["random_delay_range"] = (5.0, 10.0)
     elif name == "health-error":
         config["health"]["pose"] = "ERROR"
     elif name == "navigation-failure":
@@ -104,9 +115,9 @@ def scenario_config(name: str) -> dict[str, Any]:
             ["H1_F_L2_C01", "H2_B_L3_C02"],
         ]
     elif name == "timeout-recovery":
-        config["delays"]["navigation"] = [4.0, 0.05]
+        config["delays"]["navigation"] = [13.0, 0.05]
     elif name == "timeout-unknown":
-        config["delays"]["navigation"] = [7.0, 0.05]
+        config["delays"]["navigation"] = [25.0, 0.05]
     elif name != "success":
         raise ValueError(f"unknown scenario: {name}")
     return config
@@ -118,6 +129,12 @@ class MockState:
         self.scenario = scenario
         self.health: dict[str, str] = config["health"]
         self.receipt: list[str] = config["receipt"]
+        self.sku_names = {
+            "H1_F_L1_C01": "可口可乐",
+            "H1_F_L1_C02": "矿泉水",
+            "H1_F_L2_C01": "薯片",
+            "H2_B_L3_C02": "牛奶",
+        }
         self.inspections = {
             task_type: deque(results) for task_type, results in config["inspections"].items()
         }
@@ -127,6 +144,7 @@ class MockState:
         self.failures = {
             action: deque(values) for action, values in config["failures"].items()
         }
+        self.random_delay_range: tuple[float, float] | None = config["random_delay_range"]
         self.lock = threading.Lock()
         self.actions: dict[str, ActionRecord] = {}
         self.request_counts: Counter[str] = Counter()
@@ -147,6 +165,8 @@ class MockState:
 
     def delay(self, action: str) -> float:
         with self.lock:
+            if self.random_delay_range is not None:
+                return random.uniform(*self.random_delay_range)
             values = self.delays[action]
             if len(values) == 1:
                 return values[0]
@@ -216,11 +236,33 @@ class MockRequestHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         self.server.state.record_request(self.server.service, "GET", path)
         self._log_request("GET", path, None)
-        if path == f"/{self.server.service}/health":
+        health_path = "/health" if self.server.service == "pick_place" else f"/{self.server.service}/health"
+        if path == health_path:
             self._send(200, {"status": self.server.state.health[self.server.service]})
             return
         if path == "/mock/state":
             self._send(200, self.server.state.snapshot())
+            return
+        if self.server.service == "sku" and path in {"/sku/name", "/sku/locations"}:
+            try:
+                payload = self._read_json()
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._send(400, {"error_code": "INVALID_JSON"})
+                return
+            if path == "/sku/images":
+                self._send(200, {"name": payload.get("name", ""), "images": []})
+                return
+            if path == "/sku/name":
+                location = str(payload.get("location", "")).upper()
+                name = self.server.state.sku_names.get(location)
+                if name is None:
+                    self._send(404, {"error_code": "UNKNOWN_PRODUCT_SLOT"})
+                else:
+                    self._send(200, {"location": location, "name": name})
+                return
+            name = payload.get("name")
+            locations = [slot for slot, value in self.server.state.sku_names.items() if value == name]
+            self._send(200, {"name": name, "locations": locations})
             return
         self._send(404, {"error_code": "UNKNOWN_ENDPOINT"})
 
@@ -235,13 +277,13 @@ class MockRequestHandler(BaseHTTPRequestHandler):
             return
         self._log_request("POST", path, payload)
 
-        if path == "/receipt/parse" and self.server.service == "perception":
+        if path == "/perception/parse" and self.server.service == "perception":
             delay = self.server.state.delay("receipt")
             self._log("模拟处理", 动作=ACTION_NAMES["receipt"], 延迟秒=delay)
             time.sleep(delay)
             self._send(200, self.server.state.receipt)
             return
-        if path == "/areas/inspect" and self.server.service == "perception":
+        if path == "/perception/inspect" and self.server.service == "perception":
             delay = self.server.state.delay("inspection")
             self._log("模拟处理", 动作=ACTION_NAMES["inspection"], 延迟秒=delay)
             time.sleep(delay)
@@ -268,8 +310,7 @@ class MockRequestHandler(BaseHTTPRequestHandler):
     def _endpoint_belongs_to_service(self, endpoint: str) -> bool:
         return (
             endpoint == self.server.service
-            or endpoint in {"pick", "place"}
-            and self.server.service == "manipulation"
+            or endpoint in {"pick", "place"} and self.server.service == "pick_place"
         )
 
     def _read_json(self) -> dict[str, Any]:
@@ -375,7 +416,7 @@ def serve(host: str, scenario: str) -> None:
 
 
 def cli() -> None:
-    parser = argparse.ArgumentParser(description="Run four standalone capability mock services")
+    parser = argparse.ArgumentParser(description="Run standalone capability mock services")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--scenario", choices=SCENARIOS, default="success")
     args = parser.parse_args()
