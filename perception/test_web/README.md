@@ -1,0 +1,105 @@
+# Locate Debug / Prompt 管理网页
+
+启动：
+
+```powershell
+cd perception/test_web
+python -m pip install -r requirements.txt
+python server.py
+```
+
+浏览器打开：`http://127.0.0.1:8082`。
+
+可用页面：
+
+- `/`：Locate Debug 与 Prompt 管理；
+- `/qwen-debug`：粘贴单张图片测试 Qwen3 / SAM3；
+- `/qwen-review`：浏览 inspection 的 shortage / misplaced pair，按 bbox 独立测试 Qwen；
+- `/qwen-infer`：旧地址兼容入口，会打开同一个 Qwen Review 页面。
+
+## Inspection Qwen Review
+
+`/qwen-review` 读取 `test_data/inspect_*_paired/qwen_prompt_samples`，页面上方显示
+解析结果、原始输出及可编辑 Prompt，下方按 `[IMAGE N]` 顺序展示 bbox 扩展图和该
+region 实际发送的候选 SKU 标准图。页面同时展示 baseline、原始 current、算法对齐后的
+current，以及货架行/横条/region 归属标注图；这些整图只用于核对，不会发送给 Qwen。
+
+点击“运行当前区域”后，结果卡会同时显示本页审核端到端、后端至解析完成和
+Qwen 请求三个耗时。其中本页审核端到端从点击运行计时到结果返回，包含
+本地候选图组装、网络、Qwen、结果解析和保存。该页面复用预生成 bbox 和候选图，
+因此此耗时不包含前置差分、货架行检测和实时 SKU 查询，页面上会明确标注这一口径。
+
+若要测量“缺货检测 → 商品身份”的真正完整链路，点击“运行完整巡检链路”。
+test_web 会从当前 pair 的 baseline/current 重新开始，直接调用
+`inspect/main.py` 的 Python 入口，实际执行差分配准、bbox、货架行映射、SKU 候选和 Qwen，
+并显示完整链路端到端、后端至结果就绪、inspect 主链路及返回异常数。
+该入口使用运行时公共 Prompt，与当前 region 的可编辑 Prompt 测试互不影响。
+
+页面产物与 `/perception/inspect` 使用同一条 Python 调用链：comparison 输出 bbox，
+`row_detection.detect_rows()` 完成可靠行匹配；SHORTAGE 从缺货前 `_1` reference 裁图，
+MISPLACED 第一阶段使用 `aligned_current`，然后按阶段执行候选过滤。
+代码或样例变化后重新生成：
+
+```powershell
+cd perception
+python inspect/comparison_based/qwen_review/generate_sample_artifacts.py `
+  --sku-base-url http://127.0.0.1:25540
+```
+
+生成器会调用 `/sku/get_candidate_SKU` 取得按行分组的候选，并通过
+`/sku/get_image` 下载标准图；因此运行前需先启动 SKU 服务。默认地址就是
+`http://127.0.0.1:25540`。下视角若在画面中检测到 4 行，会把最下面 3 行
+映射到 SKU 第 1/2/3 行，SHORTAGE Prompt 只保留 bbox 对应 SKU 行的候选。
+
+MISPLACED 在网页中提供“审核阶段”切换：
+
+- “放错商品”显示当前异常局部图和全部可见行候选，不使用目标行限制；
+- “应放商品”显示红框标注的 current/reference 整行上下对比图，只列出按标准货位
+  从左到右排列的目标 SKU 行候选。
+
+每个 bbox、每个审核阶段独立请求 Qwen。点击“保存此样例 Prompt”会写入该阶段目录的
+`prompt_override.txt`，不修改公共 Prompt；最近一次推理保存在同一阶段目录的
+`qwen_infer_result.json`，两个阶段互不覆盖。
+
+若重新生成后某个旧 override 的 `[IMAGE N]` 数量、候选商品名称或
+`CANDIDATE N` 顺序已不符合当前阶段的实际候选输入，文件会保留，但页面会自动使用
+最新生成 Prompt 并给出提示，避免两个阶段之间发生图文或商品名称错配。
+
+## 数据来源与推理
+
+Locate Debug 首页不读取 `perception/test_data` 下的本地图片，也不在 test_web 内分别调用 Qwen3 和 SAM3。
+
+选择 SKU，设置 `task_type` 和 `hand` 后，点击“运行 Locate Debug 完整推理”。test_web 后端会代理调用：
+
+```text
+POST http://192.168.130.59:8083/perception/pick/locate/debug
+```
+
+请求仅包含：
+
+```json
+{
+  "task_type": "SORTING",
+  "product_name": "可口可乐",
+  "hand": "left"
+}
+```
+
+Locate 服务自行调用相机快照接口。Debug 响应中的 `image_base64` 作为页面原图：左侧绘制共识后的 Qwen bbox，右侧叠加最终 SAM3 mask、bbox 和 score。
+
+可通过 `LOCATE_DEBUG_URL` 环境变量覆盖 Debug 接口地址。
+
+## Prompt 管理
+
+网页和 Locate API 会根据 `task_type` 读写不同 Prompt 文件：
+
+- `SORTING`：`qwen_sam_prompt_mapping.json`（现有 Prompt）
+- `SHORTAGE`：`qwen_sam_prompt_mapping_shortage.json`
+- `MISPLACED`：`qwen_sam_prompt_mapping_misplaced.json`
+
+切换网页顶部的 `task_type` 时，会自动加载对应文件中的 Prompt。
+
+- 选择已有 SKU 时，网页同时加载 `qwen3_prompt` 和 `sam3_prompt`。
+- “保存当前 Prompt”只更新对应 SKU 的 `qwen3_prompt`，保留已保存的 `sam3_prompt`。
+- “保存 SAM3 Prompt 范式”同时保存当前 SKU 的 Qwen3/SAM3 配对 Prompt。
+- 修改 Prompt 后，需要先保存，再运行 Locate Debug，服务才会读取新内容。
