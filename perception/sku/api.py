@@ -25,7 +25,7 @@ from config import SERVICE_BIND_HOST  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CATALOG_PATH = ROOT / "products.json"
-IMAGES_ROOT = (ROOT / "images").resolve()
+IMAGES_ROOT = (ROOT / "images_new").resolve()
 LOCATION_PATTERN = re.compile(
     r"^H(?P<shelf>[12])_(?P<face>[FB])_L(?P<level>[1-5])_C(?P<column>\d{2})$"
 )
@@ -105,9 +105,24 @@ class SkuCatalog:
                     raise ValueError(
                         f"商品 {name!r} 的图片必须是 images/ 下的相对路径"
                     )
-                resolved_image = catalog_root.joinpath(*image_path.parts)
+                physical_image_path = (
+                    image_path.with_suffix(".jpg")
+                    if image_path.suffix.lower() == ".png"
+                    else image_path
+                )
+                resolved_image = (catalog_root / "images_new").joinpath(
+                    *physical_image_path.parts[1:]
+                )
                 if not resolved_image.is_file() or resolved_image.stat().st_size == 0:
                     raise ValueError(f"商品 {name!r} 的图片不存在: {image}")
+
+            # Keep products.json unchanged while returning the actual JPEG URL.
+            product["images"] = [
+                str(PurePosixPath(image).with_suffix(".jpg"))
+                if PurePosixPath(image).suffix.lower() == ".png"
+                else image
+                for image in images
+            ]
 
             normalized_name = name.strip()
             normalized_sku = sku_id.strip().upper()
@@ -351,6 +366,9 @@ def create_app(catalog_path: Path = DEFAULT_CATALOG_PATH) -> FastAPI:
         resolved_path = (IMAGES_ROOT / Path(*relative.parts)).resolve()
         if os.path.commonpath((str(IMAGES_ROOT), str(resolved_path))) != str(IMAGES_ROOT):
             raise ApiError(400, "INVALID_IMAGE_PATH")
+        if not resolved_path.is_file() and resolved_path.suffix.lower() == ".png":
+            # Preserve compatibility with old image URLs after PNG conversion.
+            resolved_path = resolved_path.with_suffix(".jpg")
         if not resolved_path.is_file():
             raise ApiError(404, "IMAGE_NOT_FOUND")
 

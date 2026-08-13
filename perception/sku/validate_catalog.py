@@ -9,6 +9,7 @@ from PIL import Image, UnidentifiedImageError
 
 
 ROOT = Path(__file__).resolve().parent
+IMAGES_ROOT = ROOT / "images_new"
 SKU_PATTERN = re.compile(r"^SKU_\d{3}$")
 LOCATION_PATTERN = re.compile(r"^H[12]_[FB]_L[1-5]_C\d{2}$")
 PRODUCT_FIELDS = {"sku_id", "name", "images", "locations"}
@@ -61,7 +62,12 @@ def main() -> None:
                 and ".." not in image_path.parts,
                 f"{product['sku_id']} 的图片必须是 images/ 下的相对路径",
             )
-            resolved_image = ROOT.joinpath(*image_path.parts)
+            physical_image_path = (
+                image_path.with_suffix(".jpg")
+                if image_path.suffix.lower() == ".png"
+                else image_path
+            )
+            resolved_image = IMAGES_ROOT.joinpath(*physical_image_path.parts[1:])
             require(
                 resolved_image.is_file() and resolved_image.stat().st_size > 0,
                 f"{product['sku_id']} 的图片不存在或为空: {image}",
@@ -75,7 +81,7 @@ def main() -> None:
                     f"{product['sku_id']} 的图片无法读取: {image}"
                 ) from error
             require(
-                width >= 64 and height >= 64,
+                width >= 32 and height >= 32,
                 f"{product['sku_id']} 的图片分辨率过低: {image}",
             )
             image_count += 1

@@ -42,13 +42,18 @@ from comparison_based.qwen_review.reviewer import (  # noqa: E402
     _payload_as_readable_prompt,
     _resize_image,
     build_candidate_contact_sheets,
-    build_expected_product_row_image,
+    build_expected_product_reference_image,
     build_qwen_payload,
     crop_review_region,
     normalize_reference_image,
 )
 from config import QWEN3_MODEL, SKU_API_URL  # noqa: E402
-from row_detection import RowDetectionResult, ShelfRowMatch, detect_rows  # noqa: E402
+from row_detection import (  # noqa: E402
+    RowDetectionConfig,
+    RowDetectionResult,
+    ShelfRowMatch,
+    detect_rows,
+)
 
 
 TaskType = Literal["SHORTAGE", "MISPLACED"]
@@ -265,7 +270,10 @@ def generate_sample(
     current = load_image(current_path)
     comparison = compare_images(spec, baseline, current)
     bboxes = [list(region.bbox) for region in comparison.shortages]
-    row_detection = detect_rows(baseline)
+    row_detection = detect_rows(
+        baseline,
+        RowDetectionConfig(pose_type=spec.pose_type),
+    )
     expected_row_count = EXPECTED_ROW_COUNTS[spec.pose_type]
     row_matches = row_detection.match_bboxes_to_row_window(
         bboxes,
@@ -359,6 +367,10 @@ def generate_sample(
                         aligned_current,
                         bbox,
                         "MISPLACED",
+                        pose_type=spec.pose_type,
+                        row_bbox=(
+                            row_match.row_bbox if row_match is not None else None
+                        ),
                     ),
                     "candidates": list(candidates),
                     "misplaced_stage": "misplaced_product",
@@ -367,10 +379,10 @@ def generate_sample(
                 {
                     "stage": "expected_product",
                     "label": "2. 应放商品（当前/基准整行 + 目标行候选）",
-                    "image": build_expected_product_row_image(
-                        aligned_current,
+                    "image": build_expected_product_reference_image(
                         resized_baseline,
                         bbox,
+                        pose_type=spec.pose_type,
                         row_bbox=(
                             row_match.row_bbox if row_match is not None else None
                         ),
@@ -523,9 +535,10 @@ def generate_sample(
         },
         "note": (
             "Each prompt stage owns IMAGE 1 and its ordered candidate inputs. "
-            "MISPLACED stage 1 uses the current local crop with all visible "
-            "candidates; stage 2 stacks the current and baseline target rows "
-            "and uses only the "
+            "MISPLACED stage 1 uses the current crop expanded to the full "
+            "target-row height with modest horizontal context and all visible "
+            "candidates; stage 2 uses only the complete baseline "
+            "standard-placement row with the bbox marked and only the "
             "mapped SKU-row candidates. MISPLACED reference images are packed "
             "into numbered contact sheets; SHORTAGE keeps one image per SKU."
         ),

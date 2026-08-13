@@ -33,7 +33,7 @@ if __package__:
         ReviewRowConstraint,
         ReviewedFinding,
     )
-    from .row_detection import RowDetectionResult, detect_rows
+    from .row_detection import RowDetectionConfig, RowDetectionResult, detect_rows
 else:
     INSPECT_ROOT = Path(__file__).resolve().parent
     if str(INSPECT_ROOT) not in sys.path:
@@ -48,7 +48,7 @@ else:
         ReviewRowConstraint,
         ReviewedFinding,
     )
-    from row_detection import RowDetectionResult, detect_rows
+    from row_detection import RowDetectionConfig, RowDetectionResult, detect_rows
 
 
 TaskType = Literal["SHORTAGE", "MISPLACED"]
@@ -394,7 +394,10 @@ def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
         return InspectApiResponse()
 
     try:
-        row_detection = detect_rows(baseline)
+        row_detection = detect_rows(
+            baseline,
+            RowDetectionConfig(pose_type=request.pose_type),
+        )
         row_constraints = build_row_constraints(
             result.findings,
             row_detection,

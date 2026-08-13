@@ -296,11 +296,21 @@ class QwenReviewer:
                         _reviewed_finding_dict(finding),
                     )
             else:
-                misplaced_image = crop_review_region(current, bbox, "MISPLACED")
-                expected_image = build_expected_product_row_image(
+                misplaced_image = crop_review_region(
                     current,
+                    bbox,
+                    "MISPLACED",
+                    pose_type=pose_type,
+                    row_bbox=(
+                        row_constraint.row_bbox
+                        if row_constraint is not None
+                        else None
+                    ),
+                )
+                expected_image = build_expected_product_reference_image(
                     baseline,
                     bbox,
+                    pose_type=pose_type,
                     row_bbox=(
                         row_constraint.row_bbox
                         if row_constraint is not None
@@ -636,18 +646,12 @@ def build_qwen_payload(
         else f"当前画面从上到下第 {expected_row_index} 行"
     )
     if task_type == "SHORTAGE":
-        row_hint = (
-            f"异常区域位于{row_location}；"
-            "缺货商品只能从这一行的候选商品中选择。"
-            if expected_row_index is not None
-            else ""
-        )
         content: list[dict[str, Any]] = [
             {
                 "type": "text",
                 "text": (
-                    "请只审核下面这一张从缺货前 reference 裁出的"
-                    f"货架局部图：{row_hint}"
+                    "请只审核下面这一张货架局部图："
+                    "缺货商品只能从以下候选商品中选择。"
                 ),
             },
             _numpy_image_content(region_image),
@@ -657,7 +661,7 @@ def build_qwen_payload(
         content = [
             {
                 "type": "text",
-                "text": "任务:识别局部图中心当前实际放置的商品。",
+                "text": "任务:识别局部图红色 bbox 中当前实际放置的商品。",
             },
             _numpy_image_content(region_image),
             {
@@ -669,12 +673,15 @@ def build_qwen_payload(
         content = [
             {
                 "type": "text",
-                "text": "货架摆放对比图：",
+                "text": (
+                    "标准放置组合图：上方是带红色 bbox 的完整标准放置行，"
+                    "下方是 bbox 内物体的原图抠图；请识别该商品。"
+                ),
             },
             _numpy_image_content(region_image),
             {
                 "type": "text",
-                "text": _candidate_number_mapping_text(candidates),
+                "text": _expected_candidate_number_mapping_text(candidates),
             },
         ]
     else:
@@ -726,7 +733,8 @@ def build_qwen_payload(
         {
             "type": "text",
             "text": (
-                "请按系统消息规定的简单 JSON 格式返回这一组整行对比输入的结果。"
+                "请按系统消息规定的简单 JSON 格式返回标准放置图中"
+                "红色 bbox 内物体的识别结果。"
                 if misplaced_stage == "expected_product"
                 else "请按系统消息规定的简单 JSON 格式返回这一张局部图的结果。"
             ),
@@ -1046,6 +1054,21 @@ def _candidate_number_mapping_text(
     return "\n".join(lines)
 
 
+def _expected_candidate_number_mapping_text(
+    candidates: Sequence[CandidateProduct],
+) -> str:
+    lines = [
+        "这一层从左到右SKU标准放置编号如下"
+        "（与下方标准图拼图上方数字一致）："
+    ]
+    lines.extend(
+        f"SKU {candidate_number}: {candidate.name}"
+        for candidate_number, candidate in enumerate(candidates, start=1)
+    )
+    lines.append("输出商品名必须从以上名称中逐字选择。")
+    return "\n".join(lines)
+
+
 def build_candidate_contact_sheets(
     candidates: Sequence[CandidateProduct],
 ) -> list[CandidateContactSheet]:
@@ -1224,6 +1247,7 @@ def crop_review_region(
     task_type: TaskType,
     *,
     row_bbox: Sequence[int] | None = None,
+    pose_type: PoseType = "",
 ) -> np.ndarray:
     """Expand a detector bbox into the local image actually sent to Qwen."""
 
@@ -1237,38 +1261,74 @@ def crop_review_region(
             row_bbox=row_bbox,
         )
     if task_type == "MISPLACED":
+        if row_bbox is not None:
+            if len(row_bbox) != 4:
+                raise ValueError("row_bbox must be [x, y, width, height]")
+            x, _, width, _ = _normalize_bbox(bbox)
+            horizontal_padding = round(width * 0.5)
+            left = max(0, x - horizontal_padding)
+            right = min(image.shape[1], x + width + horizontal_padding)
+            top, bottom, effective_row_top, row_bottom = _misplaced_row_vertical_bounds(
+                image.shape[0],
+                bbox,
+                row_bbox,
+                pose_type=pose_type,
+            )
+            if right <= left or bottom <= top:
+                raise ValueError("row_bbox does not define a visible misplaced crop")
+            region_image = image[top:bottom, left:right].copy()
+            box_left = max(0, x - left)
+            box_right = min(region_image.shape[1] - 1, x + width - left)
+            box_top = max(0, effective_row_top - top)
+            box_bottom = min(region_image.shape[0] - 1, row_bottom - top)
+            if box_right > box_left and box_bottom > box_top:
+                # Preserve the detector's exact horizontal span and make its
+                # target column unambiguous within the detected shelf row.
+                cv2.rectangle(
+                    region_image,
+                    (box_left, box_top),
+                    (box_right, box_bottom),
+                    (0, 0, 255),
+                    4,
+                )
+            return region_image
         return _crop(
             image,
             bbox,
-            x_scale=1.0,
+            x_scale=0.5,
             y_scale=0.5,
             max_y_padding=80,
-            row_bbox=row_bbox,
         )
     raise ValueError("task_type must be SHORTAGE or MISPLACED")
 
 
-def crop_expected_row_region(
+def crop_expected_reference_region(
     image: np.ndarray,
     bbox: Sequence[int],
     *,
     row_bbox: Sequence[int] | None,
+    pose_type: PoseType = "",
     row_context: int = 12,
 ) -> np.ndarray:
-    """Return the complete expected shelf row with the anomaly position marked."""
+    """Crop the complete baseline shelf row and mark the target bbox."""
 
     x, y, width, height = _normalize_bbox(bbox)
     image_height, image_width = image.shape[:2]
     if row_bbox is not None:
         if len(row_bbox) != 4:
             raise ValueError("row_bbox must be [x, y, width, height]")
-        row_x, row_y, row_width, row_height = (
-            int(value) for value in row_bbox
+        row_x, _, row_width, _ = (int(value) for value in row_bbox)
+        top, bottom, effective_row_top, row_bottom = (
+            _misplaced_row_vertical_bounds(
+                image_height,
+                bbox,
+                row_bbox,
+                pose_type=pose_type,
+                row_context=row_context,
+            )
         )
         left = max(0, row_x)
-        top = max(0, row_y - row_context)
         right = min(image_width, row_x + row_width)
-        bottom = min(image_height, row_y + row_height + row_context)
     else:
         left = 0
         top = max(0, y - height)
@@ -1279,9 +1339,18 @@ def crop_expected_row_region(
 
     row_image = image[top:bottom, left:right].copy()
     box_left = max(0, x - left)
-    box_top = max(0, y - top)
     box_right = min(row_image.shape[1] - 1, x + width - left)
-    box_bottom = min(row_image.shape[0] - 1, y + height - top)
+    if row_bbox is not None:
+        # Keep the detector's horizontal target column, but extend it from the
+        # upper shelf boundary to the lower shelf boundary of this row.
+        box_top = max(0, effective_row_top - top)
+        box_bottom = min(
+            row_image.shape[0] - 1,
+            row_bottom - top,
+        )
+    else:
+        box_top = max(0, y - top)
+        box_bottom = min(row_image.shape[0] - 1, y + height - top)
     if box_right > box_left and box_bottom > box_top:
         cv2.rectangle(
             row_image,
@@ -1293,73 +1362,79 @@ def crop_expected_row_region(
     return row_image
 
 
-def build_expected_product_row_image(
-    current: np.ndarray,
+def build_expected_product_reference_image(
     baseline: np.ndarray,
     bbox: Sequence[int],
     *,
     row_bbox: Sequence[int] | None,
+    pose_type: PoseType = "",
 ) -> np.ndarray:
-    """Stack current/reference target rows for missing-SKU reasoning."""
+    """Stack the marked standard row above its unmarked bbox cutout."""
 
-    current_row = crop_expected_row_region(
-        current,
-        bbox,
-        row_bbox=row_bbox,
-    )
-    reference_row = crop_expected_row_region(
+    row_image = crop_expected_reference_region(
         baseline,
         bbox,
         row_bbox=row_bbox,
+        pose_type=pose_type,
     )
-    if reference_row.shape[:2] != current_row.shape[:2]:
-        reference_row = cv2.resize(
-            reference_row,
-            (current_row.shape[1], current_row.shape[0]),
-            interpolation=cv2.INTER_LINEAR,
+    x, y, width, height = _normalize_bbox(bbox)
+    if row_bbox is not None:
+        _, _, effective_row_top, row_bottom = _misplaced_row_vertical_bounds(
+            baseline.shape[0],
+            bbox,
+            row_bbox,
+            pose_type=pose_type,
         )
+        crop_top = max(0, effective_row_top)
+        crop_bottom = min(baseline.shape[0], row_bottom)
+    else:
+        crop_top = max(0, y)
+        crop_bottom = min(baseline.shape[0], y + height)
+    crop_left = max(0, x)
+    crop_right = min(baseline.shape[1], x + width)
+    if crop_right <= crop_left or crop_bottom <= crop_top:
+        raise ValueError("bbox does not define a visible expected-product cutout")
 
-    current_panel = _label_row_panel(
-        current_row,
-        "CURRENT ROW - AFTER MISPLACEMENT",
-        background=(45, 45, 45),
+    cutout = baseline[crop_top:crop_bottom, crop_left:crop_right].copy()
+    lower_panel = np.full(
+        (cutout.shape[0] + 24, row_image.shape[1], 3),
+        (245, 245, 245),
+        dtype=np.uint8,
     )
-    reference_panel = _label_row_panel(
-        reference_row,
-        "REFERENCE ROW - CORRECT PLACEMENT",
-        background=(55, 80, 25),
-    )
+    paste_x = max(0, (lower_panel.shape[1] - cutout.shape[1]) // 2)
+    lower_panel[12 : 12 + cutout.shape[0], paste_x : paste_x + cutout.shape[1]] = cutout
     divider = np.full(
-        (8, current_panel.shape[1], 3),
-        (235, 235, 235),
+        (8, row_image.shape[1], 3),
+        (210, 210, 210),
         dtype=np.uint8,
     )
-    return np.vstack((current_panel, divider, reference_panel))
+    return np.vstack((row_image, divider, lower_panel))
 
 
-def _label_row_panel(
-    image: np.ndarray,
-    label: str,
+def _misplaced_row_vertical_bounds(
+    image_height: int,
+    bbox: Sequence[int],
+    row_bbox: Sequence[int],
     *,
-    background: tuple[int, int, int],
-) -> np.ndarray:
-    header_height = 38
-    header = np.full(
-        (header_height, image.shape[1], 3),
-        background,
-        dtype=np.uint8,
-    )
-    cv2.putText(
-        header,
-        label,
-        (14, 27),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.72,
-        (255, 255, 255),
-        2,
-        cv2.LINE_AA,
-    )
-    return np.vstack((header, image))
+    pose_type: PoseType,
+    row_context: int = 12,
+) -> tuple[int, int, int, int]:
+    """Return crop and red-box bounds for one misplaced shelf row.
+
+    The upper camera's first detected row starts at y=0 because there is no
+    rail above it.  Using that synthetic boundary would include all ceiling
+    space.  For only that row, start one detector-box height above the target.
+    """
+
+    _, target_y, _, target_height = _normalize_bbox(bbox)
+    _, row_y, _, row_height = (int(value) for value in row_bbox)
+    effective_row_top = row_y
+    if pose_type == "SHELF_VIEW_UPPER" and row_y <= 0:
+        effective_row_top = max(row_y, target_y - target_height)
+    row_bottom = row_y + row_height
+    top = max(0, effective_row_top - row_context)
+    bottom = min(image_height, row_bottom + row_context)
+    return top, bottom, effective_row_top, row_bottom
 
 
 def _numpy_image_content(image: np.ndarray) -> dict[str, Any]:

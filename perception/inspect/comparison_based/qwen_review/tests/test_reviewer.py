@@ -153,7 +153,11 @@ class QwenReviewerTest(unittest.TestCase):
         self.assertNotIn("location_id=H1_F_L2_C03", serialized)
         user_content = qwen_payload["messages"][1]["content"]
         self.assertEqual(user_content[1]["type"], "image_url")
-        self.assertIn("缺货前 reference", user_content[0]["text"])
+        self.assertEqual(
+            user_content[0]["text"],
+            "请只审核下面这一张货架局部图："
+            "缺货商品只能从以下候选商品中选择。",
+        )
         region_bytes = base64.b64decode(
             user_content[1]["image_url"]["url"].split(",", 1)[1]
         )
@@ -268,7 +272,7 @@ class QwenReviewerTest(unittest.TestCase):
             ["棕色奥利奥", "蓝色奥利奥"],
         )
         serialized = json.dumps(session.calls[-1][2]["json"], ensure_ascii=False)
-        self.assertIn("画面检测第 4 行，对应 SKU 候选第 3 行", serialized)
+        self.assertNotIn("画面检测第 4 行", serialized)
         self.assertIn("棕色奥利奥", serialized)
         self.assertIn("蓝色奥利奥", serialized)
         self.assertNotIn("绿色奥利奥", serialized)
@@ -348,7 +352,7 @@ class QwenReviewerTest(unittest.TestCase):
         )
         self.assertIn("不要按异常所在货架行限制候选", misplaced_serialized)
         self.assertIn(
-            "任务:识别局部图中心当前实际放置的商品。",
+            "任务:识别局部图红色 bbox 中当前实际放置的商品。",
             misplaced_serialized,
         )
         self.assertNotIn("location_id=", misplaced_serialized)
@@ -357,11 +361,18 @@ class QwenReviewerTest(unittest.TestCase):
         self.assertIn("SKU 3: 棕色奥利奥", misplaced_serialized)
         self.assertIn("绿色奥利奥", misplaced_serialized)
         self.assertIn("棕色奥利奥", misplaced_serialized)
-        self.assertIn("货架行上下对比图", expected_serialized)
-        self.assertIn("上半部分是红框内商品被替换后的情况", expected_serialized)
-        self.assertIn("下方摆放正确图中", expected_serialized)
-        self.assertIn("货架摆放对比图：", expected_serialized)
-        self.assertIn("从左到右排列", expected_serialized)
+        self.assertIn("货架标准放置图", expected_serialized)
+        self.assertIn("红色 bbox 中的物体是什么", expected_serialized)
+        self.assertIn("标准放置组合图", expected_serialized)
+        self.assertIn("这一层从左到右SKU标准放置编号如下", expected_serialized)
+        self.assertIn("输出商品名必须从以上名称中逐字选择", expected_serialized)
+        self.assertNotIn("原本应该放置", expected_serialized)
+        self.assertNotIn("对比图", expected_serialized)
+        self.assertIn("上半部分是完整标准放置行", expected_serialized)
+        self.assertIn("下半部分是该红色 bbox 内物体的原图抠图", expected_serialized)
+        self.assertIn("标准放置组合图", expected_serialized)
+        self.assertIn("任务：根据候选SKU，识别红色 bbox 中的物体是什么", expected_serialized)
+        self.assertNotIn("候选 SKU 1..N 按标准货位列号从左到右排列", expected_serialized)
         self.assertNotIn("任务=MISPLACED 第二阶段", expected_serialized)
         self.assertIn("绿色奥利奥", expected_serialized)
         self.assertIn("蓝色奥利奥", expected_serialized)
@@ -375,6 +386,31 @@ class QwenReviewerTest(unittest.TestCase):
             len([item for item in misplaced_content if item["type"] == "image_url"]),
             2,
         )
+        misplaced_url = next(
+            item["image_url"]["url"]
+            for item in misplaced_content
+            if item["type"] == "image_url"
+        )
+        misplaced_image = cv2.imdecode(
+            np.frombuffer(
+                base64.b64decode(misplaced_url.split(",", 1)[1]),
+                dtype=np.uint8,
+            ),
+            cv2.IMREAD_COLOR,
+        )
+        self.assertEqual(misplaced_image.shape[:2], (324, 201))
+        misplaced_red_pixels = (
+            (misplaced_image[:, :, 2] > 180)
+            & (misplaced_image[:, :, 1] < 100)
+            & (misplaced_image[:, :, 0] < 100)
+        )
+        self.assertFalse(misplaced_red_pixels[2, 50])
+        self.assertTrue(misplaced_red_pixels[12, 50])
+        self.assertTrue(misplaced_red_pixels[312, 50])
+        self.assertFalse(misplaced_red_pixels[321, 50])
+        self.assertTrue(misplaced_red_pixels[160, 151])
+        self.assertFalse(misplaced_red_pixels[160, 25])
+        self.assertFalse(misplaced_red_pixels[160, 175])
         expected_content = qwen_calls[1][2]["json"]["messages"][1]["content"]
         self.assertEqual(
             len([item for item in expected_content if item["type"] == "image_url"]),
@@ -389,15 +425,18 @@ class QwenReviewerTest(unittest.TestCase):
             np.frombuffer(base64.b64decode(row_url.split(",", 1)[1]), dtype=np.uint8),
             cv2.IMREAD_COLOR,
         )
-        self.assertEqual(row_image.shape[:2], (828, 1280))
+        self.assertEqual(row_image.shape[:2], (656, 1280))
         red_pixels = (
             (row_image[:, :, 2] > 180)
             & (row_image[:, :, 1] < 100)
             & (row_image[:, :, 0] < 100)
         )
         self.assertGreater(int(red_pixels.sum()), 200)
-        self.assertLess(int(row_image[360, 350, 1]), 80)
-        self.assertGreater(int(row_image[780, 350, 1]), 120)
+        self.assertFalse(red_pixels[2, 350])
+        self.assertTrue(red_pixels[12, 350])
+        self.assertTrue(red_pixels[312, 350])
+        self.assertFalse(red_pixels[500, 640])
+        self.assertGreater(int(row_image[270, 350, 1]), 100)
 
         invalid_session = FakeSession(
             [

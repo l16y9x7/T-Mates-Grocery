@@ -72,7 +72,7 @@ class PromptMappingTest(unittest.TestCase):
         )
         region = pair_one["regions"][0]
         self.assertEqual(pair_one["row_detection"]["row_window_anchor"], "bottom")
-        self.assertEqual(region["row_constraint"]["detected_row_index"], 4)
+        self.assertEqual(region["row_constraint"]["detected_row_index"], 3)
         self.assertEqual(region["row_constraint"]["row_index"], 3)
         self.assertEqual(region["candidate_count_before"], 9)
         self.assertEqual(region["candidate_count_after"], 2)
@@ -81,9 +81,14 @@ class PromptMappingTest(unittest.TestCase):
             ["拖鞋", "心相印厨房纸巾"],
         )
         self.assertEqual(region["prompt_source"], "generated")
-        self.assertIsNotNone(region["prompt_warning"])
-        self.assertIn("当前审核阶段", region["prompt_warning"])
-        self.assertIn("缺货前 reference", region["prompt"])
+        self.assertIsNone(region["prompt_warning"])
+        self.assertIn("你会看到一张货架摆放特写图", region["prompt"])
+        self.assertIn(
+            "请只审核下面这一张货架局部图："
+            "缺货商品只能从以下候选商品中选择。",
+            region["prompt"],
+        )
+        self.assertNotIn("缺货前 reference", region["prompt"])
         self.assertIn("候选商品：拖鞋、心相印厨房纸巾", region["prompt"])
         self.assertNotIn("Dove沐浴泡泡樱花甜香", region["prompt"])
 
@@ -107,15 +112,25 @@ class PromptMappingTest(unittest.TestCase):
         self.assertEqual(stages[0]["candidate_sheets"][0]["prompt_image_number"], 2)
         self.assertTrue(stages[0]["candidate_sheets"][0]["url"])
         self.assertIn("misplaced_product_name", stages[0]["prompt"])
-        self.assertIn("任务:识别局部图中心当前实际放置的商品。", stages[0]["prompt"])
+        self.assertIn(
+            "任务:识别局部图红色 bbox 中当前实际放置的商品。",
+            stages[0]["prompt"],
+        )
         self.assertIn("SKU 1: NFC桔汁", stages[0]["prompt"])
         self.assertNotIn("location_id=", stages[0]["prompt"])
         self.assertNotIn("gt_product_name", stages[0]["prompt"].split("=== USER ===")[0])
         self.assertIn("gt_product_name", stages[1]["prompt"])
         self.assertNotIn("misplaced_product_name", stages[1]["prompt"])
-        self.assertIn("货架行上下对比图", stages[1]["prompt"])
-        self.assertIn("货架摆放对比图：", stages[1]["prompt"])
-        self.assertIn("从左到右排列", stages[1]["prompt"])
+        self.assertIn("货架标准放置图", stages[1]["prompt"])
+        self.assertIn("标准放置组合图", stages[1]["prompt"])
+        self.assertIn("下方是 bbox 内物体的原图抠图", stages[1]["prompt"])
+        self.assertIn("红色 bbox 中的物体是什么", stages[1]["prompt"])
+        self.assertIn("这一层从左到右SKU标准放置编号如下", stages[1]["prompt"])
+        self.assertIn("输出商品名必须从以上名称中逐字选择", stages[1]["prompt"])
+        self.assertNotIn("原本应该放置", stages[1]["prompt"])
+        self.assertNotIn("对比图", stages[1]["prompt"])
+        self.assertIn("任务：根据候选SKU，识别红色 bbox 中的物体是什么", stages[1]["prompt"])
+        self.assertNotIn("候选 SKU 1..N 按标准货位列号从左到右排列", stages[1]["prompt"])
         self.assertNotIn("任务=MISPLACED 第二阶段", stages[1]["prompt"])
 
         for sample in result["samples"]:
@@ -127,8 +142,17 @@ class PromptMappingTest(unittest.TestCase):
                     for stage in sample_region["prompt_stages"]
                     if stage["stage"] == "expected_product"
                 )
-                self.assertIn("货架行上下对比图", expected_stage["prompt"])
-                self.assertIn("货架摆放对比图：", expected_stage["prompt"])
+                self.assertIn("货架标准放置图", expected_stage["prompt"])
+                self.assertIn("标准放置组合图", expected_stage["prompt"])
+                self.assertIn(
+                    "下方是 bbox 内物体的原图抠图",
+                    expected_stage["prompt"],
+                )
+                self.assertIn(
+                    "这一层从左到右SKU标准放置编号如下",
+                    expected_stage["prompt"],
+                )
+                self.assertNotIn("对比图", expected_stage["prompt"])
                 self.assertNotIn(
                     "任务=MISPLACED 第二阶段",
                     expected_stage["prompt"],

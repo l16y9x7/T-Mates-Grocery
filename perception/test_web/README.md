@@ -53,9 +53,11 @@ python inspect/comparison_based/qwen_review/generate_sample_artifacts.py `
 
 MISPLACED 在网页中提供“审核阶段”切换：
 
-- “放错商品”显示当前异常局部图和全部可见行候选，不使用目标行限制；
-- “应放商品”显示红框标注的 current/reference 整行上下对比图，只列出按标准货位
-  从左到右排列的目标 SKU 行候选。
+- “放错商品”显示当前异常物体图：纵向扩展到目标层上下边界，横向在异常
+  bbox 左右各扩半个 bbox 宽度；候选仍使用全部可见行，不按目标行限制。
+- “应放商品”只显示 baseline 标准放置图中红框标注的完整一层；纵向按
+  目标层高度裁剪，横向保留整行。红框保持异常 bbox 的横向范围，并纵向
+  扩展到该层上下边界；候选只包含目标 SKU 行。
 
 每个 bbox、每个审核阶段独立请求 Qwen。点击“保存此样例 Prompt”会写入该阶段目录的
 `prompt_override.txt`，不修改公共 Prompt；最近一次推理保存在同一阶段目录的

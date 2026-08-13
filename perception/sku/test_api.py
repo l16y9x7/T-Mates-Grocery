@@ -49,6 +49,16 @@ class SkuApiTest(unittest.TestCase):
         self.assertEqual(response.headers["content-type"], "image/jpeg")
         self.assertGreater(len(response.content), 0)
 
+    def test_old_png_catalog_path_uses_new_jpg_image(self) -> None:
+        product = self.client.get("/sku/search_by_SKU", params={"sku": "SKU_057"})
+        self.assertEqual(product.status_code, 200)
+        self.assertEqual(product.json()["images"], ["images/SKU_057.jpg"])
+
+        response = self.client.get("/images/SKU_057.png")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/jpeg")
+        self.assertGreater(len(response.content), 0)
+
     def test_search_by_location(self) -> None:
         response = self.client.get(
             "/sku/search_by_location", params={"location": "h1_f_l1_c01"}

@@ -5,7 +5,7 @@
 ## 文件说明
 
 - `products.json`：每个 SKU 一条记录。
-- `images/`：保存商品参考图片；`images` 字段使用相对此目录的路径。
+- `images_new/`：保存商品 JPG 参考图片；`products.json` 中的 `images/...` 保持为 API 资源路径。
 - `build_catalog.py`：从标准摆放清单重新生成 `products.json`。
 - `extract_images.py`：从标准摆放 DOCX 按商品单元格及裁剪参数提取参考图片。
 - `validate_catalog.py`：检查字段、重复编号和位置冲突。

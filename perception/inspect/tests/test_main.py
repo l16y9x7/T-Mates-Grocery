@@ -84,7 +84,7 @@ class InspectMainTest(unittest.TestCase):
         request = inspect_api.InspectRequest(
             task_type="SHORTAGE",
             location_id=" H1_F ",
-            pose_type="",
+            pose_type="SHELF_VIEW_LOWER",
             baseline_image_base64=encode_image(self.baseline, data_url=True),
             current_image_base64=encode_image(self.current),
             reference_item_area=8000,
@@ -102,10 +102,17 @@ class InspectMainTest(unittest.TestCase):
             candidate_names=("测试商品",),
         )
         reviewer = _FakeReviewer(reviewed)
-        with patch.object(
-            inspect_api,
-            "QwenReviewer",
-            return_value=reviewer,
+        with (
+            patch.object(
+                inspect_api,
+                "QwenReviewer",
+                return_value=reviewer,
+            ),
+            patch.object(
+                inspect_api,
+                "detect_rows",
+                wraps=inspect_api.detect_rows,
+            ) as detect_rows,
         ):
             response = inspect_api.inspect_shelf(request)
 
@@ -128,6 +135,8 @@ class InspectMainTest(unittest.TestCase):
         assert isinstance(baseline_image, np.ndarray)
         self.assertEqual(baseline_image.shape[:2], self.baseline.shape[:2])
         self.assertEqual(reviewer.calls[0]["row_constraints"], [None])
+        row_config = detect_rows.call_args.args[1]
+        self.assertEqual(row_config.pose_type, "SHELF_VIEW_LOWER")
 
     def test_row_detection_assigns_finding_to_matching_visible_row(self) -> None:
         shelf = np.full((720, 1280, 3), 45, dtype=np.uint8)
