@@ -143,6 +143,104 @@ def _find_log_dir(operation_key: str) -> Path | None:
     return sorted(candidates, key=lambda path: path.name)[-1] if candidates else None
 
 
+def _log_file_data(log_dir: Path, relative_path: str) -> str | None:
+    """Return a data URI for a file inside the current operation log."""
+
+    path = (log_dir / relative_path).resolve()
+    try:
+        if log_dir.resolve() not in path.parents or not path.is_file():
+            return None
+        content = path.read_bytes()
+    except OSError:
+        return None
+    mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"
+
+
+def _operation_visual(log_dir: Path | None) -> dict[str, object]:
+    """Collect the images and pose fields written by the pick/place service."""
+
+    result: dict[str, object] = {
+        "available": False,
+        "image_data": None,
+        "mask_data": None,
+        "bbox": None,
+        "bbox_coordinate_space": 1000,
+        "pose": None,
+        "pose_unit": None,
+        "frame": None,
+        "rotation_order": None,
+        "corners_mm": None,
+    }
+    if log_dir is None:
+        return result
+
+    events_path = log_dir / "events.jsonl"
+    try:
+        lines = events_path.read_text(encoding="utf-8").splitlines() if events_path.is_file() else []
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if isinstance(event.get("bbox"), list) and len(event["bbox"]) == 4:
+            result["bbox"] = event["bbox"]
+        if isinstance(event.get("pose"), list) and len(event["pose"]) == 6:
+            result["pose"] = event["pose"]
+
+    response_path = log_dir / "interfaces" / "manipulation_pick_pose" / "response.json"
+    if not response_path.is_file():
+        response_path = log_dir / "interfaces" / "manipulation_place_pose" / "response.json"
+    try:
+        response = json.loads(response_path.read_text(encoding="utf-8")) if response_path.is_file() else {}
+    except (OSError, json.JSONDecodeError):
+        response = {}
+    if isinstance(response, dict) and isinstance(response.get("body"), dict):
+        response = response["body"]
+    if isinstance(response, dict):
+        for key in ("pose_unit", "frame", "rotation_order", "corners_mm"):
+            if response.get(key) is not None:
+                result[key] = response[key]
+        if result["pose"] is None and isinstance(response.get("pose"), list) and len(response["pose"]) == 6:
+            result["pose"] = response["pose"]
+
+    image_data = None
+    for name in ("rgb.jpg", "rgb.jpeg", "rgb.png", "rgb.webp"):
+        image_data = _log_file_data(log_dir, f"camera/{name}")
+        if image_data:
+            break
+    mask_data = None
+    for name in ("mask.png", "mask.jpg", "mask.jpeg", "mask.pgm"):
+        mask_data = _log_file_data(log_dir, f"camera/{name}")
+        if mask_data:
+            break
+
+    # If capture did not finish, expose the RGB returned by the locate service.
+    if image_data is None:
+        locate_response_path = log_dir / "interfaces" / "perception_pick_locate" / "response.json"
+        try:
+            locate_response = json.loads(locate_response_path.read_text(encoding="utf-8"))
+            locate_body = locate_response.get("body", locate_response) if isinstance(locate_response, dict) else {}
+            image_path = locate_body.get("image_path") if isinstance(locate_body, dict) else None
+            if isinstance(image_path, str):
+                image_data = _local_image_data(image_path)
+            locate_mask = locate_body.get("mask") if isinstance(locate_body, dict) else None
+            if isinstance(locate_mask, str) and locate_mask:
+                mask_data = locate_mask if locate_mask.startswith("data:") else f"data:image/png;base64,{locate_mask}"
+            if result["bbox"] is None and isinstance(locate_body, dict) and isinstance(locate_body.get("bbox"), list):
+                result["bbox"] = locate_body["bbox"]
+        except (OSError, json.JSONDecodeError):
+            pass
+    result["image_data"] = image_data
+    result["mask_data"] = mask_data
+    result["available"] = image_data is not None or mask_data is not None or result["bbox"] is not None or result["pose"] is not None
+    return result
+
+
 def _sse(event: str, payload: object) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
 
@@ -396,6 +494,14 @@ async def pick_events(task_id: str) -> StreamingResponse:
     return _events_response(state)
 
 
+@app.get("/api/pick/{task_id}/visual")
+async def pick_visual(task_id: str) -> dict[str, object]:
+    state = TASKS.get(task_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    return _operation_visual(_find_log_dir(state.operation_key))
+
+
 @app.post("/api/task1/start")
 async def start_task1(request: Task1Request) -> dict[str, str]:
     task_id = uuid4().hex
@@ -416,6 +522,14 @@ async def task1_events(task_id: str) -> StreamingResponse:
     if state is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     return _events_response(state)
+
+
+@app.get("/api/task1/{task_id}/visual")
+async def task1_visual(task_id: str) -> dict[str, object]:
+    state = TASKS.get(task_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    return _operation_visual(_find_log_dir(state.operation_key))
 
 
 @app.post("/api/locate")

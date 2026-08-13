@@ -7,7 +7,7 @@ import os
 
 CAMERA_SERVICE_URL = os.getenv(
     "CAMERA_SERVICE_URL",
-    "http://192.168.8.9:8085",
+    "http://192.168.1.226:8085",
 ).rstrip("/")
 
 SKU_API_URL = os.getenv(
