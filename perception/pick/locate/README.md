@@ -26,7 +26,7 @@ python main.py
 
 可使用 `SKU_API_URL`、`QWEN3_URL`、`QWEN3_MODEL`、`SAM3_URL` 环境变量覆盖。
 
-未随请求上传图片时，只从 `http://192.168.130.50:8085/camera/snapshot` 获取当前 RGB，不读取本地测试图片。可通过 `CAMERA_SNAPSHOT_URL` 和 `CAMERA_SNAPSHOT_TIMEOUT_SECONDS` 覆盖地址与超时，通过 `CAMERA_SNAPSHOT_CACHE_DIR` 指定快照缓存目录。
+未随请求上传图片时，只从 `http://192.168.8.9:8085/camera/snapshot` 获取当前 RGB，不读取本地测试图片。可通过 `CAMERA_SNAPSHOT_URL` 和 `CAMERA_SNAPSHOT_TIMEOUT_SECONDS` 覆盖地址与超时，通过 `CAMERA_SNAPSHOT_CACHE_DIR` 指定快照缓存目录。
 
 ## 接口
 
@@ -162,11 +162,11 @@ product_name
 
 `image_name_mapping.json` 和 `2026-08-04` 目录只属于测试脚本；Locate API 本身不依赖这两个路径。测试脚本也是独立的 HTTP 客户端，不导入或调用本地 `main.py`。
 
-默认请求 `192.168.130.59` 上的两个服务：
+默认请求 `127.0.0.1` 上的两个服务：
 
 ```text
-SKU API:    http://192.168.130.59:25540
-Locate API: http://192.168.130.59:8083
+SKU API:    http://127.0.0.1:25540
+Locate API: http://127.0.0.1:8083
 ```
 
 确认远端服务已启动后执行：

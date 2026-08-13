@@ -104,7 +104,7 @@ class LocateLogicTest(unittest.TestCase):
 
         self.assertEqual(product["sku_id"], "SKU_001")
         request_mock.assert_called_once_with(
-            "http://192.168.130.59:25540/sku/search_by_name",
+            "http://127.0.0.1:25540/sku/search_by_name",
             params={"name": "NFC橙汁"},
             timeout=test_inference.SKU_REQUEST_TIMEOUT_SECONDS,
         )
@@ -141,7 +141,7 @@ class LocateLogicTest(unittest.TestCase):
 
             self.assertEqual(
                 post_mock.call_args.args[0],
-                "http://192.168.130.59:8083/perception/pick/locate/debug",
+                "http://127.0.0.1:8083/perception/pick/locate/debug",
             )
             request_payload = post_mock.call_args.kwargs["json"]
             self.assertEqual(request_payload["task_type"], "SORTING")
