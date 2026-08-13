@@ -1,0 +1,64 @@
+{
+  "image_size": [
+    1280,
+    720
+  ],
+  "rails": [
+    {
+      "bbox": [
+        21,
+        366,
+        1245,
+        46
+      ],
+      "y_center": 389,
+      "span_ratio": 0.9727,
+      "red_support_ratio": 0.9727,
+      "line": [
+        21,
+        389,
+        1265,
+        389
+      ]
+    },
+    {
+      "bbox": [
+        39,
+        653,
+        1241,
+        27
+      ],
+      "y_center": 666,
+      "span_ratio": 0.9695,
+      "red_support_ratio": 0.9281,
+      "line": [
+        39,
+        666,
+        1279,
+        666
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "index": 1,
+      "bbox": [
+        0,
+        0,
+        1280,
+        389
+      ],
+      "lower_rail_index": 0
+    },
+    {
+      "index": 2,
+      "bbox": [
+        0,
+        389,
+        1280,
+        277
+      ],
+      "lower_rail_index": 1
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "dataset": "shortage",
+  "task_type": "SHORTAGE",
+  "pair_number": 4,
+  "region_index": 1,
+  "temperature": 0.0,
+  "elapsed_ms": 1106.4,
+  "created_at": "2026-08-10T05:23:25.878576+00:00",
+  "prompt_used": "=== SYSTEM ===\n你会看到一个货架局部区域，以及当前货架范围内可能出现的候选 SKU 名称和标准图。\n\n任务：识别该位置的商品。\n\n要求：\n1. 商品名称只能逐字复制候选列表中的标准名称。\n2. 看不清、同列没有可识别商品或无法可靠判断时返回 UNKNOWN，不要猜测。\n3. 不要根据货架颜色、空白区域或商品数量推断具体商品名。\n\n只输出严格 JSON，不要输出 Markdown、代码块或任何说明：\n{\n  \"shortage_product_name\": \"候选标准名称或UNKNOWN\",\n  \"confidence\": 0.0\n}\n\n=== USER ===\n请只审核下面这一张扩展后的货架局部图：\n[IMAGE 1]\n候选商品：Dove沐浴泡泡樱花甜香、Dove沐浴泡泡白桃果香、Dove沐浴泡泡清甜奶香、威露士、Dove沐浴乳、拖鞋、Dove沐浴泡泡樱花甜香袋装、半亩花田洗发水、心相印厨房纸巾\n所有输出商品名必须从以上名称中逐字选择。\n下面是候选 SKU 标准图：\nCANDIDATE 1: Dove沐浴泡泡樱花甜香;\n[IMAGE 2]\nCANDIDATE 2: Dove沐浴泡泡白桃果香;\n[IMAGE 3]\nCANDIDATE 3: Dove沐浴泡泡清甜奶香;\n[IMAGE 4]\nCANDIDATE 4: 威露士;\n[IMAGE 5]\nCANDIDATE 5: Dove沐浴乳;\n[IMAGE 6]\nCANDIDATE 6: 拖鞋;\n[IMAGE 7]\nCANDIDATE 7: Dove沐浴泡泡樱花甜香袋装;\n[IMAGE 8]\nCANDIDATE 8: 半亩花田洗发水;\n[IMAGE 9]\nCANDIDATE 9: 心相印厨房纸巾;\n[IMAGE 10]\n请按系统消息规定的简单 JSON 格式返回这一张局部图的结果。",
+  "parsed_result": {
+    "shortage_product_name": "Dove沐浴泡泡清甜奶香",
+    "confidence": 0.95
+  },
+  "raw_output": "{\n  \"shortage_product_name\": \"Dove沐浴泡泡清甜奶香\",\n  \"confidence\": 0.95\n}",
+  "parse_error": null
+}

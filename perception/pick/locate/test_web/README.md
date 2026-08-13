@@ -10,14 +10,30 @@ python server.py
 
 浏览器打开：`http://127.0.0.1:8082`。
 
+可用页面：
+
+- `/`：Locate Debug 与 Prompt 管理；
+- `/qwen-debug`：粘贴单张图片测试 Qwen3 / SAM3；
+- `/qwen-infer`：浏览 inspection 的 shortage / misplaced pair，按 bbox 独立测试 Qwen。
+
+## Inspection Qwen 样例推理
+
+`/qwen-infer` 读取 `test_data/inspect_*_paired/qwen_prompt_samples`，页面上方显示
+解析结果、原始输出及可编辑 Prompt，下方按 `[IMAGE N]` 顺序展示 bbox 扩展图和候选
+SKU 标准图。原始 baseline/current 只用于核对定位，不会发送给 Qwen。
+
+每个 bbox 独立请求 Qwen。点击“保存此样例 Prompt”会写入该 region 的
+`prompt_override.txt`，不修改公共 `shortage_prompt.txt` 或 `misplaced_prompt.txt`；
+最近一次推理保存在 `qwen_infer_result.json`，刷新后仍可查看。
+
 ## 数据来源与推理
 
-网页不再读取 `perception/test_data` 下的本地图片，也不在 test_web 内分别调用 Qwen3 和 SAM3。
+Locate Debug 首页不读取 `perception/test_data` 下的本地图片，也不在 test_web 内分别调用 Qwen3 和 SAM3。
 
 选择 SKU，设置 `task_type` 和 `hand` 后，点击“运行 Locate Debug 完整推理”。test_web 后端会代理调用：
 
 ```text
-POST http://192.168.130.59:8083/perception/pick/locate/debug
+POST http://127.0.0.1:8083/perception/pick/locate/debug
 ```
 
 请求仅包含：

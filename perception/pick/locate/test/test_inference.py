@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parent
 DEFAULT_IMAGE_DIRECTORY = ROOT.parents[1] / "test_data" / "2026-08-04"
 DEFAULT_IMAGE_MAPPING_PATH = DEFAULT_IMAGE_DIRECTORY / "image_name_mapping.json"
 DEFAULT_RESULT_DIRECTORY = DEFAULT_IMAGE_DIRECTORY / "locate_results"
-SKU_API_URL = os.getenv("SKU_API_URL", "http://192.168.130.59:25540").rstrip("/")
-LOCATE_API_URL = os.getenv("LOCATE_API_URL", "http://192.168.130.59:8083").rstrip("/")
+SKU_API_URL = os.getenv("SKU_API_URL", "http://127.0.0.1:25540").rstrip("/")
+LOCATE_API_URL = os.getenv("LOCATE_API_URL", "http://127.0.0.1:8083").rstrip("/")
 SKU_REQUEST_TIMEOUT_SECONDS = float(os.getenv("SKU_REQUEST_TIMEOUT_SECONDS", "120"))
 LOCATE_REQUEST_TIMEOUT_SECONDS = float(
     os.getenv("LOCATE_REQUEST_TIMEOUT_SECONDS", "600")

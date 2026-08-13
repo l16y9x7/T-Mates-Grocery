@@ -23,11 +23,27 @@ from pydantic import BaseModel, Field, field_validator
 
 if __package__:
     from .comparison_based import ComparisonConfig, detect_shortage
+    from .comparison_based.qwen_review import (
+        DEFAULT_DEBUG_ROOT,
+        PoseType,
+        QwenReviewError,
+        QwenReviewResult,
+        QwenReviewer,
+        ReviewedFinding,
+    )
 else:
     INSPECT_ROOT = Path(__file__).resolve().parent
     if str(INSPECT_ROOT) not in sys.path:
         sys.path.insert(0, str(INSPECT_ROOT))
     from comparison_based import ComparisonConfig, detect_shortage
+    from comparison_based.qwen_review import (
+        DEFAULT_DEBUG_ROOT,
+        PoseType,
+        QwenReviewError,
+        QwenReviewResult,
+        QwenReviewer,
+        ReviewedFinding,
+    )
 
 
 TaskType = Literal["SHORTAGE", "MISPLACED"]
@@ -47,6 +63,7 @@ class InspectRequest(BaseModel):
 
     task_type: TaskType
     location_id: str = Field(min_length=1)
+    pose_type: PoseType
     baseline_image_base64: str = Field(min_length=1)
     current_image_base64: str = Field(min_length=1)
     reference_item_area: float | None = Field(default=None, gt=0)
@@ -104,6 +121,7 @@ class AlgorithmResult(BaseModel):
 
 class InspectResponse(BaseModel):
     location_id: str
+    pose_type: PoseType
     task_type: TaskType
     has_anomaly: bool
     image_size: list[int]
@@ -115,6 +133,7 @@ class InspectResponse(BaseModel):
 @dataclass(frozen=True)
 class InspectionContext:
     location_id: str
+    pose_type: PoseType
     task_type: TaskType
     baseline: np.ndarray
     current: np.ndarray
@@ -198,6 +217,7 @@ class InspectionPipeline:
         findings = fuse_findings(successful)
         return InspectResponse(
             location_id=context.location_id,
+            pose_type=context.pose_type,
             task_type=context.task_type,
             has_anomaly=bool(findings),
             image_size=[1280, 720],
@@ -213,6 +233,7 @@ def inspect_images(
     current: np.ndarray,
     *,
     location_id: str,
+    pose_type: PoseType,
     reference_item_area: float | None = None,
     pipeline: InspectionPipeline | None = None,
 ) -> InspectResponse:
@@ -223,12 +244,15 @@ def inspect_images(
     location_id = location_id.strip()
     if not location_id:
         raise ValueError("location_id must not be blank")
+    if pose_type not in {"", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"}:
+        raise ValueError("pose_type is invalid")
     if reference_item_area is not None and reference_item_area <= 0:
         raise ValueError("reference_item_area must be positive")
     _validate_image(baseline, "baseline")
     _validate_image(current, "current")
     context = InspectionContext(
         location_id=location_id,
+        pose_type=pose_type,
         task_type=task_type,
         baseline=baseline,
         current=current,
@@ -249,30 +273,55 @@ def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
             baseline,
             current,
             location_id=request.location_id,
+            pose_type=request.pose_type,
             reference_item_area=request.reference_item_area,
         )
     except RuntimeError as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
-    return build_product_findings(request.task_type, result.findings)
+    if not result.findings:
+        return []
+
+    try:
+        review = QwenReviewer(debug_root=DEFAULT_DEBUG_ROOT).review(
+            task_type=request.task_type,
+            location_id=request.location_id,
+            pose_type=request.pose_type,
+            current=current,
+            bboxes=[finding.bbox for finding in result.findings],
+        )
+    except QwenReviewError as error:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "type": "qwen_review_error",
+                "stage": error.stage,
+                "message": str(error),
+            },
+        ) from error
+    return build_product_findings(request.task_type, review.findings)
 
 
 def build_product_findings(
     task_type: TaskType,
-    localized_findings: Sequence[Finding],
+    reviewed_findings: Sequence[ReviewedFinding],
 ) -> InspectApiResponse:
-    """Build the public contract; Qwen will populate names in a later stage."""
+    """Convert validated Qwen findings into the public response contract."""
 
     if task_type == "SHORTAGE":
         return [
-            ShortageProductFinding(shortage_product_name="")
-            for _ in localized_findings
+            ShortageProductFinding(
+                shortage_product_name=finding.shortage_product_name or ""
+            )
+            for finding in reviewed_findings
+            if finding.shortage_product_name
         ]
     return [
         MisplacedProductFinding(
-            misplaced_product_name="",
-            gt_product_name="",
+            misplaced_product_name=finding.misplaced_product_name or "",
+            gt_product_name=finding.gt_product_name or "",
         )
-        for _ in localized_findings
+        for finding in reviewed_findings
+        if finding.misplaced_product_name and finding.gt_product_name
     ]
 
 

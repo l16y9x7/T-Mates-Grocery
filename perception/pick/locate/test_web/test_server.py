@@ -12,6 +12,49 @@ import server
 
 
 class PromptMappingTest(unittest.TestCase):
+    def test_qwen_infer_samples_include_all_current_pairs(self) -> None:
+        result = server.list_qwen_infer_samples()
+
+        self.assertEqual(len(result["samples"]), 10)
+        counts = {
+            (sample["task_type"], sample["pair_number"]): len(sample["regions"])
+            for sample in result["samples"]
+        }
+        self.assertEqual(counts[("SHORTAGE", 1)], 1)
+        self.assertEqual(counts[("MISPLACED", 3)], 2)
+        self.assertTrue(
+            result["samples"][0]["regions"][0]["expanded_image_url"].startswith(
+                "/api/qwen-infer/file/"
+            )
+        )
+
+    def test_saved_prompt_builds_interleaved_multimodal_content(self) -> None:
+        pair_root, manifest = server.load_qwen_sample("shortage", 1)
+        region = manifest["regions"][0]
+        prompt = (
+            pair_root / "region_01" / "prompt.txt"
+        ).read_text(encoding="utf-8")
+
+        system_prompt, content = server.build_saved_qwen_messages(
+            prompt,
+            pair_root,
+            region,
+            manifest["candidate_images"],
+        )
+
+        self.assertIn("shortage_product_name", system_prompt)
+        image_items = [item for item in content if item["type"] == "image_url"]
+        self.assertEqual(len(image_items), len(manifest["candidate_images"]) + 1)
+        self.assertTrue(
+            image_items[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        )
+
+    def test_qwen_infer_file_rejects_parent_traversal(self) -> None:
+        root, _ = server.load_qwen_sample("shortage", 1)
+        with self.assertRaises(HTTPException) as raised:
+            server.resolve_descendant(root, "../manifest.json")
+        self.assertEqual(raised.exception.status_code, 400)
+
     def test_locate_debug_proxy_sends_no_local_image(self) -> None:
         response = Mock(ok=True, status_code=200)
         response.json.return_value = {
