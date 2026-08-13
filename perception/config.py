@@ -5,9 +5,17 @@ from __future__ import annotations
 import os
 
 
+SERVICE_BIND_HOST = os.getenv("SERVICE_BIND_HOST", "0.0.0.0")
+
+# Keep every non-loopback host in this file.  A deployment can either change
+# these defaults or override them with environment variables.  Full URL
+# overrides below remain supported for backward compatibility.
+CAMERA_SERVICE_HOST = os.getenv("CAMERA_SERVICE_HOST", "192.168.1.226")
+INFERENCE_SERVICE_HOST = os.getenv("INFERENCE_SERVICE_HOST", "211.137.21.33")
+
 CAMERA_SERVICE_URL = os.getenv(
     "CAMERA_SERVICE_URL",
-    "http://192.168.1.226:8085",
+    f"http://{CAMERA_SERVICE_HOST}:8085",
 ).rstrip("/")
 
 SKU_API_URL = os.getenv(
@@ -16,11 +24,11 @@ SKU_API_URL = os.getenv(
 ).rstrip("/")
 SAM3_URL = os.getenv(
     "SAM3_URL",
-    "http://211.137.21.33:25541/api/v1/segment",
+    f"http://{INFERENCE_SERVICE_HOST}:25541/api/v1/segment",
 )
 QWEN3_URL = os.getenv(
     "QWEN3_URL",
-    "http://211.137.21.33:25542/v1/chat/completions",
+    f"http://{INFERENCE_SERVICE_HOST}:25542/v1/chat/completions",
 )
 QWEN3_MODEL = os.getenv(
     "QWEN3_MODEL",

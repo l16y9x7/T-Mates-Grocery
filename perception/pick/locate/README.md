@@ -8,7 +8,7 @@
 
 ```powershell
 cd perception/sku
-python api.py --host 0.0.0.0 --port 8080
+python api.py --port 8080
 ```
 
 再启动定位服务：
@@ -26,7 +26,7 @@ python main.py
 
 可使用 `SKU_API_URL`、`QWEN3_URL`、`QWEN3_MODEL`、`SAM3_URL` 环境变量覆盖。
 
-未随请求上传图片时，只从 `http://192.168.1.226:8085/camera/snapshot` 获取当前 RGB，不读取本地测试图片。可通过 `CAMERA_SNAPSHOT_URL` 和 `CAMERA_SNAPSHOT_TIMEOUT_SECONDS` 覆盖地址与超时，通过 `CAMERA_SNAPSHOT_CACHE_DIR` 指定快照缓存目录。
+未随请求上传图片时，只从根目录 `config.py` 配置的相机服务获取当前 RGB，不读取本地测试图片。非本机 IP 统一由 `CAMERA_SERVICE_HOST` 配置；仍可通过 `CAMERA_SERVICE_URL`、`CAMERA_SNAPSHOT_URL` 和 `CAMERA_SNAPSHOT_TIMEOUT_SECONDS` 覆盖地址与超时，通过 `CAMERA_SNAPSHOT_CACHE_DIR` 指定快照缓存目录。
 
 ## 接口
 

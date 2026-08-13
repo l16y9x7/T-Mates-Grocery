@@ -30,7 +30,7 @@ python -m pip install fastapi pillow uvicorn
 
 ## 配置
 
-默认头部相机地址为 `http://192.168.1.226:8085/camera/snapshot?camera=head&type=color`。以下环境变量均可覆盖默认配置：
+默认头部相机地址由根目录 `config.py` 中的 `CAMERA_SERVICE_HOST` / `CAMERA_SERVICE_URL` 生成。非本机 IP 只在 `config.py` 配置；也可以通过以下环境变量覆盖：
 
 ```bash
 export RECEIPT_CAMERA_URL='http://<camera-host>:<port>/camera/snapshot?camera=head&type=color'
@@ -108,7 +108,7 @@ Qwen 没有识别出两个商品时，接口返回识别错误，不返回残缺
     "retryable": true,
     "hint": "检查相机服务是否启动，并确认相机主机、端口和网络可达。",
     "request_id": "3fde0122bcb34cb294b65d726816f971",
-    "upstream": "http://192.168.1.226:8085/camera/snapshot",
+    "upstream": "<config.py 中配置的相机 URL>/camera/snapshot",
     "elapsed_ms": 3012.4,
     "timeout_seconds": 5.0
   }

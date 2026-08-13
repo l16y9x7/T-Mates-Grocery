@@ -44,6 +44,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also treat the area below the last detected rail as a product row",
     )
+    parser.add_argument(
+        "--pose-type",
+        choices=("", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"),
+        default="",
+        help="UPPER returns the top 2 rows; LOWER returns the bottom 3 rows",
+    )
+    parser.add_argument(
+        "--summary-name",
+        default="summary.json",
+        help="summary JSON filename (default: summary.json)",
+    )
     return parser
 
 
@@ -74,6 +85,7 @@ def main() -> int:
     config = RowDetectionConfig(
         target_size=None if args.keep_input_size else (1280, 720),
         include_trailing_row=args.include_trailing_row,
+        pose_type=args.pose_type,
     )
     summaries = []
     for index, image_path in enumerate(images, start=1):
@@ -84,6 +96,7 @@ def main() -> int:
         summaries.append(
             {
                 "input": str(image_path),
+                "pose_type": args.pose_type,
                 "rail_count": len(result.rails),
                 "row_count": len(result.rows),
                 "rails": [list(rail.bbox) for rail in result.rails],
@@ -97,7 +110,7 @@ def main() -> int:
         )
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    summary_path = args.output_dir / "summary.json"
+    summary_path = args.output_dir / args.summary_name
     summary_path.write_text(
         json.dumps(summaries, ensure_ascii=False, indent=2), encoding="utf-8"
     )

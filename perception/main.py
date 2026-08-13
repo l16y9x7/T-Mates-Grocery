@@ -10,12 +10,15 @@ import uvicorn
 from fastapi import FastAPI
 
 if __package__:
+    from .config import SERVICE_BIND_HOST
     from .inspect import main as inspect_api
     from .parse_receipt import server as receipt_api
     from .pick.check import server as check_api
     from .pick.locate import main as locate_api
     from .place.check import server as place_check_api
 else:
+    from config import SERVICE_BIND_HOST
+
     # ``inspect`` is also a Python standard-library module.  Load this local
     # namespace package by file path when the gateway is run as a script.
     inspect_path = Path(__file__).resolve().parent / "inspect" / "main.py"
@@ -47,4 +50,4 @@ app.add_exception_handler(
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8083)
+    uvicorn.run(app, host=SERVICE_BIND_HOST, port=8083)

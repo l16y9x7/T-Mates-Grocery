@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -13,13 +13,13 @@ import requests
 
 LOCATE_ROOT = Path(__file__).resolve().parents[1]
 PERCEPTION_ROOT = LOCATE_ROOT.parents[1]
+if str(PERCEPTION_ROOT) not in sys.path:
+    sys.path.insert(0, str(PERCEPTION_ROOT))
+from config import SAM3_URL as DEFAULT_SAM3_URL  # noqa: E402
+
 SKU_ROOT = PERCEPTION_ROOT / "sku"
 CATALOG_PATH = SKU_ROOT / "products.json"
 DEFAULT_OUTPUT_PATH = Path(__file__).resolve().parent / "sam3_prompt_test_results.json"
-DEFAULT_SAM3_URL = os.getenv(
-    "SAM3_URL",
-    "http://211.137.21.33:25541/api/v1/segment",
-)
 PROMPT_PATHS = {
     "SORTING": LOCATE_ROOT / "qwen_sam_prompt_mapping.json",
     "SHORTAGE": LOCATE_ROOT / "qwen_sam_prompt_mapping_shortage.json",

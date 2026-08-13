@@ -4,6 +4,7 @@ import json
 import mimetypes
 import os
 import re
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,6 +18,11 @@ from pydantic import BaseModel, Field
 
 
 ROOT = Path(__file__).resolve().parent
+PERCEPTION_ROOT = ROOT.parents[2]
+if str(PERCEPTION_ROOT) not in sys.path:
+    sys.path.insert(0, str(PERCEPTION_ROOT))
+from config import QWEN3_MODEL, QWEN3_URL, SAM3_URL, SERVICE_BIND_HOST  # noqa: E402
+
 STATIC_DIR = ROOT / "static"
 RGB_DIR = ROOT.parents[2] / "test_data" / "2026-08-04"
 SKU_CATALOG_PATH = ROOT.parents[2] / "sku" / "products.json"
@@ -28,15 +34,6 @@ PROMPT_PAIR_MAPPING_PATHS = {
     "MISPLACED": ROOT.parent / "qwen_sam_prompt_mapping_misplaced.json",
 }
 
-QWEN3_URL = os.getenv(
-    "QWEN3_URL",
-    "http://211.137.21.33:25542/v1/chat/completions",
-)
-QWEN3_MODEL = os.getenv("QWEN3_MODEL", "Qwen3-VL-4B-Instruct")
-SAM3_URL = os.getenv(
-    "SAM3_URL",
-    "http://211.137.21.33:25541/api/v1/segment",
-)
 LOCATE_DEBUG_URL = os.getenv(
     "LOCATE_DEBUG_URL",
     "http://127.0.0.1:8083/perception/pick/locate/debug",
@@ -1030,4 +1027,4 @@ def parse_qwen_json(content: str) -> list[dict]:
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8082)
+    uvicorn.run(app, host=SERVICE_BIND_HOST, port=8082)
