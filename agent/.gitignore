@@ -1,5 +1,18 @@
+# Local environments and dependency caches
 .venv/
 .cache/
-.pytest_cache/
+
+# Runtime state and generated logs
+log/
+run/
+
+# Python and test artifacts
 __pycache__/
 *.py[cod]
+.pytest_cache/
+
+# Local captures and editor metadata
+*.png
+*.jpg
+*.jpeg
+.DS_Store

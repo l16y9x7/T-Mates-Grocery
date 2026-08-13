@@ -1,0 +1,193 @@
+# 取放流程控制台
+
+这是一个局域网网页控制台。网页支持两类流程：输入商品名称调用 8086 `/pick`，以及调用任务一独立服务完成小票识别到抓取。两类流程都通过同源代理异步执行，并实时显示对应服务写入的 `events.jsonl` 流程事件。
+
+## 启动
+
+确保 8086 已经启动：
+
+```bash
+scripts/start-pick-place.sh --config config/pick-place.yaml
+```
+
+任务一测试还需要启动 8108 独立服务。推荐使用后台脚本：
+
+```bash
+./scripts/start-task1-bg.sh --config config/task1.production.yaml --port 8108
+```
+
+前台启动方式：
+
+```bash
+./scripts/start-task1.sh --config config/task1.production.yaml --port 8108
+```
+
+停止后台服务：
+
+```bash
+./scripts/stop-task1.sh
+```
+
+8108 服务的 PID 保存在 `run/task1.pid`，进程日志写入 `log/process/task1-*.log`。
+
+另开终端启动网页：
+
+```bash
+./web/start.sh
+```
+
+推荐使用后台脚本启动和停止：
+
+```bash
+./web/start-bg.sh
+./web/stop.sh
+```
+
+完整的推荐启动顺序：
+
+```bash
+./scripts/start-task1-bg.sh --config config/task1.production.yaml --port 8108
+./scripts/start-pick-place-bg.sh --config config/pick-place.yaml
+./web/start-bg.sh
+```
+
+停止顺序：
+
+```bash
+./web/stop.sh
+./scripts/stop-pick-place.sh
+./scripts/stop-task1.sh
+```
+
+后台进程 PID 保存在 `run/web.pid`，网页进程日志按启动时间写入 `log/process/web-*.log`。
+
+取放服务也可以后台运行：
+
+```bash
+./scripts/start-pick-place-bg.sh --config config/pick-place.yaml
+./scripts/stop-pick-place.sh
+```
+
+或者一键启动/停止两个服务：
+
+```bash
+./scripts/start-services-bg.sh --config config/pick-place.yaml
+./scripts/stop-services.sh
+```
+
+取放服务 PID 保存在 `run/pick-place.pid`，服务日志写入 `log/process/pick-place-*.log`；每次取放任务的详细接口记录仍保存在 `log/<时间>-<幂等键>/`。
+
+默认监听：
+
+```text
+0.0.0.0:8090
+```
+
+在同一局域网的电脑浏览器打开：
+
+```text
+http://服务器IP:8090
+```
+
+例如服务器地址是 `192.168.130.59`：
+
+```text
+http://192.168.130.59:8090
+```
+
+如果 8090 已被占用，可以指定其他端口：
+
+```bash
+LOCATE_WEB_PORT=8091 ./web/start.sh
+```
+
+网页服务默认调用：
+
+```text
+http://127.0.0.1:8086/pick
+```
+
+任务一服务默认调用：
+
+```text
+http://127.0.0.1:8108/task1/run
+```
+
+可通过 `TASK1_URL` 覆盖任务一服务地址。网页中的“任务一 · 小票到抓取”区域可选择抓取 1 件或 2 件，服务会把每次运行的事件写入与 8086 相同的 `log/<时间>-<幂等键>/events.jsonl`，网页通过 SSE 实时读取。
+
+页面中的“小票识别”按钮通过同源代理调用视觉理解服务：
+
+```http
+POST /api/perception/parse
+Content-Type: application/json
+
+{}
+```
+
+代理默认请求 `http://192.168.130.59:8083/perception/parse`，并将返回的
+`product_names` 列表显示在页面中。可通过 `PERCEPTION_URL` 覆盖视觉理解服务地址。
+
+可以通过环境变量覆盖：
+
+```bash
+PICK_PLACE_URL=http://127.0.0.1:8086/pick \
+PICK_PLACE_LOG_DIR=/data/T-Mates-Grocery/agent/log \
+PERCEPTION_URL=http://192.168.130.59:8083 \
+./web/start.sh
+```
+
+机器人移动控制默认调用以下真实服务：
+
+```text
+位姿准备：      http://192.168.130.50:8084/pose/prepare
+位姿健康检查：  http://192.168.130.50:8084/pose/health
+导航移动：      http://192.168.130.50:8081/navigation/navigate
+导航健康检查：  http://192.168.130.50:8081/navigation/health
+```
+
+可通过环境变量覆盖地址：
+
+```bash
+NAVIGATION_URL=http://192.168.130.50:8081 \
+POSE_URL=http://192.168.130.50:8084 \
+./web/start.sh
+```
+
+## 页面操作
+
+填写商品名称，选择任务类型和左右手，点击“开始拣取”。页面会显示：
+
+- 任务幂等键
+- 定位开始/成功
+- 相机 RGB 和 depth 获取
+- 深度标准化
+- 位姿估计开始/成功
+- grasp 请求和响应
+- 视觉校验开始/成功或失败
+- 8086 最终 HTTP 响应
+
+页面下方的“机器人移动控制”区域可以直接触发：
+
+- `START_POSITION`：回到机器人初始位姿
+- `SHELF_PICK_READY`：前往货架预抓取位姿，可选择 `L1/L2/L3`
+- `SHELF_VIEW_UPPER`、`SHELF_VIEW_LOWER`：货架上下层扫描位姿
+- 导航到指定 `target_id`，例如 `H1_F_L1_C01`
+
+每次控制请求都自动生成并发送 `Idempotency-Key`，页面会显示下游请求 JSON、HTTP 状态和响应正文。导航请求字段是 `target_id`，不是带空格的 `target id`。
+
+每次任务的完整输入输出仍保存在 8086 的：
+
+```text
+log/<时间>-<幂等键>/
+```
+
+任务一服务使用相同目录结构，日志中的步骤包括小票点导航、小票位姿、小票识别、SKU 货位转换、商品导航、抓取位姿和抓取结果。
+
+网页实时日志接口为：
+
+```http
+GET /api/pick/<task_id>/events
+Accept: text/event-stream
+```
+
+旧的 `POST /api/locate` 定位代理接口仍保留，以兼容已有调用方。
