@@ -376,7 +376,7 @@
     "sam3_prompt": "frontmost labelled bottle"
   },
   "草原红太阳烧烤料香辣味": {
-    "qwen3_prompt": "找到图片中货架上的红色烧烤料小瓶子，输出满足条件的所有红色烧烤料小瓶子的bbox。返回格式：{\"name\": \"红色烧烤料小瓶子\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的棕色烧烤料小瓶子，输出满足条件的所有棕色烧烤料小瓶子的bbox。返回格式：{\"name\": \"棕色烧烤料小瓶子\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost labelled bottle"
   },
   "草原红太阳烧烤酱原味": {
