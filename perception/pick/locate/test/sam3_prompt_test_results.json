@@ -1,6 +1,6 @@
 {
   "generated_at": "2026-08-08T12:56:13.397609+08:00",
-  "sam3_url": "http://211.137.21.33:25541/api/v1/segment",
+  "sam3_url": "<config.py:SAM3_URL>",
   "threshold": "SAM3 server default (threshold fields were not sent)",
   "summary": {
     "SORTING": {

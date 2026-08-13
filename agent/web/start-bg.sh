@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUN_DIR="$PROJECT_ROOT/run"
+LOG_DIR="$PROJECT_ROOT/log/process"
+PID_FILE="$RUN_DIR/web.pid"
+mkdir -p "$RUN_DIR" "$LOG_DIR"
+
+if [[ -f "$PID_FILE" ]]; then
+  pid="$(<"$PID_FILE")"
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    echo "网页服务已经在运行，PID=$pid"
+    exit 0
+  fi
+  rm -f "$PID_FILE"
+fi
+
+timestamp="$(date +%Y%m%d-%H%M%S)"
+log_file="$LOG_DIR/web-$timestamp.log"
+
+cd "$PROJECT_ROOT"
+nohup "$PROJECT_ROOT/web/start.sh" "$@" >"$log_file" 2>&1 < /dev/null &
+pid=$!
+printf '%s\n' "$pid" > "$PID_FILE"
+
+sleep 1
+if ! kill -0 "$pid" 2>/dev/null; then
+  echo "网页服务启动失败，日志：$log_file" >&2
+  rm -f "$PID_FILE"
+  tail -n 40 "$log_file" >&2 || true
+  exit 1
+fi
+
+config_values="$(cd "$PROJECT_ROOT" && python -m web.settings)"
+IFS=$'\t' read -r _host port <<< "$config_values"
+host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+echo "网页服务已后台启动"
+echo "PID: $pid"
+echo "地址: http://${host_ip:-127.0.0.1}:$port"
+echo "日志: $log_file"
+echo "停止: $PROJECT_ROOT/web/stop.sh"

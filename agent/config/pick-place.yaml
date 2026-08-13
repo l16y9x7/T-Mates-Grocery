@@ -1,0 +1,25 @@
+# 8086 取放编排服务的下游能力地址。
+perception_url: http://127.0.0.1:8083
+# 定位和视觉校验共用同一个感知服务地址；代码会从 perception_url 派生定位地址。
+pose_estimation_url: http://127.0.0.1:8084
+manipulation_url: http://192.168.1.226:8084
+camera_url: http://192.168.1.226:8085
+pick_camera: left_wrist
+pick_cameras:
+  left: left_wrist
+  right: right_wrist
+place_camera: head
+calibration_files:
+  head: config/camera/head.json
+  left_wrist: config/camera/left_wrist.json
+  right_wrist: config/camera/right_wrist.json
+temp_dir: /tmp/pick-place
+log_dir: log
+timeouts:
+  connect_seconds: 3
+  locate_seconds: 600
+  camera_seconds: 15
+  pose_seconds: 300
+  action_seconds: 600
+  check_seconds: 120
+  health_seconds: 5

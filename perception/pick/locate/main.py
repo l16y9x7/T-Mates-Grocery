@@ -166,6 +166,7 @@ def get_latest_rgb(hand: str = "left") -> Path:
 def fetch_camera_snapshot(hand: str = "left") -> Path | None:
     """获取并验证相机快照；任何读取错误都返回 None。"""
     camera_url = CAMERA_SNAPSHOT_URLS.get(hand.strip().lower())
+    print("CAMERA_URL:", camera_url)
     if camera_url is None:
         raise HTTPException(status_code=400, detail="hand 只能是 left 或 right")
     try:

@@ -28,7 +28,7 @@ class RecordedRequest:
 
 
 class MockServices:
-    """可编程的导航、感知、位姿和抓放服务集合。"""
+    """可编程的导航、感知、位姿、抓放和取放编排服务集合。"""
 
     # Host 与能力模块的映射和生产配置结构一致，用于模拟四个独立服务。
     HOSTS = {
@@ -36,21 +36,31 @@ class MockServices:
         "perception.local": "perception",
         "pose.local": "pose",
         "manipulation.local": "manipulation",
+        "pick-place.local": "pick_place",
+        "sku.local": "sku",
     }
     PORTS = {
         8101: "navigation",
         8102: "perception",
         8103: "pose",
         8104: "manipulation",
+        8106: "pick_place",
+        8107: "sku",
     }
 
     def __init__(self) -> None:
         """初始化默认成功场景及用于故障注入、调用追踪的内存状态。"""
 
         self.transport = httpx.MockTransport(self._handle)
-        self.health = {service: "READY" for service in self.HOSTS.values()}
+        self.health = {service: "READY" for service in set(self.HOSTS.values())}
         # 默认小票对应两个不同商品；巡检默认没有发现项，可由具体测试覆盖。
         self.receipt_result = ["H1_F_L1_C01", "H1_F_L1_C02"]
+        self.sku_names = {
+            "H1_F_L1_C01": "可口可乐",
+            "H1_F_L1_C02": "矿泉水",
+            "H1_F_L2_C01": "薯片",
+            "H2_B_L3_C02": "牛奶",
+        }
         self.inspection_results: list[list[str]] = []
         self.requests: list[RecordedRequest] = []
         # requests 统计 HTTP 尝试；actual_action_counts 统计去重后的真实物理动作。
@@ -111,11 +121,24 @@ class MockServices:
         )
 
         # 查询类接口没有物理副作用，直接从当前脚本化状态生成响应。
-        if request.url.path == f"/{service}/health":
+        health_path = "/health" if service == "pick_place" else f"/{service}/health"
+        if request.url.path == health_path:
             return httpx.Response(200, json={"status": self.health[service]})
-        if request.url.path == "/receipt/parse":
+        if request.url.path == "/sku/name" and service == "sku":
+            location = str((payload or {}).get("location", "")).upper()
+            name = self.sku_names.get(location)
+            if name is None:
+                return httpx.Response(404, json={"error_code": "UNKNOWN_PRODUCT_SLOT"})
+            return httpx.Response(200, json={"location": location, "name": name})
+        if request.url.path == "/sku/locations" and service == "sku":
+            name = (payload or {}).get("name")
+            locations = [location for location, value in self.sku_names.items() if value == name]
+            return httpx.Response(200, json={"name": name, "locations": locations})
+        if request.url.path == "/sku/images" and service == "sku":
+            return httpx.Response(200, json={"name": (payload or {}).get("name", ""), "images": []})
+        if request.url.path == "/perception/parse":
             return httpx.Response(200, json=self.receipt_result)
-        if request.url.path == "/areas/inspect":
+        if request.url.path == "/perception/inspect":
             findings = self.inspection_results.pop(0) if self.inspection_results else []
             return httpx.Response(200, json={"findings": findings})
 
@@ -159,6 +182,6 @@ class MockServices:
         return {
             "/navigation/navigate": "navigation",
             "/pose/prepare": "pose",
-            "/manipulation/pick": "pick",
-            "/manipulation/place": "place",
+            "/pick": "pick",
+            "/place": "place",
         }.get(path)

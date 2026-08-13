@@ -141,6 +141,41 @@ class RowDetectionTest(unittest.TestCase):
         self.assertEqual(len(result.rows), 2)
         self.assertTrue(all(rail.line is not None for rail in result.rails))
 
+    def test_lower_pose_returns_bottom_three_rows_and_uses_image_bottom(self) -> None:
+        image = np.full((720, 1280, 3), 45, dtype=np.uint8)
+        for top in (105, 315, 530):
+            cv2.rectangle(image, (20, top), (1259, top + 15), (25, 25, 210), -1)
+        config = RowDetectionConfig(pose_type="SHELF_VIEW_LOWER")
+
+        result = detect_rows(image, config)
+
+        self.assertEqual(len(result.rows), 3)
+        self.assertEqual(result.rows[0].bbox[1], 113)
+        self.assertEqual(result.rows[-1].bbox[1] + result.rows[-1].bbox[3], 720)
+        self.assertIsNone(result.rows[-1].lower_rail_index)
+
+    def test_upper_pose_returns_top_two_rows(self) -> None:
+        config = RowDetectionConfig(pose_type="SHELF_VIEW_UPPER")
+
+        result = detect_rows(_synthetic_shelf(), config)
+
+        self.assertEqual(len(result.rows), 2)
+        self.assertEqual(result.rows[0].bbox[1], 0)
+        self.assertEqual(result.rows[-1].bbox[1] + result.rows[-1].bbox[3], 446)
+
+    def test_lower_pose_does_not_treat_floor_after_fourth_rail_as_row(self) -> None:
+        image = np.full((720, 1280, 3), 45, dtype=np.uint8)
+        for top in (75, 285, 455, 590):
+            cv2.rectangle(image, (20, top), (1259, top + 15), (25, 25, 210), -1)
+        config = RowDetectionConfig(pose_type="SHELF_VIEW_LOWER")
+
+        result = detect_rows(image, config)
+
+        self.assertEqual(len(result.rows), 3)
+        self.assertEqual(result.rows[0].bbox[1], 83)
+        self.assertEqual(result.rows[-1].bbox[1] + result.rows[-1].bbox[3], 598)
+        self.assertIsNotNone(result.rows[-1].lower_rail_index)
+
 
 if __name__ == "__main__":
     unittest.main()

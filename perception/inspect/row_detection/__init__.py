@@ -3,6 +3,7 @@
 from .detector import (
     RowDetectionConfig,
     RowDetectionResult,
+    PoseType,
     ShelfRail,
     ShelfRow,
     ShelfRowMatch,
@@ -14,6 +15,7 @@ from .detector import (
 __all__ = [
     "RowDetectionConfig",
     "RowDetectionResult",
+    "PoseType",
     "ShelfRail",
     "ShelfRow",
     "ShelfRowMatch",

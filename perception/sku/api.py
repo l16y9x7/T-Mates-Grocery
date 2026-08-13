@@ -5,6 +5,7 @@ import json
 import mimetypes
 import os
 import re
+import sys
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -14,6 +15,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+
+PERCEPTION_ROOT = Path(__file__).resolve().parents[1]
+if str(PERCEPTION_ROOT) not in sys.path:
+    sys.path.insert(0, str(PERCEPTION_ROOT))
+from config import SERVICE_BIND_HOST  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parent
@@ -358,7 +365,7 @@ app = create_app()
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="感知模块 SKU 查询服务")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default=SERVICE_BIND_HOST)
     parser.add_argument("--port", type=int, default=25540)
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG_PATH)
     args = parser.parse_args()

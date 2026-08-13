@@ -6,18 +6,19 @@ TASK_TYPE="${1:-SORTING}"
 SCENARIO="${2:-success}"
 MOCK_LOG=""
 MOCK_PID=""
+MOCK_READY=false
 
 usage() {
   cat <<'EOF'
 用法：scripts/run-demo.sh [TASK_TYPE] [SCENARIO]
 
-自动启动独立 Mock、等待四个端口就绪、运行一个 Agent 任务，最后停止 Mock。
+自动启动独立 Mock、等待六个端口就绪、运行一个 Agent 任务，最后停止 Mock。
 
 TASK_TYPE：SORTING（默认）、SHORTAGE、MISPLACED
-SCENARIO：success（默认）、slow、health-error、navigation-failure、
+SCENARIO：success（默认）、slow、random-delay、health-error、navigation-failure、
           late-findings、timeout-recovery、timeout-unknown
 
-超时场景会自动使用 config/agent.mock-fast.yaml，其他场景使用 config/agent.yaml。
+所有 Mock 场景使用 config/agent.mock.yaml。
 EOF
 }
 
@@ -36,7 +37,7 @@ case "$TASK_TYPE" in
 esac
 
 case "$SCENARIO" in
-  success|slow|health-error|navigation-failure|late-findings|timeout-recovery|timeout-unknown) ;;
+  success|slow|random-delay|health-error|navigation-failure|late-findings|timeout-recovery|timeout-unknown) ;;
   *)
     echo "错误：未知 Mock 场景 $SCENARIO" >&2
     usage >&2
@@ -77,22 +78,22 @@ for _ in {1..50}; do
   if curl --fail --silent --max-time 1 http://127.0.0.1:8101/navigation/health >/dev/null \
     && curl --fail --silent --max-time 1 http://127.0.0.1:8102/perception/health >/dev/null \
     && curl --fail --silent --max-time 1 http://127.0.0.1:8103/pose/health >/dev/null \
-    && curl --fail --silent --max-time 1 http://127.0.0.1:8104/manipulation/health >/dev/null; then
+    && curl --fail --silent --max-time 1 http://127.0.0.1:8104/manipulation/health >/dev/null \
+    && curl --fail --silent --max-time 1 http://127.0.0.1:8106/health >/dev/null \
+    && curl --fail --silent --max-time 1 http://127.0.0.1:8107/sku/health >/dev/null; then
+    MOCK_READY=true
     break
   fi
   sleep 0.1
 done
 
-if ! curl --fail --silent --max-time 1 http://127.0.0.1:8101/navigation/health >/dev/null; then
+if [[ "$MOCK_READY" != true ]]; then
   echo "错误：等待 Mock 就绪超时，日志如下：" >&2
   sed -n '1,160p' "$MOCK_LOG" >&2
   exit 1
 fi
 
-CONFIG_PATH="config/agent.yaml"
-if [[ "$SCENARIO" == "timeout-recovery" || "$SCENARIO" == "timeout-unknown" ]]; then
-  CONFIG_PATH="config/agent.mock-fast.yaml"
-fi
+CONFIG_PATH="config/agent.mock.yaml"
 
 echo "开始运行任务：$TASK_TYPE（配置：$CONFIG_PATH）"
 set +e
@@ -108,4 +109,3 @@ if [[ $TASK_EXIT -ne 0 ]]; then
   echo "Agent 进程退出码：$TASK_EXIT" >&2
 fi
 exit "$TASK_EXIT"
-

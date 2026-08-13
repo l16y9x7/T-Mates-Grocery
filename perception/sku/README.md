@@ -68,7 +68,7 @@ products_by_location: dict[str, Product]
 启动服务：
 
 ```powershell
-python api.py --host 0.0.0.0 --port 8080
+python api.py --port 8080
 ```
 
 服务使用 FastAPI。启动后可以通过 `/docs` 查看 Swagger UI，通过 `/openapi.json` 获取接口定义。商品数据在进程启动时加载，修改 `products.json` 后需要重启服务。
