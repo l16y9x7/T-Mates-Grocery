@@ -35,8 +35,10 @@ def encode_image(image: np.ndarray, *, data_url: bool = False) -> str:
 class _FakeReviewer:
     def __init__(self, result: object) -> None:
         self.result = result
+        self.calls: list[dict[str, object]] = []
 
-    def review(self, **_: object) -> object:
+    def review(self, **kwargs: object) -> object:
+        self.calls.append(kwargs)
         return self.result
 
 
@@ -99,18 +101,112 @@ class InspectMainTest(unittest.TestCase):
             raw_response="{}",
             candidate_names=("测试商品",),
         )
+        reviewer = _FakeReviewer(reviewed)
         with patch.object(
             inspect_api,
             "QwenReviewer",
-            return_value=_FakeReviewer(reviewed),
+            return_value=reviewer,
         ):
             response = inspect_api.inspect_shelf(request)
 
         self.assertEqual(request.location_id, "H1_F")
-        self.assertEqual(len(response), 1)
-        self.assertEqual(response[0].shortage_product_name, "测试商品")
+        self.assertEqual(len(response.findings), 1)
+        self.assertEqual(
+            response.findings[0].shortage_product_name,
+            "测试商品",
+        )
+        self.assertEqual(
+            response.model_dump(),
+            {"findings": [{"shortage_product_name": "测试商品"}]},
+        )
+        review_image = reviewer.calls[0]["current"]
+        self.assertIsInstance(review_image, np.ndarray)
+        assert isinstance(review_image, np.ndarray)
+        self.assertEqual(review_image.shape[:2], (720, 1280))
+        baseline_image = reviewer.calls[0]["baseline"]
+        self.assertIsInstance(baseline_image, np.ndarray)
+        assert isinstance(baseline_image, np.ndarray)
+        self.assertEqual(baseline_image.shape[:2], self.baseline.shape[:2])
+        self.assertEqual(reviewer.calls[0]["row_constraints"], [None])
 
-    def test_no_change_route_returns_empty_array(self) -> None:
+    def test_row_detection_assigns_finding_to_matching_visible_row(self) -> None:
+        shelf = np.full((720, 1280, 3), 45, dtype=np.uint8)
+        for rail_y in (330, 670):
+            cv2.rectangle(shelf, (10, rail_y), (1270, rail_y + 15), (20, 20, 220), -1)
+        row_detection = inspect_api.detect_rows(shelf)
+        findings = [
+            inspect_api.Finding(
+                bbox=[420, 390, 120, 180],
+                center=[480, 480],
+                sources=["comparison_based"],
+                votes=1,
+            )
+        ]
+
+        constraints = inspect_api.build_row_constraints(
+            findings,
+            row_detection,
+            "SHELF_VIEW_UPPER",
+        )
+
+        self.assertIsNotNone(constraints[0])
+        assert constraints[0] is not None
+        self.assertEqual(constraints[0].row_index, 2)
+        self.assertGreaterEqual(constraints[0].overlap_ratio, 0.6)
+
+    def test_row_detection_falls_back_when_visible_row_count_mismatches(self) -> None:
+        shelf = np.full((720, 1280, 3), 45, dtype=np.uint8)
+        cv2.rectangle(shelf, (10, 500), (1270, 515), (20, 20, 220), -1)
+        row_detection = inspect_api.detect_rows(shelf)
+        findings = [
+            inspect_api.Finding(
+                bbox=[420, 200, 120, 180],
+                center=[480, 290],
+                sources=["comparison_based"],
+                votes=1,
+            )
+        ]
+
+        constraints = inspect_api.build_row_constraints(
+            findings,
+            row_detection,
+            "SHELF_VIEW_UPPER",
+        )
+
+        self.assertEqual(constraints, [None])
+
+    def test_lower_pose_maps_bottom_three_of_four_detected_rows(self) -> None:
+        shelf = np.full((720, 1280, 3), 45, dtype=np.uint8)
+        for rail_y in (150, 330, 510, 690):
+            cv2.rectangle(
+                shelf,
+                (10, rail_y),
+                (1270, rail_y + 15),
+                (20, 20, 220),
+                -1,
+            )
+        row_detection = inspect_api.detect_rows(shelf)
+        findings = [
+            inspect_api.Finding(
+                bbox=[530, 550, 170, 60],
+                center=[615, 580],
+                sources=["comparison_based"],
+                votes=1,
+            )
+        ]
+
+        constraints = inspect_api.build_row_constraints(
+            findings,
+            row_detection,
+            "SHELF_VIEW_LOWER",
+        )
+
+        self.assertIsNotNone(constraints[0])
+        assert constraints[0] is not None
+        self.assertEqual(constraints[0].detected_row_index, 4)
+        self.assertEqual(constraints[0].row_index, 3)
+
+    def test_no_change_route_returns_empty_findings(self) -> None:
         encoded = encode_image(self.baseline)
         request = inspect_api.InspectRequest(
             task_type="SHORTAGE",
@@ -120,7 +216,10 @@ class InspectMainTest(unittest.TestCase):
             current_image_base64=encoded,
         )
 
-        self.assertEqual(inspect_api.inspect_shelf(request), [])
+        self.assertEqual(
+            inspect_api.inspect_shelf(request).model_dump(),
+            {"findings": []},
+        )
 
     def test_misplaced_public_shape_is_stable(self) -> None:
         reviewed = [
@@ -134,13 +233,15 @@ class InspectMainTest(unittest.TestCase):
 
         response = inspect_api.build_product_findings("MISPLACED", reviewed)
 
-        self.assertEqual(len(response), 1)
+        self.assertEqual(len(response.findings), 1)
         self.assertEqual(
-            response[0].model_dump(),
-            {
-                "misplaced_product_name": "实际商品",
-                "gt_product_name": "标准商品",
-            },
+            response.model_dump(),
+            {"findings": [
+                {
+                    "misplaced_product_name": "实际商品",
+                    "gt_product_name": "标准商品",
+                }
+            ]},
         )
 
     def test_invalid_image_has_clear_client_error(self) -> None:
@@ -177,6 +278,21 @@ class InspectMainTest(unittest.TestCase):
 
     def test_openapi_registers_main_route(self) -> None:
         self.assertIn("/perception/inspect", inspect_api.app.openapi()["paths"])
+
+    def test_openapi_exposes_findings_response_wrapper(self) -> None:
+        schema = inspect_api.app.openapi()
+        response_schema = schema["paths"]["/perception/inspect"]["post"][
+            "responses"
+        ]["200"]["content"]["application/json"]["schema"]
+
+        self.assertEqual(
+            response_schema,
+            {"$ref": "#/components/schemas/InspectApiResponse"},
+        )
+        self.assertIn(
+            "findings",
+            schema["components"]["schemas"]["InspectApiResponse"]["properties"],
+        )
 
 
 if __name__ == "__main__":

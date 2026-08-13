@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import sys
 import tempfile
@@ -17,8 +18,11 @@ if str(COMPARISON_ROOT) not in sys.path:
     sys.path.insert(0, str(COMPARISON_ROOT))
 
 from qwen_review import (  # noqa: E402
+    CandidateProduct,
     QwenReviewError,
     QwenReviewer,
+    ReviewRowConstraint,
+    build_candidate_contact_sheets,
     normalize_reference_image,
 )
 
@@ -44,8 +48,22 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, qwen_content: str) -> None:
-        self.qwen_content = qwen_content
+    def __init__(
+        self,
+        qwen_content: str | list[str],
+        *,
+        candidate_rows: list[list[dict[str, str]]] | None = None,
+    ) -> None:
+        self.qwen_contents = (
+            list(qwen_content) if isinstance(qwen_content, list) else [qwen_content]
+        )
+        self.qwen_call_count = 0
+        self.candidate_rows = candidate_rows or [
+            [
+                {"sku_id": "SKU_A", "name": "绿色奥利奥"},
+                {"sku_id": "SKU_B", "name": "棕色奥利奥"},
+            ]
+        ]
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
         image = np.full((80, 60, 3), 120, dtype=np.uint8)
         success, encoded = cv2.imencode(".jpg", image)
@@ -56,14 +74,7 @@ class FakeSession:
     def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
         self.calls.append((method, url, kwargs))
         if url.endswith("/sku/get_candidate_SKU"):
-            return FakeResponse(
-                payload=[
-                    [
-                        {"sku_id": "SKU_A", "name": "绿色奥利奥"},
-                        {"sku_id": "SKU_B", "name": "棕色奥利奥"},
-                    ]
-                ]
-            )
+            return FakeResponse(payload=self.candidate_rows)
         if url.endswith("/sku/get_image"):
             name = kwargs["params"]["name"]
             suffix = "a" if name == "绿色奥利奥" else "b"
@@ -71,10 +82,16 @@ class FakeSession:
         if url.endswith("/images/a.jpg") or url.endswith("/images/b.jpg"):
             return FakeResponse(content=self.image, content_type="image/jpeg")
         if url.endswith("/chat/completions"):
+            content_index = min(
+                self.qwen_call_count,
+                len(self.qwen_contents) - 1,
+            )
+            content = self.qwen_contents[content_index]
+            self.qwen_call_count += 1
             return FakeResponse(
                 payload={
                     "choices": [
-                        {"message": {"content": self.qwen_content}}
+                        {"message": {"content": content}}
                     ]
                 }
             )
@@ -108,6 +125,7 @@ class QwenReviewerTest(unittest.TestCase):
             location_id="H1_F_L2_C03",
             pose_type="SHELF_VIEW_UPPER",
             current=self.current,
+            baseline=self.baseline,
             bboxes=[[300, 300, 101, 221]],
         )
 
@@ -135,6 +153,16 @@ class QwenReviewerTest(unittest.TestCase):
         self.assertNotIn("location_id=H1_F_L2_C03", serialized)
         user_content = qwen_payload["messages"][1]["content"]
         self.assertEqual(user_content[1]["type"], "image_url")
+        self.assertIn("缺货前 reference", user_content[0]["text"])
+        region_bytes = base64.b64decode(
+            user_content[1]["image_url"]["url"].split(",", 1)[1]
+        )
+        region_image = cv2.imdecode(
+            np.frombuffer(region_bytes, dtype=np.uint8),
+            cv2.IMREAD_COLOR,
+        )
+        self.assertGreater(int(region_image[110, 40, 1]), 120)
+        self.assertLess(int(region_image[110, 40, 0]), 40)
         self.assertIn("候选商品：", user_content[2]["text"])
         self.assertIn("绿色奥利奥", serialized)
         self.assertIn("棕色奥利奥", serialized)
@@ -159,6 +187,252 @@ class QwenReviewerTest(unittest.TestCase):
         self.assertEqual(media_type, "image/jpeg")
         self.assertIsNotNone(decoded)
         self.assertEqual(max(decoded.shape[:2]), 1024)
+
+    def test_candidate_contact_sheets_are_numbered_and_bounded(self) -> None:
+        candidates = [
+            CandidateProduct(
+                sku_id=f"SKU_{index}",
+                name=f"商品{index}",
+                row_numbers=(1,),
+                image=FakeSession("{}").image,
+                media_type="image/jpeg",
+            )
+            for index in range(1, 22)
+        ]
+
+        sheets = build_candidate_contact_sheets(candidates)
+
+        self.assertEqual(len(sheets), 2)
+        self.assertEqual(
+            (sheets[0].first_candidate_number, sheets[0].last_candidate_number),
+            (1, 20),
+        )
+        self.assertEqual(
+            (sheets[1].first_candidate_number, sheets[1].last_candidate_number),
+            (21, 21),
+        )
+        first = cv2.imdecode(
+            np.frombuffer(sheets[0].image, dtype=np.uint8),
+            cv2.IMREAD_COLOR,
+        )
+        self.assertIsNotNone(first)
+        self.assertLessEqual(first.shape[1], 1024)
+        self.assertLessEqual(first.shape[0], 1024)
+
+    def test_shortage_row_constraint_fetches_only_expected_row_candidates(self) -> None:
+        session = FakeSession(
+            json.dumps(
+                {
+                    "shortage_product_name": "棕色奥利奥",
+                    "confidence": 0.93,
+                },
+                ensure_ascii=False,
+            ),
+            candidate_rows=[
+                [{"sku_id": "SKU_A", "name": "绿色奥利奥"}],
+                [{"sku_id": "SKU_R", "name": "红色奥利奥"}],
+                [
+                    {"sku_id": "SKU_B", "name": "棕色奥利奥"},
+                    {"sku_id": "SKU_C", "name": "蓝色奥利奥"},
+                ],
+            ],
+        )
+        reviewer = QwenReviewer(
+            sku_base_url="http://sku",
+            qwen_url="http://qwen/v1",
+            session=session,
+        )
+
+        result = reviewer.review(
+            task_type="SHORTAGE",
+            location_id="H1_F_L2_C03",
+            pose_type="SHELF_VIEW_LOWER",
+            current=self.current,
+            bboxes=[[300, 500, 101, 120]],
+            row_constraints=[
+                ReviewRowConstraint(
+                    row_index=3,
+                    row_bbox=(0, 480, 1280, 180),
+                    overlap_ratio=1.0,
+                    detected_row_index=4,
+                )
+            ],
+        )
+
+        self.assertEqual(result.findings[0].shortage_product_name, "棕色奥利奥")
+        image_lookups = [
+            call for call in session.calls if call[1].endswith("/sku/get_image")
+        ]
+        self.assertEqual(
+            [call[2]["params"]["name"] for call in image_lookups],
+            ["棕色奥利奥", "蓝色奥利奥"],
+        )
+        serialized = json.dumps(session.calls[-1][2]["json"], ensure_ascii=False)
+        self.assertIn("画面检测第 4 行，对应 SKU 候选第 3 行", serialized)
+        self.assertIn("棕色奥利奥", serialized)
+        self.assertIn("蓝色奥利奥", serialized)
+        self.assertNotIn("绿色奥利奥", serialized)
+        self.assertNotIn("红色奥利奥", serialized)
+        region_url = session.calls[-1][2]["json"]["messages"][1]["content"][1][
+            "image_url"
+        ]["url"]
+        region_bytes = base64.b64decode(region_url.split(",", 1)[1])
+        region_image = cv2.imdecode(
+            np.frombuffer(region_bytes, dtype=np.uint8),
+            cv2.IMREAD_COLOR,
+        )
+        self.assertEqual(region_image.shape[:2], (204, 161))
+
+    def test_misplaced_row_constraint_limits_only_expected_product(self) -> None:
+        candidate_rows = [
+            [
+                {"sku_id": "SKU_A", "name": "绿色奥利奥"},
+                {"sku_id": "SKU_C", "name": "蓝色奥利奥"},
+            ],
+            [{"sku_id": "SKU_B", "name": "棕色奥利奥"}],
+        ]
+        constraint = ReviewRowConstraint(
+            row_index=1,
+            row_bbox=(0, 0, 1280, 360),
+            overlap_ratio=1.0,
+        )
+        session = FakeSession(
+            [
+                json.dumps(
+                    {
+                        "misplaced_product_name": "棕色奥利奥",
+                        "confidence": 0.92,
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "gt_product_name": "绿色奥利奥",
+                        "confidence": 0.9,
+                    },
+                    ensure_ascii=False,
+                ),
+            ],
+            candidate_rows=candidate_rows,
+        )
+        reviewer = QwenReviewer(
+            sku_base_url="http://sku",
+            qwen_url="http://qwen/v1",
+            session=session,
+        )
+
+        result = reviewer.review(
+            task_type="MISPLACED",
+            location_id="H1_F_L1_C03",
+            pose_type="SHELF_VIEW_UPPER",
+            current=self.current,
+            baseline=self.baseline,
+            bboxes=[[300, 180, 101, 120]],
+            row_constraints=[constraint],
+        )
+
+        self.assertEqual(result.findings[0].misplaced_product_name, "棕色奥利奥")
+        self.assertEqual(result.findings[0].gt_product_name, "绿色奥利奥")
+        self.assertEqual(result.findings[0].confidence, 0.9)
+        qwen_calls = [
+            call for call in session.calls if call[1].endswith("/chat/completions")
+        ]
+        self.assertEqual(len(qwen_calls), 2)
+        misplaced_serialized = json.dumps(
+            qwen_calls[0][2]["json"],
+            ensure_ascii=False,
+        )
+        expected_serialized = json.dumps(
+            qwen_calls[1][2]["json"],
+            ensure_ascii=False,
+        )
+        self.assertIn("不要按异常所在货架行限制候选", misplaced_serialized)
+        self.assertIn(
+            "任务:识别局部图中心当前实际放置的商品。",
+            misplaced_serialized,
+        )
+        self.assertNotIn("location_id=", misplaced_serialized)
+        self.assertIn("SKU 1: 绿色奥利奥", misplaced_serialized)
+        self.assertIn("SKU 2: 蓝色奥利奥", misplaced_serialized)
+        self.assertIn("SKU 3: 棕色奥利奥", misplaced_serialized)
+        self.assertIn("绿色奥利奥", misplaced_serialized)
+        self.assertIn("棕色奥利奥", misplaced_serialized)
+        self.assertIn("货架行上下对比图", expected_serialized)
+        self.assertIn("上半部分是红框内商品被替换后的情况", expected_serialized)
+        self.assertIn("下方摆放正确图中", expected_serialized)
+        self.assertIn("货架摆放对比图：", expected_serialized)
+        self.assertIn("从左到右排列", expected_serialized)
+        self.assertNotIn("任务=MISPLACED 第二阶段", expected_serialized)
+        self.assertIn("绿色奥利奥", expected_serialized)
+        self.assertIn("蓝色奥利奥", expected_serialized)
+        self.assertNotIn("棕色奥利奥", expected_serialized)
+        self.assertLess(
+            expected_serialized.index("SKU 1: 绿色奥利奥"),
+            expected_serialized.index("SKU 2: 蓝色奥利奥"),
+        )
+        misplaced_content = qwen_calls[0][2]["json"]["messages"][1]["content"]
+        self.assertEqual(
+            len([item for item in misplaced_content if item["type"] == "image_url"]),
+            2,
+        )
+        expected_content = qwen_calls[1][2]["json"]["messages"][1]["content"]
+        self.assertEqual(
+            len([item for item in expected_content if item["type"] == "image_url"]),
+            2,
+        )
+        row_url = next(
+            item["image_url"]["url"]
+            for item in expected_content
+            if item["type"] == "image_url"
+        )
+        row_image = cv2.imdecode(
+            np.frombuffer(base64.b64decode(row_url.split(",", 1)[1]), dtype=np.uint8),
+            cv2.IMREAD_COLOR,
+        )
+        self.assertEqual(row_image.shape[:2], (828, 1280))
+        red_pixels = (
+            (row_image[:, :, 2] > 180)
+            & (row_image[:, :, 1] < 100)
+            & (row_image[:, :, 0] < 100)
+        )
+        self.assertGreater(int(red_pixels.sum()), 200)
+        self.assertLess(int(row_image[360, 350, 1]), 80)
+        self.assertGreater(int(row_image[780, 350, 1]), 120)
+
+        invalid_session = FakeSession(
+            [
+                json.dumps(
+                    {
+                        "misplaced_product_name": "棕色奥利奥",
+                        "confidence": 0.9,
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "gt_product_name": "棕色奥利奥",
+                        "confidence": 0.9,
+                    },
+                    ensure_ascii=False,
+                ),
+            ],
+            candidate_rows=candidate_rows,
+        )
+        invalid_reviewer = QwenReviewer(
+            sku_base_url="http://sku",
+            qwen_url="http://qwen/v1",
+            session=invalid_session,
+        )
+        with self.assertRaises(QwenReviewError):
+            invalid_reviewer.review(
+                task_type="MISPLACED",
+                location_id="H1_F_L1_C03",
+                pose_type="SHELF_VIEW_UPPER",
+                current=self.current,
+                baseline=self.baseline,
+                bboxes=[[300, 180, 101, 120]],
+                row_constraints=[constraint],
+            )
 
     def test_misplaced_rejects_product_outside_candidates(self) -> None:
         session = FakeSession(
@@ -190,7 +464,7 @@ class QwenReviewerTest(unittest.TestCase):
         qwen_payload = session.calls[-1][2]["json"]
         system_prompt = qwen_payload["messages"][0]["content"]
         self.assertIn("misplaced_product_name", system_prompt)
-        self.assertIn("gt_product_name", system_prompt)
+        self.assertNotIn("gt_product_name", system_prompt)
         self.assertNotIn("shortage_product_name", system_prompt)
 
     def test_no_bbox_skips_all_upstream_requests(self) -> None:

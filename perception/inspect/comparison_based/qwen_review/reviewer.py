@@ -28,18 +28,30 @@ from config import QWEN3_MODEL, QWEN3_URL, SKU_API_URL  # noqa: E402
 
 
 TaskType = Literal["SHORTAGE", "MISPLACED"]
+MisplacedStage = Literal["misplaced_product", "expected_product"]
 PoseType = Literal["", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
 TARGET_SIZE = (1280, 720)
 SKU_TIMEOUT_SECONDS = 8.0
 QWEN_TIMEOUT_SECONDS = 120.0
 MAX_REFERENCE_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_REFERENCE_IMAGE_SIDE = 1024
+CONTACT_SHEET_COLUMNS = 5
+CONTACT_SHEET_MAX_ROWS = 4
+CONTACT_SHEET_TILE_WIDTH = 184
+CONTACT_SHEET_IMAGE_HEIGHT = 176
+CONTACT_SHEET_LABEL_HEIGHT = 36
+CONTACT_SHEET_GAP = 10
+CONTACT_SHEET_MARGIN = 12
 UNKNOWN_NAMES = {"", "UNKNOWN", "无法确认", "不确定"}
 logger = logging.getLogger("uvicorn.error")
 PROMPT_ROOT = Path(__file__).resolve().parent
 PROMPT_PATHS: dict[TaskType, Path] = {
     "SHORTAGE": PROMPT_ROOT / "shortage_prompt.txt",
     "MISPLACED": PROMPT_ROOT / "misplaced_prompt.txt",
+}
+MISPLACED_PROMPT_PATHS: dict[MisplacedStage, Path] = {
+    "misplaced_product": PROMPT_ROOT / "misplaced_prompt.txt",
+    "expected_product": PROMPT_ROOT / "misplaced_expected_prompt.txt",
 }
 DEFAULT_DEBUG_ROOT = Path(
     os.getenv("INSPECT_QWEN_DEBUG_DIR", str(PROMPT_ROOT / "debug"))
@@ -59,6 +71,26 @@ class CandidateProduct:
     row_numbers: tuple[int, ...]
     image: bytes
     media_type: str
+
+
+@dataclass(frozen=True)
+class CandidateContactSheet:
+    """One numbered grid image containing a contiguous candidate range."""
+
+    first_candidate_number: int
+    last_candidate_number: int
+    image: bytes
+    media_type: str = "image/jpeg"
+
+
+@dataclass(frozen=True)
+class ReviewRowConstraint:
+    """Reliable mapping between one finding and a visible shelf row."""
+
+    row_index: int
+    row_bbox: tuple[int, int, int, int]
+    overlap_ratio: float
+    detected_row_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -109,23 +141,56 @@ class QwenReviewer:
         location_id: str,
         pose_type: PoseType,
         current: np.ndarray,
+        baseline: np.ndarray | None = None,
         bboxes: Sequence[Sequence[int]],
+        row_constraints: Sequence[ReviewRowConstraint | None] | None = None,
     ) -> QwenReviewResult:
         if task_type not in {"SHORTAGE", "MISPLACED"}:
             raise ValueError("task_type must be SHORTAGE or MISPLACED")
         if not bboxes:
             return QwenReviewResult((), "", ())
+        if row_constraints is None:
+            normalized_constraints: list[ReviewRowConstraint | None] = [
+                None
+            ] * len(bboxes)
+        else:
+            if len(row_constraints) != len(bboxes):
+                raise ValueError("row_constraints must match bboxes")
+            normalized_constraints = list(row_constraints)
 
         current = _resize_image(current)
+        baseline = _resize_image(baseline) if baseline is not None else current
         normalized_bboxes = [_normalize_bbox(bbox) for bbox in bboxes]
         debug_directory = self._create_debug_directory(
             task_type,
             location_id,
             pose_type,
             normalized_bboxes,
+            normalized_constraints,
         )
         rows = self._fetch_candidate_rows(location_id, pose_type)
-        candidates = self._fetch_candidate_images(rows)
+        normalized_constraints = [
+            constraint
+            if constraint is not None
+            and 1 <= constraint.row_index <= len(rows)
+            else None
+            for constraint in normalized_constraints
+        ]
+        included_row_numbers: set[int] | None = None
+        if task_type == "SHORTAGE" and all(
+            constraint is not None for constraint in normalized_constraints
+        ):
+            requested_rows = {
+                constraint.row_index
+                for constraint in normalized_constraints
+                if constraint is not None
+            }
+            if all(rows[row_number - 1] for row_number in requested_rows):
+                included_row_numbers = requested_rows
+        candidates = self._fetch_candidate_images(
+            rows,
+            included_row_numbers=included_row_numbers,
+        )
         if not candidates:
             raise QwenReviewError("candidate_lookup", "SKU 服务未返回候选商品")
 
@@ -144,52 +209,195 @@ class QwenReviewer:
                         }
                         for candidate in candidates
                     ],
+                    "row_constraints": [
+                        _row_constraint_dict(constraint)
+                        for constraint in normalized_constraints
+                    ],
                 },
             )
         findings: list[ReviewedFinding] = []
-        raw_responses: list[str] = []
+        raw_responses: list[Any] = []
         # Intentionally review each bbox in an independent Qwen request. This
         # keeps the model's task local and avoids cross-region bookkeeping.
-        for region_index, bbox in enumerate(normalized_bboxes, start=1):
-            region_image = crop_review_region(current, bbox, task_type)
-            payload = build_qwen_payload(
-                task_type=task_type,
-                location_id=location_id,
-                pose_type=pose_type,
-                region_image=region_image,
-                candidate_rows=rows,
-                candidates=candidates,
-                model=self.qwen_model,
+        for region_index, (bbox, row_constraint) in enumerate(
+            zip(normalized_bboxes, normalized_constraints),
+            start=1,
+        ):
+            expected_candidates = (
+                [
+                    candidate
+                    for candidate in candidates
+                    if row_constraint.row_index in candidate.row_numbers
+                ]
+                if row_constraint is not None
+                else list(candidates)
             )
+            if not expected_candidates:
+                row_constraint = None
+                expected_candidates = list(candidates)
             region_directory = (
                 debug_directory / f"region_{region_index:02d}"
                 if debug_directory is not None
                 else None
             )
-            if region_directory is not None:
-                region_directory.mkdir(parents=True, exist_ok=True)
-                _write_image(region_directory / "bbox_expanded.jpg", region_image)
-                _write_text(
-                    region_directory / "prompt.txt",
-                    _payload_as_readable_prompt(payload),
+            if task_type == "SHORTAGE":
+                region_image = crop_review_region(
+                    baseline,
+                    bbox,
+                    task_type,
+                    row_bbox=(
+                        row_constraint.row_bbox
+                        if row_constraint is not None
+                        else None
+                    ),
                 )
-            raw = self._request_qwen(payload)
-            raw_responses.append(raw)
-            if region_directory is not None:
-                _write_text(region_directory / "qwen_raw.txt", raw)
-            finding = parse_qwen_review(
-                raw,
-                task_type=task_type,
-                candidate_names=candidate_names,
-                region_index=region_index,
-            )
+                payload = build_qwen_payload(
+                    task_type=task_type,
+                    location_id=location_id,
+                    pose_type=pose_type,
+                    region_image=region_image,
+                    candidate_rows=rows,
+                    candidates=expected_candidates,
+                    model=self.qwen_model,
+                    expected_row_index=(
+                        row_constraint.row_index
+                        if row_constraint is not None
+                        else None
+                    ),
+                    detected_row_index=(
+                        row_constraint.detected_row_index
+                        if row_constraint is not None
+                        else None
+                    ),
+                )
+                if region_directory is not None:
+                    region_directory.mkdir(parents=True, exist_ok=True)
+                    _write_image(region_directory / "bbox_expanded.jpg", region_image)
+                    _write_text(
+                        region_directory / "prompt.txt",
+                        _payload_as_readable_prompt(payload),
+                    )
+                raw = self._request_qwen(payload)
+                raw_responses.append(raw)
+                if region_directory is not None:
+                    _write_text(region_directory / "qwen_raw.txt", raw)
+                finding = parse_qwen_review(
+                    raw,
+                    task_type=task_type,
+                    candidate_names=candidate_names,
+                    expected_names={
+                        candidate.name for candidate in expected_candidates
+                    },
+                    region_index=region_index,
+                )
+                if region_directory is not None:
+                    _write_json(
+                        region_directory / "parsed_result.json",
+                        _reviewed_finding_dict(finding),
+                    )
+            else:
+                misplaced_image = crop_review_region(current, bbox, "MISPLACED")
+                expected_image = build_expected_product_row_image(
+                    current,
+                    baseline,
+                    bbox,
+                    row_bbox=(
+                        row_constraint.row_bbox
+                        if row_constraint is not None
+                        else None
+                    ),
+                )
+                misplaced_payload = build_qwen_payload(
+                    task_type="MISPLACED",
+                    location_id=location_id,
+                    pose_type=pose_type,
+                    region_image=misplaced_image,
+                    candidate_rows=rows,
+                    candidates=candidates,
+                    model=self.qwen_model,
+                    misplaced_stage="misplaced_product",
+                )
+                expected_payload = build_qwen_payload(
+                    task_type="MISPLACED",
+                    location_id=location_id,
+                    pose_type=pose_type,
+                    region_image=expected_image,
+                    candidate_rows=rows,
+                    candidates=expected_candidates,
+                    model=self.qwen_model,
+                    expected_row_index=(
+                        row_constraint.row_index
+                        if row_constraint is not None
+                        else None
+                    ),
+                    detected_row_index=(
+                        row_constraint.detected_row_index
+                        if row_constraint is not None
+                        else None
+                    ),
+                    misplaced_stage="expected_product",
+                )
+                if region_directory is not None:
+                    _write_stage_debug_input(
+                        region_directory,
+                        "misplaced_product",
+                        misplaced_image,
+                        misplaced_payload,
+                    )
+                misplaced_raw = self._request_qwen(misplaced_payload)
+                misplaced_finding = parse_qwen_review(
+                    misplaced_raw,
+                    task_type="MISPLACED",
+                    candidate_names=candidate_names,
+                    region_index=region_index,
+                    misplaced_stage="misplaced_product",
+                )
+                if region_directory is not None:
+                    _write_stage_debug_output(
+                        region_directory,
+                        "misplaced_product",
+                        misplaced_raw,
+                        misplaced_finding,
+                    )
+
+                if region_directory is not None:
+                    _write_stage_debug_input(
+                        region_directory,
+                        "expected_product",
+                        expected_image,
+                        expected_payload,
+                    )
+                expected_raw = self._request_qwen(expected_payload)
+                expected_finding = parse_qwen_review(
+                    expected_raw,
+                    task_type="MISPLACED",
+                    candidate_names=candidate_names,
+                    expected_names={
+                        candidate.name for candidate in expected_candidates
+                    },
+                    region_index=region_index,
+                    misplaced_stage="expected_product",
+                )
+                if region_directory is not None:
+                    _write_stage_debug_output(
+                        region_directory,
+                        "expected_product",
+                        expected_raw,
+                        expected_finding,
+                    )
+                raw_responses.append(
+                    {
+                        "misplaced_product": misplaced_raw,
+                        "expected_product": expected_raw,
+                    }
+                )
+                finding = combine_misplaced_stage_findings(
+                    misplaced_finding,
+                    expected_finding,
+                    region_index=region_index,
+                )
             if finding is not None:
                 findings.append(finding)
-            if region_directory is not None:
-                _write_json(
-                    region_directory / "parsed_result.json",
-                    _reviewed_finding_dict(finding),
-                )
         if debug_directory is not None:
             _write_json(
                 debug_directory / "result.json",
@@ -197,7 +405,10 @@ class QwenReviewer:
                     "findings": [
                         _reviewed_finding_dict(finding) for finding in findings
                     ],
-                    "raw_response_count": len(raw_responses),
+                    "raw_response_count": sum(
+                        len(response) if isinstance(response, dict) else 1
+                        for response in raw_responses
+                    ),
                 },
             )
         return QwenReviewResult(
@@ -213,6 +424,7 @@ class QwenReviewer:
         location_id: str,
         pose_type: PoseType,
         bboxes: Sequence[Sequence[int]],
+        row_constraints: Sequence[ReviewRowConstraint | None],
     ) -> Path | None:
         if self.debug_root is None:
             return None
@@ -237,6 +449,10 @@ class QwenReviewer:
                 "pose_type": pose_type,
                 "bbox_format": ["x", "y", "width", "height"],
                 "bboxes": [list(bbox) for bbox in bboxes],
+                "row_constraints": [
+                    _row_constraint_dict(constraint)
+                    for constraint in row_constraints
+                ],
             },
         )
         logger.info(
@@ -297,11 +513,18 @@ class QwenReviewer:
     def _fetch_candidate_images(
         self,
         rows: Sequence[Sequence[dict[str, str]]],
+        *,
+        included_row_numbers: set[int] | None = None,
     ) -> list[CandidateProduct]:
         row_numbers_by_name: dict[str, list[int]] = {}
         sku_by_name: dict[str, str] = {}
         ordered_names: list[str] = []
         for row_number, row in enumerate(rows, start=1):
+            if (
+                included_row_numbers is not None
+                and row_number not in included_row_numbers
+            ):
+                continue
             for item in row:
                 name = item["name"]
                 if name not in row_numbers_by_name:
@@ -400,59 +623,125 @@ def build_qwen_payload(
     candidate_rows: Sequence[Sequence[dict[str, str]]],
     candidates: Sequence[CandidateProduct],
     model: str,
+    expected_row_index: int | None = None,
+    detected_row_index: int | None = None,
+    misplaced_stage: MisplacedStage | None = None,
+    candidate_sheets: Sequence[CandidateContactSheet] | None = None,
 ) -> dict[str, Any]:
+    row_location = (
+        f"画面检测第 {detected_row_index} 行，对应 SKU 候选第 {expected_row_index} 行"
+        if detected_row_index is not None
+        and expected_row_index is not None
+        and detected_row_index != expected_row_index
+        else f"当前画面从上到下第 {expected_row_index} 行"
+    )
     if task_type == "SHORTAGE":
+        row_hint = (
+            f"异常区域位于{row_location}；"
+            "缺货商品只能从这一行的候选商品中选择。"
+            if expected_row_index is not None
+            else ""
+        )
         content: list[dict[str, Any]] = [
-            {"type": "text", "text": "请只审核下面这一张扩展后的货架局部图："},
-            _numpy_image_content(region_image),
-            {"type": "text", "text": _candidate_names_text(candidates)},
-        ]
-    else:
-        content = [
             {
                 "type": "text",
                 "text": (
-                    f"任务={task_type}，location_id={location_id}，pose_type={pose_type!r}。"
-                    "请只审核下面这一张扩展后的货架局部图。"
+                    "请只审核下面这一张从缺货前 reference 裁出的"
+                    f"货架局部图：{row_hint}"
                 ),
             },
-            {"type": "text", "text": _candidate_rows_text(candidate_rows)},
+            _numpy_image_content(region_image),
+            {"type": "text", "text": _candidate_names_text(candidates)},
+        ]
+    elif misplaced_stage == "misplaced_product":
+        content = [
             {
                 "type": "text",
-                "text": "扩展后的当前货架局部图；重点查看中心商品及左右相邻商品：",
+                "text": "任务:识别局部图中心当前实际放置的商品。",
             },
             _numpy_image_content(region_image),
+            {
+                "type": "text",
+                "text": _candidate_number_mapping_text(candidates),
+            },
         ]
-
-    content.append({"type": "text", "text": "下面是候选 SKU 标准图："})
-    for candidate_index, candidate in enumerate(candidates, start=1):
-        if task_type == "SHORTAGE":
-            candidate_label = f"CANDIDATE {candidate_index}: {candidate.name};"
-        else:
-            rows = ",".join(str(value) for value in candidate.row_numbers)
-            candidate_label = (
-                f"CANDIDATE {candidate_index}: sku_id={candidate.sku_id}; "
-                f"name={candidate.name}; 可见行序号={rows}"
-            )
-        content.extend(
-            [
-                {
-                    "type": "text",
-                    "text": candidate_label,
-                },
-                _bytes_image_content(candidate.image, candidate.media_type),
-            ]
+    elif misplaced_stage == "expected_product":
+        content = [
+            {
+                "type": "text",
+                "text": "货架摆放对比图：",
+            },
+            _numpy_image_content(region_image),
+            {
+                "type": "text",
+                "text": _candidate_number_mapping_text(candidates),
+            },
+        ]
+    else:
+        raise ValueError(
+            "MISPLACED requires misplaced_stage=misplaced_product or expected_product"
         )
+
+    if task_type == "SHORTAGE":
+        content.append({"type": "text", "text": "下面是候选 SKU 标准图："})
+        for candidate_index, candidate in enumerate(candidates, start=1):
+            content.extend(
+                [
+                    {
+                        "type": "text",
+                        "text": f"CANDIDATE {candidate_index}: {candidate.name};",
+                    },
+                    _bytes_image_content(candidate.image, candidate.media_type),
+                ]
+            )
+    else:
+        sheets = (
+            list(candidate_sheets)
+            if candidate_sheets is not None
+            else build_candidate_contact_sheets(candidates)
+        )
+        if candidates and not sheets:
+            raise QwenReviewError("payload_assembly", "候选 SKU 拼图为空")
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    "下面是候选 SKU 标准图拼图；每格上方数字与候选 SKU 编号一致。"
+                ),
+            }
+        )
+        for sheet_index, sheet in enumerate(sheets, start=1):
+            if len(sheets) > 1:
+                content.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            f"拼图 {sheet_index}：SKU {sheet.first_candidate_number}"
+                            f"-{sheet.last_candidate_number}"
+                        ),
+                    }
+                )
+            content.append(_bytes_image_content(sheet.image, sheet.media_type))
     content.append(
         {
             "type": "text",
-            "text": "请按系统消息规定的简单 JSON 格式返回这一张局部图的结果。",
+            "text": (
+                "请按系统消息规定的简单 JSON 格式返回这一组整行对比输入的结果。"
+                if misplaced_stage == "expected_product"
+                else "请按系统消息规定的简单 JSON 格式返回这一张局部图的结果。"
+            ),
         }
     )
     return {
         "model": model,
         "messages": [
-            {"role": "system", "content": load_system_prompt(task_type)},
+            {
+                "role": "system",
+                "content": load_system_prompt(
+                    task_type,
+                    misplaced_stage=misplaced_stage,
+                ),
+            },
             {"role": "user", "content": content},
         ],
         "temperature": 0,
@@ -460,9 +749,17 @@ def build_qwen_payload(
     }
 
 
-def load_system_prompt(task_type: TaskType) -> str:
+def load_system_prompt(
+    task_type: TaskType,
+    *,
+    misplaced_stage: MisplacedStage | None = None,
+) -> str:
     try:
-        path = PROMPT_PATHS[task_type]
+        path = (
+            MISPLACED_PROMPT_PATHS[misplaced_stage or "misplaced_product"]
+            if task_type == "MISPLACED"
+            else PROMPT_PATHS[task_type]
+        )
     except KeyError as error:
         raise ValueError("task_type must be SHORTAGE or MISPLACED") from error
     try:
@@ -512,6 +809,21 @@ def _reviewed_finding_dict(finding: ReviewedFinding | None) -> dict[str, Any]:
     return result
 
 
+def _row_constraint_dict(
+    constraint: ReviewRowConstraint | None,
+) -> dict[str, Any] | None:
+    if constraint is None:
+        return None
+    value = {
+        "row_index": constraint.row_index,
+        "row_bbox": list(constraint.row_bbox),
+        "overlap_ratio": constraint.overlap_ratio,
+    }
+    if constraint.detected_row_index is not None:
+        value["detected_row_index"] = constraint.detected_row_index
+    return value
+
+
 def _write_text(path: Path, value: str) -> None:
     try:
         path.write_text(value, encoding="utf-8")
@@ -543,12 +855,49 @@ def _write_image(path: Path, image: np.ndarray) -> None:
         ) from error
 
 
+def _write_stage_debug_input(
+    region_directory: Path,
+    stage: MisplacedStage,
+    image: np.ndarray,
+    payload: dict[str, Any],
+) -> None:
+    stage_directory = region_directory / stage
+    try:
+        stage_directory.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise QwenReviewError(
+            "debug_artifact",
+            f"无法创建 Qwen 阶段调试目录: {stage_directory}",
+        ) from error
+    _write_image(stage_directory / "input.jpg", image)
+    _write_text(
+        stage_directory / "prompt.txt",
+        _payload_as_readable_prompt(payload),
+    )
+
+
+def _write_stage_debug_output(
+    region_directory: Path,
+    stage: MisplacedStage,
+    raw: str,
+    finding: ReviewedFinding | None,
+) -> None:
+    stage_directory = region_directory / stage
+    _write_text(stage_directory / "qwen_raw.txt", raw)
+    _write_json(
+        stage_directory / "parsed_result.json",
+        _reviewed_finding_dict(finding),
+    )
+
+
 def parse_qwen_review(
     content: str,
     *,
     task_type: TaskType,
     candidate_names: set[str],
     region_index: int,
+    expected_names: set[str] | None = None,
+    misplaced_stage: MisplacedStage | None = None,
 ) -> ReviewedFinding | None:
     normalized = content.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", normalized, re.DOTALL)
@@ -574,7 +923,7 @@ def parse_qwen_review(
     if task_type == "SHORTAGE":
         name = _validated_name(
             payload.get("shortage_product_name"),
-            candidate_names,
+            expected_names or candidate_names,
             "shortage_product_name",
         )
         if name is None:
@@ -585,6 +934,33 @@ def parse_qwen_review(
             shortage_product_name=name,
         )
 
+    if misplaced_stage == "misplaced_product":
+        misplaced_name = _validated_name(
+            payload.get("misplaced_product_name"),
+            candidate_names,
+            "misplaced_product_name",
+        )
+        if misplaced_name is None:
+            return None
+        return ReviewedFinding(
+            region_index=region_index,
+            confidence=confidence,
+            misplaced_product_name=misplaced_name,
+        )
+    if misplaced_stage == "expected_product":
+        gt_name = _validated_name(
+            payload.get("gt_product_name"),
+            expected_names or candidate_names,
+            "gt_product_name",
+        )
+        if gt_name is None:
+            return None
+        return ReviewedFinding(
+            region_index=region_index,
+            confidence=confidence,
+            gt_product_name=gt_name,
+        )
+
     misplaced_name = _validated_name(
         payload.get("misplaced_product_name"),
         candidate_names,
@@ -592,7 +968,7 @@ def parse_qwen_review(
     )
     gt_name = _validated_name(
         payload.get("gt_product_name"),
-        candidate_names,
+        expected_names or candidate_names,
         "gt_product_name",
     )
     if misplaced_name is None or gt_name is None or misplaced_name == gt_name:
@@ -600,6 +976,28 @@ def parse_qwen_review(
     return ReviewedFinding(
         region_index=region_index,
         confidence=confidence,
+        misplaced_product_name=misplaced_name,
+        gt_product_name=gt_name,
+    )
+
+
+def combine_misplaced_stage_findings(
+    misplaced: ReviewedFinding | None,
+    expected: ReviewedFinding | None,
+    *,
+    region_index: int,
+) -> ReviewedFinding | None:
+    """Join independently validated MISPLACED stages into one public finding."""
+
+    if misplaced is None or expected is None:
+        return None
+    misplaced_name = misplaced.misplaced_product_name
+    gt_name = expected.gt_product_name
+    if not misplaced_name or not gt_name or misplaced_name == gt_name:
+        return None
+    return ReviewedFinding(
+        region_index=region_index,
+        confidence=min(misplaced.confidence, expected.confidence),
         misplaced_product_name=misplaced_name,
         gt_product_name=gt_name,
     )
@@ -636,6 +1034,160 @@ def _candidate_names_text(candidates: Sequence[CandidateProduct]) -> str:
     )
 
 
+def _candidate_number_mapping_text(
+    candidates: Sequence[CandidateProduct],
+) -> str:
+    lines = ["候选 SKU 编号（与下方标准图拼图上方数字一致）："]
+    lines.extend(
+        f"SKU {candidate_number}: {candidate.name}"
+        for candidate_number, candidate in enumerate(candidates, start=1)
+    )
+    lines.append("所有输出商品名必须从以上名称中逐字选择。")
+    return "\n".join(lines)
+
+
+def build_candidate_contact_sheets(
+    candidates: Sequence[CandidateProduct],
+) -> list[CandidateContactSheet]:
+    """Pack MISPLACED reference images into numbered, bounded-size grids."""
+
+    max_candidates_per_sheet = CONTACT_SHEET_COLUMNS * CONTACT_SHEET_MAX_ROWS
+    sheets: list[CandidateContactSheet] = []
+    for chunk_start in range(0, len(candidates), max_candidates_per_sheet):
+        chunk = candidates[chunk_start : chunk_start + max_candidates_per_sheet]
+        column_count = min(CONTACT_SHEET_COLUMNS, len(chunk))
+        row_count = (len(chunk) + column_count - 1) // column_count
+        cell_height = CONTACT_SHEET_LABEL_HEIGHT + CONTACT_SHEET_IMAGE_HEIGHT
+        canvas_width = (
+            CONTACT_SHEET_MARGIN * 2
+            + column_count * CONTACT_SHEET_TILE_WIDTH
+            + (column_count - 1) * CONTACT_SHEET_GAP
+        )
+        canvas_height = (
+            CONTACT_SHEET_MARGIN * 2
+            + row_count * cell_height
+            + (row_count - 1) * CONTACT_SHEET_GAP
+        )
+        canvas = np.full(
+            (canvas_height, canvas_width, 3),
+            246,
+            dtype=np.uint8,
+        )
+
+        for chunk_index, candidate in enumerate(chunk):
+            candidate_number = chunk_start + chunk_index + 1
+            row_index, column_index = divmod(
+                chunk_index,
+                CONTACT_SHEET_COLUMNS,
+            )
+            left = (
+                CONTACT_SHEET_MARGIN
+                + column_index
+                * (CONTACT_SHEET_TILE_WIDTH + CONTACT_SHEET_GAP)
+            )
+            top = (
+                CONTACT_SHEET_MARGIN
+                + row_index * (cell_height + CONTACT_SHEET_GAP)
+            )
+            right = left + CONTACT_SHEET_TILE_WIDTH
+            bottom = top + cell_height
+            image_top = top + CONTACT_SHEET_LABEL_HEIGHT
+
+            cv2.rectangle(
+                canvas,
+                (left, top),
+                (right - 1, image_top - 1),
+                (230, 238, 247),
+                -1,
+            )
+            cv2.rectangle(
+                canvas,
+                (left, image_top),
+                (right - 1, bottom - 1),
+                (255, 255, 255),
+                -1,
+            )
+            cv2.rectangle(
+                canvas,
+                (left, top),
+                (right - 1, bottom - 1),
+                (90, 100, 112),
+                1,
+            )
+
+            label = str(candidate_number)
+            (label_width, label_height), _ = cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.85,
+                2,
+            )
+            cv2.putText(
+                canvas,
+                label,
+                (
+                    left + (CONTACT_SHEET_TILE_WIDTH - label_width) // 2,
+                    top
+                    + (CONTACT_SHEET_LABEL_HEIGHT + label_height) // 2
+                    - 2,
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.85,
+                (25, 31, 38),
+                2,
+                cv2.LINE_AA,
+            )
+
+            decoded = cv2.imdecode(
+                np.frombuffer(candidate.image, dtype=np.uint8),
+                cv2.IMREAD_COLOR,
+            )
+            if decoded is None:
+                raise QwenReviewError(
+                    "payload_assembly",
+                    f"候选商品 {candidate.name} 的标准图无法生成拼图",
+                )
+            source_height, source_width = decoded.shape[:2]
+            available_width = CONTACT_SHEET_TILE_WIDTH - 12
+            available_height = CONTACT_SHEET_IMAGE_HEIGHT - 12
+            scale = min(
+                available_width / source_width,
+                available_height / source_height,
+            )
+            resized_width = max(1, round(source_width * scale))
+            resized_height = max(1, round(source_height * scale))
+            interpolation = cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR
+            resized = cv2.resize(
+                decoded,
+                (resized_width, resized_height),
+                interpolation=interpolation,
+            )
+            image_left = left + (CONTACT_SHEET_TILE_WIDTH - resized_width) // 2
+            target_top = image_top + (
+                CONTACT_SHEET_IMAGE_HEIGHT - resized_height
+            ) // 2
+            canvas[
+                target_top : target_top + resized_height,
+                image_left : image_left + resized_width,
+            ] = resized
+
+        success, encoded = cv2.imencode(
+            ".jpg",
+            canvas,
+            [cv2.IMWRITE_JPEG_QUALITY, 92],
+        )
+        if not success:
+            raise QwenReviewError("payload_assembly", "无法编码候选 SKU 拼图")
+        sheets.append(
+            CandidateContactSheet(
+                first_candidate_number=chunk_start + 1,
+                last_candidate_number=chunk_start + len(chunk),
+                image=encoded.tobytes(),
+            )
+        )
+    return sheets
+
+
 def _crop(
     image: np.ndarray,
     bbox: Sequence[int],
@@ -643,6 +1195,8 @@ def _crop(
     x_scale: float,
     y_scale: float,
     max_y_padding: int | None = None,
+    row_bbox: Sequence[int] | None = None,
+    row_context: int = 12,
 ) -> np.ndarray:
     x, y, width, height = bbox
     x_padding = round(width * x_scale)
@@ -653,6 +1207,14 @@ def _crop(
     top = max(0, y - y_padding)
     right = min(image.shape[1], x + width + x_padding)
     bottom = min(image.shape[0], y + height + y_padding)
+    if row_bbox is not None:
+        if len(row_bbox) != 4:
+            raise ValueError("row_bbox must be [x, y, width, height]")
+        _, row_y, _, row_height = (int(value) for value in row_bbox)
+        top = max(top, row_y - row_context)
+        bottom = min(bottom, row_y + row_height + row_context)
+        if bottom <= top:
+            raise ValueError("row_bbox does not overlap the review crop")
     return image[top:bottom, left:right]
 
 
@@ -660,6 +1222,8 @@ def crop_review_region(
     image: np.ndarray,
     bbox: Sequence[int],
     task_type: TaskType,
+    *,
+    row_bbox: Sequence[int] | None = None,
 ) -> np.ndarray:
     """Expand a detector bbox into the local image actually sent to Qwen."""
 
@@ -670,6 +1234,7 @@ def crop_review_region(
             x_scale=0.3,
             y_scale=1.5,
             max_y_padding=100,
+            row_bbox=row_bbox,
         )
     if task_type == "MISPLACED":
         return _crop(
@@ -678,8 +1243,123 @@ def crop_review_region(
             x_scale=1.0,
             y_scale=0.5,
             max_y_padding=80,
+            row_bbox=row_bbox,
         )
     raise ValueError("task_type must be SHORTAGE or MISPLACED")
+
+
+def crop_expected_row_region(
+    image: np.ndarray,
+    bbox: Sequence[int],
+    *,
+    row_bbox: Sequence[int] | None,
+    row_context: int = 12,
+) -> np.ndarray:
+    """Return the complete expected shelf row with the anomaly position marked."""
+
+    x, y, width, height = _normalize_bbox(bbox)
+    image_height, image_width = image.shape[:2]
+    if row_bbox is not None:
+        if len(row_bbox) != 4:
+            raise ValueError("row_bbox must be [x, y, width, height]")
+        row_x, row_y, row_width, row_height = (
+            int(value) for value in row_bbox
+        )
+        left = max(0, row_x)
+        top = max(0, row_y - row_context)
+        right = min(image_width, row_x + row_width)
+        bottom = min(image_height, row_y + row_height + row_context)
+    else:
+        left = 0
+        top = max(0, y - height)
+        right = image_width
+        bottom = min(image_height, y + height * 2)
+    if right <= left or bottom <= top:
+        raise ValueError("row_bbox does not define a visible shelf row")
+
+    row_image = image[top:bottom, left:right].copy()
+    box_left = max(0, x - left)
+    box_top = max(0, y - top)
+    box_right = min(row_image.shape[1] - 1, x + width - left)
+    box_bottom = min(row_image.shape[0] - 1, y + height - top)
+    if box_right > box_left and box_bottom > box_top:
+        cv2.rectangle(
+            row_image,
+            (box_left, box_top),
+            (box_right, box_bottom),
+            (0, 0, 255),
+            4,
+        )
+    return row_image
+
+
+def build_expected_product_row_image(
+    current: np.ndarray,
+    baseline: np.ndarray,
+    bbox: Sequence[int],
+    *,
+    row_bbox: Sequence[int] | None,
+) -> np.ndarray:
+    """Stack current/reference target rows for missing-SKU reasoning."""
+
+    current_row = crop_expected_row_region(
+        current,
+        bbox,
+        row_bbox=row_bbox,
+    )
+    reference_row = crop_expected_row_region(
+        baseline,
+        bbox,
+        row_bbox=row_bbox,
+    )
+    if reference_row.shape[:2] != current_row.shape[:2]:
+        reference_row = cv2.resize(
+            reference_row,
+            (current_row.shape[1], current_row.shape[0]),
+            interpolation=cv2.INTER_LINEAR,
+        )
+
+    current_panel = _label_row_panel(
+        current_row,
+        "CURRENT ROW - AFTER MISPLACEMENT",
+        background=(45, 45, 45),
+    )
+    reference_panel = _label_row_panel(
+        reference_row,
+        "REFERENCE ROW - CORRECT PLACEMENT",
+        background=(55, 80, 25),
+    )
+    divider = np.full(
+        (8, current_panel.shape[1], 3),
+        (235, 235, 235),
+        dtype=np.uint8,
+    )
+    return np.vstack((current_panel, divider, reference_panel))
+
+
+def _label_row_panel(
+    image: np.ndarray,
+    label: str,
+    *,
+    background: tuple[int, int, int],
+) -> np.ndarray:
+    header_height = 38
+    header = np.full(
+        (header_height, image.shape[1], 3),
+        background,
+        dtype=np.uint8,
+    )
+    cv2.putText(
+        header,
+        label,
+        (14, 27),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.72,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    return np.vstack((header, image))
 
 
 def _numpy_image_content(image: np.ndarray) -> dict[str, Any]:
