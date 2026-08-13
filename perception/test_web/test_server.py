@@ -260,6 +260,26 @@ CANDIDATE 2: 商品B;
             server.resolve_descendant(root, "../manifest.json")
         self.assertEqual(raised.exception.status_code, 400)
 
+    def test_legacy_absolute_sample_path_is_reanchored_to_current_data(self) -> None:
+        legacy = (
+            r"C:\old\checkout\perception\test_data"
+            r"\inspect_shortage_paired\1_1.jpg"
+        )
+
+        self.assertEqual(
+            server.resolve_sample_data_path(legacy),
+            (
+                server.DATA_ROOT
+                / "inspect_shortage_paired"
+                / "1_1.jpg"
+            ).resolve(),
+        )
+
+    def test_absolute_path_outside_test_data_is_rejected(self) -> None:
+        with self.assertRaises(HTTPException) as raised:
+            server.resolve_sample_data_path(r"C:\private\receipt.jpg")
+        self.assertEqual(raised.exception.status_code, 400)
+
     def test_saved_prompt_rejects_stale_candidate_image_count(self) -> None:
         with self.assertRaises(HTTPException) as raised:
             server.validate_saved_prompt_images(

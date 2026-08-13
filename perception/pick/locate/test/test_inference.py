@@ -12,7 +12,8 @@ import requests
 from PIL import Image, ImageDraw, UnidentifiedImageError
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_IMAGE_DIRECTORY = ROOT.parents[1] / "test_data" / "2026-08-04"
+PERCEPTION_ROOT = ROOT.parents[2]
+DEFAULT_IMAGE_DIRECTORY = PERCEPTION_ROOT / "test_data" / "2026-08-04"
 DEFAULT_IMAGE_MAPPING_PATH = DEFAULT_IMAGE_DIRECTORY / "image_name_mapping.json"
 DEFAULT_RESULT_DIRECTORY = DEFAULT_IMAGE_DIRECTORY / "locate_results"
 SKU_API_URL = os.getenv("SKU_API_URL", "http://127.0.0.1:25540").rstrip("/")

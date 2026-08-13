@@ -8,7 +8,7 @@ import re
 import sys
 import time
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import ModuleType
 
 import requests
@@ -20,11 +20,14 @@ from pydantic import BaseModel, Field
 
 
 ROOT = Path(__file__).resolve().parent
-PERCEPTION_ROOT = ROOT.parents[2]
+PERCEPTION_ROOT = ROOT.parent
 if str(PERCEPTION_ROOT) not in sys.path:
     sys.path.insert(0, str(PERCEPTION_ROOT))
 from config import QWEN3_MODEL, QWEN3_URL, SAM3_URL, SERVICE_BIND_HOST  # noqa: E402
 
+LOCATE_ROOT = PERCEPTION_ROOT / "pick" / "locate"
+INSPECT_ROOT = PERCEPTION_ROOT / "inspect"
+DATA_ROOT = PERCEPTION_ROOT / "test_data"
 STATIC_DIR = ROOT / "static"
 RGB_DIR = DATA_ROOT / "2026-08-04"
 SKU_CATALOG_PATH = PERCEPTION_ROOT / "sku" / "products.json"
@@ -495,8 +498,8 @@ def run_full_inspect(request: FullInspectRunRequest) -> dict:
     if not isinstance(baseline_relative, str) or not isinstance(current_relative, str):
         raise HTTPException(status_code=500, detail="Qwen 样例缺少 baseline/current")
 
-    baseline_path = resolve_descendant(DATA_ROOT, baseline_relative)
-    current_path = resolve_descendant(DATA_ROOT, current_relative)
+    baseline_path = resolve_sample_data_path(baseline_relative)
+    current_path = resolve_sample_data_path(current_relative)
     try:
         baseline_base64 = base64.b64encode(baseline_path.read_bytes()).decode("ascii")
         current_base64 = base64.b64encode(current_path.read_bytes()).decode("ascii")
@@ -868,6 +871,35 @@ def resolve_descendant(root: Path, relative_path: str) -> Path:
     if not resolved.is_relative_to(root):
         raise HTTPException(status_code=400, detail="样例文件路径不合法")
     return resolved
+
+
+def resolve_sample_data_path(stored_path: str) -> Path:
+    """Resolve current relative paths and legacy absolute test_data paths safely."""
+
+    normalized = stored_path.strip().replace("\\", "/")
+    if not normalized:
+        return resolve_descendant(DATA_ROOT, normalized)
+
+    path = Path(normalized)
+    if not path.is_absolute() and ".." not in path.parts:
+        return resolve_descendant(DATA_ROOT, normalized)
+
+    # Older manifests stored the generator machine's full Windows path.  Never
+    # access that location directly: retain only the suffix below test_data and
+    # anchor it to this checkout's DATA_ROOT.
+    windows_parts = PureWindowsPath(stored_path).parts
+    test_data_index = next(
+        (
+            index
+            for index, part in enumerate(windows_parts)
+            if part.casefold() == "test_data"
+        ),
+        None,
+    )
+    if test_data_index is None or test_data_index + 1 >= len(windows_parts):
+        raise HTTPException(status_code=400, detail="样例文件路径不合法")
+    relative = Path(*windows_parts[test_data_index + 1 :]).as_posix()
+    return resolve_descendant(DATA_ROOT, relative)
 
 
 def qwen_infer_file_url(

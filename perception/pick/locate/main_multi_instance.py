@@ -8,7 +8,10 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from main import LocateRequest, locate_product_debug, normalize_bbox_to_1_1000
+if __package__:
+    from .main import LocateRequest, locate_product_debug, normalize_bbox_to_1_1000
+else:
+    from main import LocateRequest, locate_product_debug, normalize_bbox_to_1_1000
 
 
 PERCEPTION_ROOT = Path(__file__).resolve().parents[2]
