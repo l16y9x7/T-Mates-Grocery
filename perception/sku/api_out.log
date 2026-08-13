@@ -1,0 +1,15 @@
+INFO:     Started server process [1764619]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:25540 (Press CTRL+C to quit)
+INFO:     192.168.130.123:57700 - "GET /sku/get_candidate_SKU HTTP/1.1" 200 OK
+INFO:     192.168.130.123:53040 - "GET /sku/get_candidate_SKU HTTP/1.1" 200 OK
+INFO:     192.168.130.123:57104 - "GET /sku/get_candidate_SKU HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54504 - "GET /sku/search_by_name?name=%E4%B8%9C%E6%96%B9%E6%A0%91%E5%8F%B6%E8%8C%89%E8%8E%89%E8%8A%B1%E8%8C%B6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54506 - "GET /sku/search_by_name?name=%E4%B8%9C%E6%96%B9%E6%A0%91%E5%8F%B6%E8%8C%89%E8%8E%89%E8%8A%B1%E8%8C%B6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55692 - "GET /sku/search_by_name?name=%E4%B8%9C%E6%96%B9%E6%A0%91%E5%8F%B6%E8%8C%89%E8%8E%89%E8%8A%B1%E8%8C%B6 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55698 - "GET /sku/search_by_name?name=%E4%B8%9C%E6%96%B9%E6%A0%91%E5%8F%B6%E8%8C%89%E8%8E%89%E8%8A%B1%E8%8C%B6 HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1764619]
