@@ -26,7 +26,7 @@ python main.py
 
 可使用 `SKU_API_URL`、`QWEN3_URL`、`QWEN3_MODEL`、`SAM3_URL` 环境变量覆盖。
 
-未随请求上传图片时，只从 `http://192.168.8.9:8085/camera/snapshot` 获取当前 RGB，不读取本地测试图片。可通过 `CAMERA_SNAPSHOT_URL` 和 `CAMERA_SNAPSHOT_TIMEOUT_SECONDS` 覆盖地址与超时，通过 `CAMERA_SNAPSHOT_CACHE_DIR` 指定快照缓存目录。
+未随请求上传图片时，只从 `http://192.168.1.226:8085/camera/snapshot` 获取当前 RGB，不读取本地测试图片。可通过 `CAMERA_SNAPSHOT_URL` 和 `CAMERA_SNAPSHOT_TIMEOUT_SECONDS` 覆盖地址与超时，通过 `CAMERA_SNAPSHOT_CACHE_DIR` 指定快照缓存目录。
 
 ## 接口
 

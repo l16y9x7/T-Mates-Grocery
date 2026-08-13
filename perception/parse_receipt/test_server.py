@@ -185,7 +185,7 @@ class ReceiptServerTests(unittest.TestCase):
             configured = server.Settings.from_env()
         self.assertEqual(
             configured.camera_url,
-            "http://192.168.8.9:8085/camera/snapshot?camera=head&type=color",
+            "http://192.168.1.226:8085/camera/snapshot?camera=head&type=color",
         )
 
     def test_camera_connection_failure_is_diagnostic(self) -> None:
@@ -213,7 +213,7 @@ class ReceiptServerTests(unittest.TestCase):
                 "raw_path": b"/perception/parse",
                 "query_string": b"",
                 "headers": [(b"x-request-id", b"receipt-test-123")],
-                "client": ("192.168.8.9", 45800),
+                "client": ("192.168.1.226", 45800),
                 "server": ("127.0.0.1", 8083),
             }
         )
@@ -221,7 +221,7 @@ class ReceiptServerTests(unittest.TestCase):
             502,
             "camera_connection_error",
             "无法连接相机接口：connection refused",
-            upstream="http://192.168.8.9:8085/camera/snapshot",
+            upstream="http://192.168.1.226:8085/camera/snapshot",
             elapsed_ms=3012.4,
             timeout_seconds=5.0,
         )
