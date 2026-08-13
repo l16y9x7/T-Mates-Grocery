@@ -89,17 +89,13 @@ scripts/start-pick-place.sh --config config/pick-place.yaml
 http://服务器IP:8090
 ```
 
-例如服务器地址是 `192.168.130.59`：
+例如本机访问地址是 `127.0.0.1`：
 
 ```text
-http://192.168.130.59:8090
+http://127.0.0.1:8090
 ```
 
-如果 8090 已被占用，可以指定其他端口：
-
-```bash
-LOCATE_WEB_PORT=8091 ./web/start.sh
-```
+如果 8090 已被占用，请修改 `web/config.yaml` 中的 `server.port` 后重启服务。
 
 网页服务默认调用：
 
@@ -113,7 +109,7 @@ http://127.0.0.1:8086/pick
 http://127.0.0.1:8108/task1/run
 ```
 
-可通过 `TASK1_URL` 覆盖任务一服务地址。网页中的“任务一 · 小票到抓取”区域可选择抓取 1 件或 2 件，服务会把每次运行的事件写入与 8086 相同的 `log/<时间>-<幂等键>/events.jsonl`，网页通过 SSE 实时读取。
+所有下游服务地址、监听端口、请求超时和日志目录都集中配置在 `web/config.yaml`。修改配置后重启网页服务即可生效。网页中的“任务一 · 小票到抓取”区域可选择抓取 1 件或 2 件，服务会把每次运行的事件写入与 8086 相同的 `log/<时间>-<幂等键>/events.jsonl`，网页通过 SSE 实时读取。
 
 页面中的“小票识别”按钮通过同源代理调用视觉理解服务：
 
@@ -124,34 +120,19 @@ Content-Type: application/json
 {}
 ```
 
-代理默认请求 `http://192.168.130.59:8083/perception/parse`，并将返回的
-`product_names` 列表显示在页面中。可通过 `PERCEPTION_URL` 覆盖视觉理解服务地址。
-
-可以通过环境变量覆盖：
-
-```bash
-PICK_PLACE_URL=http://127.0.0.1:8086/pick \
-PICK_PLACE_LOG_DIR=/data/T-Mates-Grocery/agent/log \
-PERCEPTION_URL=http://192.168.130.59:8083 \
-./web/start.sh
-```
+代理默认请求 `http://127.0.0.1:8083/perception/parse`，并将返回的
+`product_names` 列表显示在页面中。视觉理解服务地址配置在 `web/config.yaml` 的 `services.perception_url`。
 
 机器人移动控制默认调用以下真实服务：
 
 ```text
-位姿准备：      http://192.168.130.50:8084/pose/prepare
-位姿健康检查：  http://192.168.130.50:8084/pose/health
-导航移动：      http://192.168.130.50:8081/navigation/navigate
-导航健康检查：  http://192.168.130.50:8081/navigation/health
+位姿准备：      http://192.168.8.9:8084/pose/prepare
+位姿健康检查：  http://192.168.8.9:8084/pose/health
+导航移动：      http://192.168.8.9:8081/navigation/navigate
+导航健康检查：  http://192.168.8.9:8081/navigation/health
 ```
 
-可通过环境变量覆盖地址：
-
-```bash
-NAVIGATION_URL=http://192.168.130.50:8081 \
-POSE_URL=http://192.168.130.50:8084 \
-./web/start.sh
-```
+如需使用其他机器人地址，请直接修改 `web/config.yaml` 中的 `services.navigation_url` 和 `services.pose_url`。
 
 ## 页面操作
 

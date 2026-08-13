@@ -32,7 +32,8 @@ if ! kill -0 "$pid" 2>/dev/null; then
   exit 1
 fi
 
-port="${LOCATE_WEB_PORT:-8090}"
+config_values="$(cd "$PROJECT_ROOT" && python -m web.settings)"
+IFS=$'\t' read -r _host port <<< "$config_values"
 host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo "网页服务已后台启动"
 echo "PID: $pid"

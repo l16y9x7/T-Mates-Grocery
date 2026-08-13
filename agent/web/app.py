@@ -6,7 +6,6 @@ import asyncio
 import base64
 import json
 import mimetypes
-import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -20,19 +19,11 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
+from .settings import LOCATE_IMAGE_ROOTS, LOG_ROOT, SETTINGS
 
-DEFAULT_PICK_URL = os.getenv("PICK_PLACE_URL", "http://127.0.0.1:8086/pick")
-DEFAULT_TASK1_URL = os.getenv("TASK1_URL", "http://127.0.0.1:8108/task1/run")
-DEFAULT_LOCATE_URL = os.getenv(
-    "LOCATE_FORMAL_API_URL",
-    "http://192.168.130.59:8083/perception/pick/locate",
-)
-DEFAULT_TIMEOUT = float(os.getenv("PICK_PLACE_WEB_TIMEOUT", "900"))
-DEFAULT_NAVIGATION_URL = os.getenv("NAVIGATION_URL", "http://192.168.130.50:8081")
-DEFAULT_POSE_URL = os.getenv("POSE_URL", "http://192.168.130.50:8084")
-DEFAULT_PERCEPTION_URL = os.getenv("PERCEPTION_URL", "http://192.168.130.59:8083")
 WEB_ROOT = Path(__file__).resolve().parent
-LOG_ROOT = Path(os.getenv("PICK_PLACE_LOG_DIR", "log")).expanduser()
+SERVICES = SETTINGS.services
+DEFAULT_TIMEOUT = SETTINGS.request_timeout_seconds
 
 
 class LocateRequest(BaseModel):
@@ -120,11 +111,6 @@ app.mount("/static", StaticFiles(directory=WEB_ROOT / "static"), name="static")
 TASKS: dict[str, PickTask] = {}
 
 
-def _image_roots() -> tuple[Path, ...]:
-    configured = os.getenv("LOCATE_IMAGE_ROOTS", "/data/T-Mates-Grocery,/tmp")
-    return tuple(Path(item).expanduser().resolve() for item in configured.split(",") if item.strip())
-
-
 def _local_image_data(image_path: str) -> str | None:
     """Encode a result image when the locate service shares a filesystem."""
 
@@ -135,7 +121,7 @@ def _local_image_data(image_path: str) -> str | None:
         resolved = path.resolve(strict=True)
     except (FileNotFoundError, OSError):
         return None
-    if not any(resolved == root or root in resolved.parents for root in _image_roots()):
+    if not any(resolved == root or root in resolved.parents for root in LOCATE_IMAGE_ROOTS):
         return None
     try:
         content = resolved.read_bytes()
@@ -166,7 +152,7 @@ async def _run_pick(task_state: PickTask, request: PickRequest) -> None:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                DEFAULT_PICK_URL,
+                SERVICES.pick_url,
                 json=payload,
                 headers={"Idempotency-Key": task_state.operation_key},
                 timeout=DEFAULT_TIMEOUT,
@@ -190,7 +176,7 @@ async def _run_task1(task_state: PickTask, request: Task1Request) -> None:
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                DEFAULT_TASK1_URL,
+                SERVICES.task1_url,
                 json=request.model_dump(mode="json"),
                 headers={"Idempotency-Key": task_state.operation_key},
                 timeout=DEFAULT_TIMEOUT,
@@ -218,11 +204,11 @@ async def index() -> FileResponse:
 @app.get("/api/config")
 async def config() -> dict[str, str]:
     return {
-        "pick_url": DEFAULT_PICK_URL,
-        "task1_url": DEFAULT_TASK1_URL,
-        "navigation_url": DEFAULT_NAVIGATION_URL,
-        "pose_url": DEFAULT_POSE_URL,
-        "perception_url": DEFAULT_PERCEPTION_URL,
+        "pick_url": SERVICES.pick_url,
+        "task1_url": SERVICES.task1_url,
+        "navigation_url": SERVICES.navigation_url,
+        "pose_url": SERVICES.pose_url,
+        "perception_url": SERVICES.perception_url,
         "log_dir": str(LOG_ROOT),
     }
 
@@ -293,8 +279,8 @@ async def robot_health() -> dict[str, object]:
         return {"service": name, "ok": response.status_code < 400 and ready, "status_code": response.status_code, "body": body}
 
     pose, navigation = await asyncio.gather(
-        check("pose", DEFAULT_POSE_URL, "/pose/health"),
-        check("navigation", DEFAULT_NAVIGATION_URL, "/navigation/health"),
+        check("pose", SERVICES.pose_url, "/pose/health"),
+        check("navigation", SERVICES.navigation_url, "/navigation/health"),
     )
     return {"pose": pose, "navigation": navigation}
 
@@ -307,7 +293,7 @@ async def robot_prepare(
     payload = request.model_dump(exclude={"idempotency_key"}, exclude_none=True)
     return await _robot_request(
         "POST",
-        DEFAULT_POSE_URL,
+        SERVICES.pose_url,
         "/pose/prepare",
         payload,
         "pose_prepare",
@@ -323,7 +309,7 @@ async def robot_navigate(
     payload = request.model_dump(exclude={"idempotency_key"})
     return await _robot_request(
         "POST",
-        DEFAULT_NAVIGATION_URL,
+        SERVICES.navigation_url,
         "/navigation/navigate",
         payload,
         "navigation",
@@ -340,7 +326,7 @@ async def perception_parse(
 
     return await _robot_request(
         "POST",
-        DEFAULT_PERCEPTION_URL,
+        SERVICES.perception_url,
         "/perception/parse",
         request.model_dump(mode="json"),
         "perception_parse",
@@ -436,7 +422,7 @@ async def task1_events(task_id: str) -> StreamingResponse:
 async def locate(request: LocateRequest) -> dict[str, object]:
     """保留原定位工作台接口，便于已有调用方继续使用。"""
 
-    target_url = request.url or DEFAULT_LOCATE_URL
+    target_url = request.url or SERVICES.locate_url
     payload = {"task_type": request.task_type, "product_name": request.product_name, "hand": request.hand.lower()}
     try:
         async with httpx.AsyncClient() as client:
