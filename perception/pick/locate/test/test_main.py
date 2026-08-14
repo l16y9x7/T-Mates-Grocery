@@ -529,6 +529,12 @@ class LocateLogicTest(unittest.TestCase):
                 [10.0, 8.0, 50.0, 40.0],
             )
             self.assertEqual(len(result.instances), 2)
+            self.assertIsNotNone(result.selected_instance)
+            self.assertIn(result.selected_instance_index, {1, 2})
+            self.assertEqual(
+                result.selected_instance,
+                result.instances[result.selected_instance_index - 1],
+            )
             for instance in result.instances:
                 with Image.open(io.BytesIO(base64.b64decode(instance.mask))) as mask:
                     self.assertEqual(mask.size, (100, 80))
@@ -643,6 +649,33 @@ class LocateLogicTest(unittest.TestCase):
             main.normalize_bbox_to_1_1000([-10, 0, 100, 120], [100, 100]),
             [1, 1, 1000, 1000],
         )
+
+    def test_public_locate_uses_selected_instance_from_debug_response(self) -> None:
+        center = main.LocatedInstance(
+            bbox=[40, 40, 60, 60],
+            mask="center",
+        )
+        selected = main.LocatedInstance(
+            bbox=[70, 40, 90, 60],
+            mask="selected",
+        )
+        debug_response = main.LocateDebugResponse(
+            sku_id="SKU_001",
+            product_name="可口可乐",
+            image_name="frame_rgb.jpg",
+            image_path="C:/monitor/frame_rgb.jpg",
+            image_base64=base64.b64encode(b"image").decode("ascii"),
+            image_media_type="image/jpeg",
+            image_size=[100, 100],
+            instances=[center, selected],
+            selected_instance=selected,
+            selected_instance_index=2,
+        )
+
+        response = main.make_locate_response(debug_response)
+
+        self.assertEqual(response.mask, "selected")
+        self.assertEqual(response.bbox, [700, 401, 900, 600])
 
     def test_pick_selection_rejects_narrow_occluded_center_candidate(self) -> None:
         narrow_center = main.LocatedInstance(

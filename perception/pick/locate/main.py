@@ -163,6 +163,8 @@ class LocateDebugResponse(BaseModel):
     qwen_bboxes: list[QwenBBoxRecord] = Field(default_factory=list)
     raw_sam_instances: list[LocatedInstance] = Field(default_factory=list)
     instances: list[LocatedInstance] = Field(default_factory=list)
+    selected_instance: LocatedInstance | None = None
+    selected_instance_index: int | None = None
     error: str | None = None
     error_status_code: int | None = None
 
@@ -971,6 +973,15 @@ def locate_product_in_image(
     raw_sam_instances = list(located_instances)
     located_instances = keep_frontmost_in_overlap_chains(located_instances)
     located_instances = drop_smallest_mask_area_outlier(located_instances)
+    selected_instance = select_pick_instance(
+        located_instances,
+        list(original_image.size),
+    )
+    selected_instance_index = next(
+        index
+        for index, instance in enumerate(located_instances, start=1)
+        if instance is selected_instance
+    )
 
     return LocateDebugResponse(
         sku_id=product["sku_id"],
@@ -986,6 +997,8 @@ def locate_product_in_image(
         qwen_bboxes=qwen_bbox_records,
         raw_sam_instances=raw_sam_instances,
         instances=located_instances,
+        selected_instance=selected_instance,
+        selected_instance_index=selected_instance_index,
     )
 
 
@@ -1255,9 +1268,12 @@ def select_pick_instance(
 
 
 def make_locate_response(debug_response: LocateDebugResponse) -> LocateResponse:
-    selected_instance = select_pick_instance(
-        debug_response.instances,
-        debug_response.image_size,
+    selected_instance = (
+        debug_response.selected_instance
+        or select_pick_instance(
+            debug_response.instances,
+            debug_response.image_size,
+        )
     )
     return LocateResponse(
         product_name=debug_response.product_name,

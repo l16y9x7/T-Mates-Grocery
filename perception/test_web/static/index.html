@@ -173,7 +173,7 @@
           </div>
 
           <div class="result-title canvas-title">
-            <span>SAM3 bbox / mask（过滤后）</span>
+            <span>SAM3 bbox / mask（过滤后，红框为最终 PICK）</span>
           </div>
           <div class="canvas-frame">
             <canvas id="samCanvas"></canvas>
@@ -182,7 +182,7 @@
 
           <div class="result-block">
             <div class="result-title">
-              <span>Crop 分割结果</span>
+              <span>最终 PICK 选择</span>
               <span id="samStatus" class="status">等待运行</span>
             </div>
             <pre id="samResult">[]</pre>
@@ -191,6 +191,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=20260807-task-prompts"></script>
+    <script src="/static/app.js?v=20260814-pick-selection"></script>
   </body>
 </html>

@@ -215,11 +215,11 @@ function setStatus(id, text, kind = "") {
   element.className = `status ${kind}`.trim();
 }
 
-function drawBox(ctx, bbox, label, color) {
+function drawBox(ctx, bbox, label, color, lineWidth = null) {
   const [x1, y1, x2, y2] = bbox;
   ctx.save();
   ctx.strokeStyle = color;
-  ctx.lineWidth = Math.max(3, ctx.canvas.width / 420);
+  ctx.lineWidth = lineWidth || Math.max(3, ctx.canvas.width / 420);
   ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
   ctx.font = `700 ${Math.max(16, ctx.canvas.width / 55)}px sans-serif`;
   const padding = 7;
@@ -420,6 +420,16 @@ async function runQwen() {
     const qwenBboxes = result.qwen_bboxes || [];
     const rawSamInstances = result.raw_sam_instances || [];
     const instances = result.instances || [];
+    const selectedInstance = result.selected_instance || null;
+    const selectedInstanceIndex = Number(result.selected_instance_index || 0);
+    const summarizeInstance = (instance) =>
+      instance
+        ? {
+            bbox: instance.bbox,
+            score: instance.score,
+            mask: `<base64 ${instance.mask.length} chars>`,
+          }
+        : null;
 
     await drawBase(rawQwenCanvas);
     const rawQwenContext = rawQwenCanvas.getContext("2d");
@@ -463,14 +473,9 @@ async function runQwen() {
       {
         ...result,
         image_base64: `<base64 ${result.image_base64.length} chars>`,
-        raw_sam_instances: rawSamInstances.map((instance) => ({
-          ...instance,
-          mask: `<base64 ${instance.mask.length} chars>`,
-        })),
-        instances: instances.map((instance) => ({
-          ...instance,
-          mask: `<base64 ${instance.mask.length} chars>`,
-        })),
+        raw_sam_instances: rawSamInstances.map(summarizeInstance),
+        instances: instances.map(summarizeInstance),
+        selected_instance: summarizeInstance(selectedInstance),
       },
       null,
       2,
@@ -505,9 +510,24 @@ async function runQwen() {
       const score = Number(instance.score || 0).toFixed(3);
       drawBox(samContext, instance.bbox, `#${index + 1} ${score}`, colors[index % colors.length]);
     });
+    if (selectedInstance) {
+      drawBox(
+        samContext,
+        selectedInstance.bbox,
+        `PICK #${selectedInstanceIndex}`,
+        "#ef4444",
+        Math.max(6, samCanvas.width / 180),
+      );
+    }
     document.querySelector("#samEmpty").hidden = true;
     document.querySelector("#samResult").textContent = JSON.stringify(
-      instances.map(({ bbox, score }) => ({ bbox, score })),
+      {
+        selected_instance_index: selectedInstanceIndex || null,
+        selected_instance: selectedInstance
+          ? { bbox: selectedInstance.bbox, score: selectedInstance.score }
+          : null,
+        candidates: instances.map(({ bbox, score }) => ({ bbox, score })),
+      },
       null,
       2,
     );
@@ -517,7 +537,13 @@ async function runQwen() {
       setStatus("#samStatus", "推理失败，已显示 Debug 接口返回的原图", "error");
     } else {
       setStatus("#qwenStatus", `${qwenBboxes.length} 个共识 bbox`, "success");
-      setStatus("#samStatus", `${instances.length} 个最终实例`, "success");
+      setStatus(
+        "#samStatus",
+        selectedInstance
+          ? `${instances.length} 个候选 · 最终 PICK #${selectedInstanceIndex}`
+          : `${instances.length} 个候选 · 未返回最终 PICK`,
+        selectedInstance ? "success" : "error",
+      );
     }
   } catch (error) {
     rawResult.textContent = error.message;
