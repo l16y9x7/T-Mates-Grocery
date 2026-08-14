@@ -60,7 +60,7 @@ class PickRequest(BaseModel):
 class Task1Request(BaseModel):
     """任务一独立服务请求。"""
 
-    pick_count: int = Field(default=2, ge=1, le=2)
+    model_config = {"extra": "forbid"}
 
 
 class PosePrepareRequest(BaseModel):
@@ -259,6 +259,50 @@ def _sse(event: str, payload: object) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
 
 
+def _read_json_file(path: Path) -> object | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _interface_events(log_dir: Path | None, emitted: set[str]) -> list[dict[str, object]]:
+    """Convert persisted downstream HTTP traces into flow events."""
+
+    if log_dir is None:
+        return []
+    interfaces_dir = log_dir / "interfaces"
+    if not interfaces_dir.is_dir():
+        return []
+    events: list[dict[str, object]] = []
+    try:
+        interface_dirs = sorted(path for path in interfaces_dir.iterdir() if path.is_dir())
+    except OSError:
+        return []
+    for interface_dir in interface_dirs:
+        name = interface_dir.name
+        if name in emitted:
+            continue
+        request = _read_json_file(interface_dir / "request.json")
+        response = _read_json_file(interface_dir / "response.json")
+        if request is None and response is None:
+            continue
+        if response is None:
+            continue
+        status_code = response.get("status_code") if isinstance(response, dict) else None
+        status = "succeeded" if isinstance(status_code, int) and status_code < 400 else "failed"
+        events.append({
+            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "event": "接口调用",
+            "status": status,
+            "interface": name,
+            "request": request,
+            "response": response,
+        })
+        emitted.add(name)
+    return events
+
+
 async def _run_pick(task_state: PickTask, request: PickRequest) -> None:
     payload = request.model_dump(mode="json")
     try:
@@ -303,7 +347,15 @@ async def _run_task1(task_state: PickTask, request: Task1Request) -> None:
             "body": body,
         }
     except (httpx.HTTPError, TimeoutError) as exc:
-        task_state.result = {"status_code": 502, "ok": False, "body": {"message": str(exc)}}
+        task_state.result = {
+            "status_code": 502,
+            "ok": False,
+            "body": {
+                "error_code": "TASK1_PROXY_ERROR",
+                "message": str(exc),
+                "failed_step": "任务一服务请求",
+            },
+        }
     finally:
         task_state.finished = True
 
@@ -462,6 +514,7 @@ async def start_pick(request: PickRequest) -> dict[str, str]:
 
 async def _event_stream(state: PickTask):
     offset = 0
+    emitted_interfaces: set[str] = set()
     sent_result = False
     deadline = time.monotonic() + DEFAULT_TIMEOUT + 30
     while time.monotonic() < deadline:
@@ -482,6 +535,8 @@ async def _event_stream(state: PickTask):
                             continue
             except OSError:
                 pass
+        for interface_event in _interface_events(log_dir, emitted_interfaces):
+            yield _sse("flow", interface_event)
         if state.finished and not sent_result:
             sent_result = True
             yield _sse("result", state.result or {"ok": False, "body": {"message": "任务无结果"}})

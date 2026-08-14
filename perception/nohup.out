@@ -198,3 +198,131 @@ INFO:     Shutting down
 INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.
 INFO:     Finished server process [1760975]
+INFO:     Started server process [74666]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8083 (Press CTRL+C to quit)
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:60950 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第一排货架的红色Dove沐浴露，输出一个完整的bbox。返回格式：{"name": "红色Dove沐浴露", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第一排货架的红色Dove沐浴露，输出一个完整的bbox。返回格式：{"name": "红色Dove沐浴露", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第一排货架的红色Dove沐浴露，输出一个完整的bbox。返回格式：{"name": "红色Dove沐浴露", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:56486 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:49716 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:37950 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架上的所有半亩花田洗发水瓶，输出bbox。返回格式：{"name": "半亩花田洗发水瓶", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架上的所有半亩花田洗发水瓶，输出bbox。返回格式：{"name": "半亩花田洗发水瓶", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架上的所有半亩花田洗发水瓶，输出bbox。返回格式：{"name": "半亩花田洗发水瓶", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:44360 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架上的所有半亩花田洗发水瓶，输出bbox。返回格式：{"name": "半亩花田洗发水瓶", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架上的所有半亩花田洗发水瓶，输出bbox。返回格式：{"name": "半亩花田洗发水瓶", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架上的所有半亩花田洗发水瓶，输出bbox。返回格式：{"name": "半亩花田洗发水瓶", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:52700 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:37638 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:56918 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:56860 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "黄白色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:34100 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的银白色长方体包装堆，输出一个完整的bbox。返回格式：{"name": "银白色长方体包装堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:58318 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=right_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的蓝色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "蓝色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的蓝色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "蓝色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的蓝色长方体直立包装堆，输出一个完整的bbox。返回格式：{"name": "蓝色长方体直立包装堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:56258 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.1.226:8085/camera/snapshot?camera=right_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有绿色绿豆饼杯，输出一个完整的bbox。返回格式：{"name": "绿色绿豆饼杯堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有绿色绿豆饼杯，输出一个完整的bbox。返回格式：{"name": "绿色绿豆饼杯堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中从上往下第二排货架的所有绿色绿豆饼杯，输出一个完整的bbox。返回格式：{"name": "绿色绿豆饼杯堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:60992 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+INFO:     Started server process [34222]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8083 (Press CTRL+C to quit)
+CAMERA_URL: http://192.168.3.226:8085/camera/snapshot?camera=right_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中货架上的所有绿色绿豆冰杯，输出一个完整的bbox。返回格式：{"name": "绿色绿豆冰杯堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中货架上的所有绿色绿豆冰杯，输出一个完整的bbox。返回格式：{"name": "绿色绿豆冰杯堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中货架上的所有绿色绿豆冰杯，输出一个完整的bbox。返回格式：{"name": "绿色绿豆冰杯堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:46480 - "POST /perception/pick/locate HTTP/1.1" 200 OK
+CAMERA_URL: http://192.168.3.226:8085/camera/snapshot?camera=left_wrist&type=color
+[Locate Qwen3] prompt before request:
+找到图片中货架上的所有黄色水瓶堆，输出黄色水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中货架上的所有黄色水瓶堆，输出黄色水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色水瓶堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中货架上的所有黄色水瓶堆，输出黄色水瓶堆的bbox，每一堆分开。返回格式：{"name": "黄色水瓶堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:52246 - "POST /perception/pick/locate HTTP/1.1" 200 OK

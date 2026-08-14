@@ -36,9 +36,10 @@ class Task1Orchestrator:
     async def run(self, request: Task1Request, operation_key: str | None = None) -> Task1Result:
         task_run_id = operation_key or uuid4().hex
         logger = _Task1Log(self.settings, task_run_id, request)
+        self.client.set_trace_callback(logger.interface_event)
         step = "健康检查"
         try:
-            logger.event("operation", "started", pick_count=request.pick_count)
+            logger.event("operation", "started")
             logger.event("健康检查", "started")
             await self.client.check_all_health()
             logger.event("健康检查", "succeeded")
@@ -60,7 +61,7 @@ class Task1Orchestrator:
 
             step = "SKU货位转换"
             targets: list[TargetItem] = []
-            for index, name in enumerate(product_names):
+            for name in product_names:
                 logger.event("SKU货位转换", "started", product_name=name)
                 sku = await self.client.search_by_name(name)
                 if len(sku.locations) != 1:
@@ -74,66 +75,66 @@ class Task1Orchestrator:
                     raise Task1ServiceError(
                         "INVALID_PRODUCT_SLOT", f"invalid product slot: {slot_id}", status_code=422
                     )
-                target = TargetItem(
+                targets.append(TargetItem(
                     product_name=name,
                     product_slot_id=slot_id,
                     shelf_level=shelf_level(slot_id),
-                    hand=Hand.LEFT if index == 0 else Hand.RIGHT,
-                )
-                targets.append(target)
+                    hand=Hand.LEFT,
+                ))
                 logger.event(
                     "SKU货位转换",
                     "succeeded",
                     product_name=name,
                     sku_id=sku.sku_id,
                     product_slot_id=slot_id,
-                    shelf_level=target.shelf_level,
+                    shelf_level=shelf_level(slot_id),
                 )
             if len({target.product_slot_id for target in targets}) != 2:
                 raise Task1ServiceError(
                     "INVALID_RECEIPT", "products resolve to the same location", status_code=422
                 )
 
-            for index, target in enumerate(targets[: request.pick_count]):
-                step = f"商品{index + 1}导航"
-                logger.event("商品导航", "started", product_name=target.product_name, target_id=target.product_slot_id)
-                await self.client.navigate(target.product_slot_id, f"{task_run_id}:task1.pick.{index}.navigate")
-                logger.event("商品导航", "succeeded", product_name=target.product_name, target_id=target.product_slot_id)
-
-                step = f"商品{index + 1}抓取位姿"
+            hands = self._assign_hands([target.product_slot_id for target in targets])
+            for target, hand in zip(targets, hands):
+                target.hand = hand
                 logger.event(
-                    "抓取位姿",
-                    "started",
-                    product_name=target.product_name,
-                    pose_type="SHELF_PICK_READY",
-                    shelf_level=target.shelf_level,
+                    "抓取手分配", "succeeded", product_name=target.product_name,
+                    product_slot_id=target.product_slot_id, hand=hand.value,
+                    allowed_hands=[item.value if isinstance(item, Hand) else str(item) for item in self._allowed_hands(target.product_slot_id)],
                 )
-                await self.client.prepare_pose(
-                    "SHELF_PICK_READY",
-                    f"{task_run_id}:task1.pick.{index}.pose",
-                    shelf_level=target.shelf_level,
-                )
-                logger.event("抓取位姿", "succeeded", product_name=target.product_name, shelf_level=target.shelf_level)
 
-                step = f"商品{index + 1}抓取"
-                logger.event("抓取", "started", product_name=target.product_name, hand=target.hand.value)
-                await self.client.pick(target.product_name, target.hand, f"{task_run_id}:task1.pick.{index}.pick")
-                target.picked = True
-                logger.event("抓取", "succeeded", product_name=target.product_name, hand=target.hand.value)
+            if targets[0].hand != targets[1].hand:
+                for index, target in enumerate(targets):
+                    await self._pick_target(target, index, task_run_id, logger)
+                await self._prepare_delivery(task_run_id, logger)
+                for index, target in enumerate(targets):
+                    await self._place_target(target, index, task_run_id, logger)
+            else:
+                # 单手能力受限时，始终保持该手一次只持有一件商品。
+                for index, target in enumerate(targets):
+                    await self._pick_target(target, index, task_run_id, logger)
+                    await self._prepare_delivery(task_run_id, logger, index)
+                    await self._place_target(target, index, task_run_id, logger)
 
-            held_items = {target.hand: target.product_name for target in targets if target.picked}
+            step = "任务判定区导航"
+            logger.event("任务判定区导航", "started", target_id=self.settings.task_boundary)
+            await self.client.navigate(self.settings.task_boundary, f"{task_run_id}:task1.finish.navigate")
+            logger.event("任务判定区导航", "succeeded", target_id=self.settings.task_boundary)
+
+            held_items: dict[Hand, str] = {}
             result = Task1Result(
                 task_run_id=task_run_id,
                 task_type="SORTING",
-                requested_pick_count=request.pick_count,
                 status="SUCCEEDED",
                 product_names=product_names,
                 target_items=targets,
                 held_items=held_items,
             )
-            logger.event("operation", "succeeded", picked_count=request.pick_count)
+            logger.event("operation", "succeeded", picked_count=2, placed_count=2)
             return result
         except Exception as exc:
+            if isinstance(exc, Task1ServiceError):
+                exc.step = step
             logger.event(
                 "operation",
                 "failed",
@@ -143,6 +144,55 @@ class Task1Orchestrator:
             )
             LOGGER.exception("任务一流程失败 step=%s key=%s", step, task_run_id)
             raise
+        finally:
+            self.client.set_trace_callback(None)
+
+    def _allowed_hands(self, slot_id: str) -> list[Hand]:
+        return self.settings.product_hand_options.get(slot_id, [Hand.LEFT, Hand.RIGHT])
+
+    def _assign_hands(self, slots: list[str]) -> tuple[Hand, Hand]:
+        options = [self._allowed_hands(slot) for slot in slots]
+        candidates = [
+            (Hand.LEFT, Hand.RIGHT),
+            (Hand.RIGHT, Hand.LEFT),
+            (Hand.LEFT, Hand.LEFT),
+            (Hand.RIGHT, Hand.RIGHT),
+        ]
+        for candidate in candidates:
+            if candidate[0] in options[0] and candidate[1] in options[1]:
+                return candidate
+        raise Task1ServiceError(
+            "NO_FEASIBLE_HAND_ASSIGNMENT",
+            f"no feasible hand assignment for product slots: {', '.join(slots)}",
+            status_code=422,
+        )
+
+    async def _pick_target(self, target: TargetItem, index: int, task_run_id: str, logger: _Task1Log) -> None:
+        logger.event("商品导航", "started", product_name=target.product_name, target_id=target.product_slot_id)
+        await self.client.navigate(target.product_slot_id, f"{task_run_id}:task1.pick.{index}.navigate")
+        logger.event("商品导航", "succeeded", product_name=target.product_name, target_id=target.product_slot_id)
+        logger.event("抓取位姿", "started", product_name=target.product_name, pose_type="SHELF_PICK_READY", shelf_level=target.shelf_level)
+        await self.client.prepare_pose("SHELF_PICK_READY", f"{task_run_id}:task1.pick.{index}.pose", shelf_level=target.shelf_level)
+        logger.event("抓取位姿", "succeeded", product_name=target.product_name, shelf_level=target.shelf_level)
+        logger.event("抓取", "started", product_name=target.product_name, hand=target.hand.value)
+        await self.client.pick(target.product_name, target.hand, f"{task_run_id}:task1.pick.{index}.pick")
+        target.picked = True
+        logger.event("抓取", "succeeded", product_name=target.product_name, hand=target.hand.value)
+
+    async def _prepare_delivery(self, task_run_id: str, logger: _Task1Log, cycle: int | None = None) -> None:
+        suffix = "delivery" if cycle is None else f"delivery.{cycle}"
+        logger.event("交付台导航", "started", target_id=self.settings.delivery_place)
+        await self.client.navigate(self.settings.delivery_place, f"{task_run_id}:task1.{suffix}.navigate")
+        logger.event("交付台导航", "succeeded", target_id=self.settings.delivery_place)
+        logger.event("放置位姿", "started", pose_type="DELIVERY_TABLE_PLACE_READY")
+        await self.client.prepare_pose("DELIVERY_TABLE_PLACE_READY", f"{task_run_id}:task1.{suffix}.pose")
+        logger.event("放置位姿", "succeeded", pose_type="DELIVERY_TABLE_PLACE_READY")
+
+    async def _place_target(self, target: TargetItem, index: int, task_run_id: str, logger: _Task1Log) -> None:
+        logger.event("放置", "started", product_name=target.product_name, hand=target.hand.value)
+        await self.client.place(target.product_name, target.hand, f"{task_run_id}:task1.place.{index}.place")
+        target.placed = True
+        logger.event("放置", "succeeded", product_name=target.product_name, hand=target.hand.value)
 
 
 class _Task1Log:
@@ -182,3 +232,23 @@ class _Task1Log:
                 stream.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         except (OSError, TypeError, ValueError):
             LOGGER.exception("任务一日志写入失败 event=%s status=%s", name, status)
+
+    def interface_event(self, trace: dict[str, object]) -> None:
+        status_code = trace.get("status_code")
+        status = "succeeded" if isinstance(status_code, int) and status_code < 400 else "failed"
+        self.event(
+            "接口调用",
+            status,
+            interface=trace.get("interface"),
+            service=trace.get("service"),
+            method=trace.get("method"),
+            url=trace.get("url"),
+            request={"headers": trace.get("headers") or {}, "body": trace.get("body")},
+            attempt=trace.get("attempt"),
+            response={
+                "status_code": status_code,
+                "headers": trace.get("response_headers") or {},
+                "body": trace.get("response_body"),
+                "error": trace.get("error"),
+            },
+        )

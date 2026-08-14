@@ -159,7 +159,6 @@ flowchart LR
 
 |配置|作用|
 |---|---|
-|`config/agent.mock.yaml`|本地 Mock：8101-8107|
 |`config/agent.production.yaml`|生产：商品库 25540，能力服务 8081-8084，8086|
 |`config/pick-place.yaml`|8086 下游 8083/8084/8085、相机、标定文件、临时目录|
 

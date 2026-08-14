@@ -38,13 +38,16 @@ def create_app(
         if client is not None:
             await client.aclose()
 
-    app = FastAPI(title="Task 1 Receipt-to-Pick Service", lifespan=lifespan)
+    app = FastAPI(title="Task 1 Receipt-to-Pick-and-Place Service", lifespan=lifespan)
 
     @app.exception_handler(Task1ServiceError)
     async def service_error_handler(_: Request, exc: Task1ServiceError) -> JSONResponse:
+        content = {"error_code": exc.code, "message": exc.message}
+        if exc.step:
+            content["failed_step"] = exc.step
         return JSONResponse(
             status_code=exc.status_code,
-            content={"error_code": exc.code, "message": exc.message},
+            content=content,
         )
 
     @app.exception_handler(RequestValidationError)

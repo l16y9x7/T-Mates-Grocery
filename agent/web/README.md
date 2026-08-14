@@ -7,56 +7,44 @@
 确保 8086 已经启动：
 
 ```bash
-scripts/start-pick-place.sh --config config/pick-place.yaml
+scripts/pick-place.sh start
 ```
 
-任务一测试还需要启动 8108 独立服务。推荐使用后台脚本：
+任务一测试还需要启动 8108 独立服务。启动脚本默认在后台运行：
 
 ```bash
-./scripts/start-task1-bg.sh --config config/task1.production.yaml --port 8108
-```
-
-前台启动方式：
-
-```bash
-./scripts/start-task1.sh --config config/task1.production.yaml --port 8108
+scripts/task1.sh start
+scripts/task1.sh restart
 ```
 
 停止后台服务：
 
 ```bash
-./scripts/stop-task1.sh
+scripts/task1.sh stop
 ```
 
 8108 服务的 PID 保存在 `run/task1.pid`，进程日志写入 `log/process/task1-*.log`。
 
-另开终端启动网页：
+启动网页（默认在后台运行）：
 
 ```bash
-./web/start.sh
-```
-
-推荐使用后台脚本启动和停止：
-
-```bash
-./web/start-bg.sh
-./web/stop.sh
+scripts/web.sh start
 ```
 
 完整的推荐启动顺序：
 
 ```bash
-./scripts/start-task1-bg.sh --config config/task1.production.yaml --port 8108
-./scripts/start-pick-place-bg.sh --config config/pick-place.yaml
-./web/start-bg.sh
+scripts/task1.sh start
+scripts/pick-place.sh start
+scripts/web.sh start
 ```
 
 停止顺序：
 
 ```bash
-./web/stop.sh
-./scripts/stop-pick-place.sh
-./scripts/stop-task1.sh
+scripts/web.sh stop
+scripts/pick-place.sh stop
+scripts/task1.sh stop
 ```
 
 后台进程 PID 保存在 `run/web.pid`，网页进程日志按启动时间写入 `log/process/web-*.log`。
@@ -64,15 +52,8 @@ scripts/start-pick-place.sh --config config/pick-place.yaml
 取放服务也可以后台运行：
 
 ```bash
-./scripts/start-pick-place-bg.sh --config config/pick-place.yaml
-./scripts/stop-pick-place.sh
-```
-
-或者一键启动/停止两个服务：
-
-```bash
-./scripts/start-services-bg.sh --config config/pick-place.yaml
-./scripts/stop-services.sh
+scripts/pick-place.sh start
+scripts/pick-place.sh stop
 ```
 
 取放服务 PID 保存在 `run/pick-place.pid`，服务日志写入 `log/process/pick-place-*.log`；每次取放任务的详细接口记录仍保存在 `log/<时间>-<幂等键>/`。
@@ -109,7 +90,7 @@ http://127.0.0.1:8086/pick
 http://127.0.0.1:8108/task1/run
 ```
 
-所有下游服务地址、监听端口、请求超时和日志目录都集中配置在 `web/config.yaml`。修改配置后重启网页服务即可生效。网页中的“任务一 · 小票到抓取”区域可选择抓取 1 件或 2 件，服务会把每次运行的事件写入与 8086 相同的 `log/<时间>-<幂等键>/events.jsonl`，网页通过 SSE 实时读取。
+所有下游服务地址、监听端口、请求超时和日志目录都集中配置在 `web/config.yaml`。修改配置后重启网页服务即可生效。网页中的“任务一 · 小票到抓取”区域执行实际环境配置中的完整两件商品流程，服务会把每次运行的事件写入与 8086 相同的 `log/<时间>-<幂等键>/events.jsonl`，网页通过 SSE 实时读取。
 
 页面中的“小票识别”按钮通过同源代理调用视觉理解服务：
 

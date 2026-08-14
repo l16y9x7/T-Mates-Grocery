@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1514" />
     <title>取放流程控制台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260813-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260814-1" />
   </head>
   <body>
     <main class="shell">
@@ -78,14 +78,7 @@
       <section class="task1-workspace">
         <form id="task1Form" class="control-panel">
           <div class="panel-heading"><span>任务一 · 小票到抓取</span><span class="panel-index">03</span></div>
-          <p class="task1-summary">识别小票商品，通过商品库定位货位，逐件完成导航、位姿准备和抓取。</p>
-          <label class="field">
-            <span>抓取件数</span>
-            <select id="task1PickCount" name="pick_count">
-              <option value="1">1 件 · 抓完第一个结束</option>
-              <option value="2" selected>2 件 · 抓完第二个结束</option>
-            </select>
-          </label>
+          <p class="task1-summary">识别小票商品，按货位手能力完成导航、抓取、交付台放置和任务收尾。</p>
           <button id="task1SubmitButton" class="submit-button" type="submit"><span class="button-icon">→</span><span>开始任务一</span></button>
           <p id="task1ErrorMessage" class="error-message" role="alert" hidden></p>
           <div class="task-meta">
@@ -99,6 +92,9 @@
             <div class="empty-cross">+</div>
             <p>等待一次任务一测试</p>
             <span>导航、位姿、识别、SKU 转换和抓取日志将在此处实时出现</span>
+          </div>
+          <div id="task1LiveStatus" class="live-status" aria-live="polite">
+            <span class="live-status-label">当前状态</span><strong>等待启动</strong>
           </div>
           <div id="task1Timeline" class="timeline" hidden></div>
           <section id="task1Visual" class="operation-visual" hidden>
@@ -115,6 +111,10 @@
           <div id="task1ResultCard" class="result-card" hidden>
             <div><span>最终响应</span><strong id="task1ResultStatus">-</strong></div>
             <pre id="task1ResultBody">-</pre>
+          </div>
+          <div id="task1ErrorDetails" class="error-details" hidden>
+            <div class="error-details-heading"><span>错误详情</span><strong>任务已停止</strong></div>
+            <pre id="task1ErrorBody">-</pre>
           </div>
         </section>
       </section>
@@ -192,6 +192,6 @@
       </section>
       <footer><span>8086 PICK/PLACE ORCHESTRATOR</span><span id="footerUrl">-</span></footer>
     </main>
-    <script src="/static/app.js?v=20260813-1" defer></script>
+    <script src="/static/app.js?v=20260814-1" defer></script>
   </body>
 </html>

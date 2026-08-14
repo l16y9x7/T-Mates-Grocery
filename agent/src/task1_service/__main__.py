@@ -11,7 +11,7 @@ from task1_service.models import Task1Settings
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run task 1 receipt-to-pick service")
+    parser = argparse.ArgumentParser(description="Run task 1 receipt-to-pick-and-place service")
     parser.add_argument("--config", default="config/task1.production.yaml")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8108)

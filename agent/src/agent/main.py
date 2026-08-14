@@ -22,7 +22,7 @@ from agent.workflow import WorkflowBuilder, initial_state
 
 
 # 使用相对源码位置推导默认配置，避免依赖启动命令所在的当前工作目录。
-DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config" / "agent.mock.yaml"
+DEFAULT_CONFIG = Path(__file__).resolve().parents[2] / "config" / "agent.production.yaml"
 LOGGER = logging.getLogger(__name__)
 # LangGraph 要求提供有限整数；使用系统最大整数，实际业务不设置巡检轮数上限。
 GRAPH_RECURSION_LIMIT = maxsize

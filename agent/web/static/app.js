@@ -26,10 +26,12 @@ const receiptEmpty = document.querySelector("#receiptEmpty");
 const receiptOutput = document.querySelector("#receiptOutput");
 const task1Form = document.querySelector("#task1Form");
 const task1SubmitButton = document.querySelector("#task1SubmitButton");
-const task1PickCount = document.querySelector("#task1PickCount");
 const task1ErrorMessage = document.querySelector("#task1ErrorMessage");
 const task1EmptyState = document.querySelector("#task1EmptyState");
 const task1Timeline = document.querySelector("#task1Timeline");
+const task1LiveStatus = document.querySelector("#task1LiveStatus");
+const task1ErrorDetails = document.querySelector("#task1ErrorDetails");
+const task1ErrorBody = document.querySelector("#task1ErrorBody");
 const task1ResultCard = document.querySelector("#task1ResultCard");
 const task1ResultStatus = document.querySelector("#task1ResultStatus");
 const task1ResultBody = document.querySelector("#task1ResultBody");
@@ -277,27 +279,101 @@ function eventLabel(event) {
   return labels[event.status] || event.status || "更新";
 }
 
+function formatJson(value) {
+  if (value === undefined || value === null) return "-";
+  if (typeof value === "string") return value;
+  return JSON.stringify(value, null, 2);
+}
+
+function appendInterfacePayload(item, label, payload) {
+  const section = document.createElement("section");
+  section.className = "interface-payload";
+  const heading = document.createElement("div");
+  heading.className = "interface-payload-heading";
+  heading.textContent = label;
+  const content = document.createElement("pre");
+  content.textContent = formatJson(payload);
+  section.append(heading, content);
+  item.append(section);
+}
+
 function addFlowEvent(event, target = timeline) {
+  const isInterfaceCall = event.event === "接口调用" && ("request" in event || "response" in event);
   const item = document.createElement("article");
-  item.className = `timeline-item ${event.status || "info"}`;
+  item.className = `timeline-item ${event.status || "info"}${isInterfaceCall ? " interface-call" : ""}`;
   const title = document.createElement("div");
   title.className = "timeline-title";
   const name = document.createElement("strong");
-  name.textContent = event.event || "流程";
+  name.textContent = isInterfaceCall
+    ? `外部接口 · ${event.interface || "未知接口"}`
+    : event.event || "流程";
   const state = document.createElement("span");
   state.textContent = eventLabel(event);
   title.append(name, state);
   const meta = document.createElement("time");
   meta.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : "刚刚";
-  const detail = document.createElement("pre");
-  const details = { ...event };
-  delete details.event;
-  delete details.status;
-  delete details.timestamp;
-  detail.textContent = Object.keys(details).length ? JSON.stringify(details, null, 2) : "";
-  item.append(title, meta, detail);
+  item.append(title, meta);
+  if (isInterfaceCall) {
+    const method = event.request?.method;
+    const url = event.request?.url;
+    if (method || url) {
+      const route = document.createElement("div");
+      route.className = "interface-route";
+      route.textContent = [method, url].filter(Boolean).join("  ");
+      item.append(route);
+    }
+    appendInterfacePayload(item, "完整入参 · REQUEST", event.request);
+    appendInterfacePayload(item, "完整出参 · RESPONSE", event.response);
+  } else {
+    const detail = document.createElement("pre");
+    const details = { ...event };
+    delete details.event;
+    delete details.status;
+    delete details.timestamp;
+    detail.textContent = Object.keys(details).length ? JSON.stringify(details, null, 2) : "";
+    item.append(detail);
+  }
   target.append(item);
   item.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function task1StatusText(event) {
+  const status = eventLabel(event);
+  return `${event.event || "流程"} · ${status}`;
+}
+
+function formatTask1Error(body) {
+  if (!body) return "任务一执行失败";
+  if (typeof body === "string") return body;
+  const lines = [];
+  if (body.error_code) lines.push(`错误码: ${body.error_code}`);
+  if (body.failed_step) lines.push(`失败步骤: ${body.failed_step}`);
+  if (body.message) lines.push(`错误消息: ${body.message}`);
+  if (body.current_action_status) lines.push(`动作状态: ${body.current_action_status}`);
+  if (body.current_action_id) lines.push(`动作编号: ${body.current_action_id}`);
+  if (!lines.length) return JSON.stringify(body, null, 2);
+  const details = Object.entries(body)
+    .filter(([key]) => !["error_code", "failed_step", "message", "current_action_status", "current_action_id"].includes(key));
+  if (details.length) lines.push(`上下文: ${JSON.stringify(Object.fromEntries(details), null, 2)}`);
+  return lines.join("\n");
+}
+
+function updateTask1LiveStatus(event) {
+  const strong = task1LiveStatus?.querySelector("strong");
+  if (!strong) return;
+  strong.textContent = task1StatusText(event);
+  task1LiveStatus.className = `live-status ${event.status || "info"}`;
+  if (event.status === "failed") {
+    const body = {
+      error_code: event.error_code,
+      failed_step: event.step,
+      message: event.message,
+      current_action_status: event.current_action_status,
+      current_action_id: event.current_action_id,
+    };
+    task1ErrorDetails.hidden = false;
+    task1ErrorBody.textContent = formatTask1Error(body);
+  }
 }
 
 function setTask1Error(message = "") {
@@ -311,6 +387,10 @@ function resetTask1View() {
   task1Timeline.hidden = false;
   task1Timeline.replaceChildren();
   task1ResultCard.hidden = true;
+  task1ErrorDetails.hidden = true;
+  task1ErrorBody.textContent = "-";
+  task1LiveStatus.className = "live-status";
+  task1LiveStatus.querySelector("strong").textContent = "等待启动";
   task1Visual.hidden = true;
   resetVisualPanel(task1VisualCanvas, task1VisualStatus, task1PoseStatus, task1PoseValues, task1PoseMeta);
   task1OperationKey.textContent = "-";
@@ -319,7 +399,6 @@ function resetTask1View() {
 
 function setTask1Busy(busy) {
   task1SubmitButton.disabled = busy;
-  task1PickCount.disabled = busy;
   task1SubmitButton.querySelector("span:last-child").textContent = busy ? "执行中" : "开始任务一";
 }
 
@@ -331,7 +410,17 @@ function showTask1Result(result) {
     : `HTTP ${result.status_code || 502} · 请求失败`;
   task1ResultStatus.className = result.ok ? "success" : "failure";
   task1ResultBody.textContent = typeof body === "string" ? body : JSON.stringify(body, null, 2);
-  if (!result.ok) setTask1Error(typeof body === "string" ? body : body?.message || "任务一执行失败");
+  if (result.ok) {
+    task1LiveStatus.className = "live-status succeeded";
+    task1LiveStatus.querySelector("strong").textContent = "任务完成 · 成功";
+  } else {
+    const error = formatTask1Error(body);
+    setTask1Error(error);
+    task1ErrorDetails.hidden = false;
+    task1ErrorBody.textContent = error;
+    task1LiveStatus.className = "live-status failed";
+    task1LiveStatus.querySelector("strong").textContent = "任务失败 · 已停止";
+  }
 }
 
 function showResult(result) {
@@ -502,12 +591,16 @@ task1Form.addEventListener("submit", async (event) => {
   resetTask1View();
   setTask1Busy(true);
   try {
-    const task = await startTask1({ pick_count: Number(task1PickCount.value) });
+    const task = await startTask1({});
     task1OperationKey.textContent = task.operation_key;
     beginVisualPolling(task.task_id, "/api/task1", task1Visual, task1VisualCanvas, task1VisualStatus, task1PoseStatus, task1PoseValues, task1PoseMeta, true);
     task1EventSource = new EventSource(task.events_url);
     task1EventSource.addEventListener("flow", (message) => {
-      try { addFlowEvent(JSON.parse(message.data), task1Timeline); } catch (_) { /* ignore malformed event */ }
+      try {
+        const event = JSON.parse(message.data);
+        addFlowEvent(event, task1Timeline);
+        updateTask1LiveStatus(event);
+      } catch (_) { /* ignore malformed event */ }
     });
     task1EventSource.addEventListener("result", async (message) => {
       try { showTask1Result(JSON.parse(message.data)); } catch (_) { setTask1Error("任务一结果格式无效"); }

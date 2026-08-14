@@ -86,8 +86,7 @@ class PickPlaceSettings(BaseModel):
     pose_estimation_url: str | None = Field(default=None, min_length=1)
     manipulation_url: str = Field(min_length=1)
     camera_url: str = Field(min_length=1)
-    pick_camera: str = Field(min_length=1, default="head")
-    pick_cameras: dict[Literal["left", "right"], str] = Field(default_factory=dict)
+    pick_cameras: dict[Literal["left", "right"], str]
     place_camera: str = Field(min_length=1, default="head")
     # 正式配置按相机 ID 选择标定；calibration_file 仅兼容旧配置和单元测试。
     calibration_files: dict[str, str] = Field(default_factory=dict)
@@ -101,6 +100,19 @@ class PickPlaceSettings(BaseModel):
         with Path(path).open("r", encoding="utf-8") as config_file:
             return cls.model_validate(yaml.safe_load(config_file))
 
+    @field_validator("pick_cameras")
+    @classmethod
+    def require_both_pick_cameras(
+        cls, value: dict[Literal["left", "right"], str]
+    ) -> dict[Literal["left", "right"], str]:
+        missing = {"left", "right"} - value.keys()
+        if missing:
+            raise ValueError(f"pick_cameras 缺少配置: {', '.join(sorted(missing))}")
+        blank = [hand for hand, camera in value.items() if not camera.strip()]
+        if blank:
+            raise ValueError(f"pick_cameras 相机 ID 不能为空: {', '.join(sorted(blank))}")
+        return value
+
     def calibration_for(self, camera: str) -> str:
         """返回指定相机的标定文件，旧配置下回退到单一标定文件。"""
 
@@ -110,10 +122,10 @@ class PickPlaceSettings(BaseModel):
         return calibration
 
     def camera_for(self, operation: str, hand: str) -> str:
-        """按操作和手臂选择相机；旧配置继续回退到单一 pick_camera。"""
+        """按操作和手臂选择相机。"""
 
         if operation == "pick":
-            return self.pick_cameras.get(hand.lower(), self.pick_camera)
+            return self.pick_cameras[hand.lower()]
         return self.place_camera
 
 

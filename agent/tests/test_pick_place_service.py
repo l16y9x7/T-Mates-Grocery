@@ -21,6 +21,9 @@ from pick_place_service.models import (
 from pick_place_service.service import CameraFrameProvider, PickPlaceOrchestrator, SubagentClient
 
 
+PICK_CAMERAS = {"left": "left_wrist", "right": "right_wrist"}
+
+
 class FakeSubagents:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -72,6 +75,7 @@ def make_app(fake: FakeSubagents):
         perception_url="http://perception",
         manipulation_url="http://manipulation",
         camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
         calibration_file="camera.json",
     )
     orchestrator = PickPlaceOrchestrator(settings, fake, FakeFrames())
@@ -89,7 +93,7 @@ async def test_operation_started_event_uses_public_request_fields(tmp_path: Path
         camera_url="http://camera",
         calibration_file="camera.json",
         log_dir=str(tmp_path),
-        pick_cameras={"left": "left_wrist", "right": "right_wrist"},
+        pick_cameras=PICK_CAMERAS,
     )
     orchestrator = PickPlaceOrchestrator(settings, fake, frames)
     request = PickPlaceRequest(task_type="SORTING", product_name="舒克牙膏海盐薄荷", hand=hand)
@@ -107,6 +111,34 @@ async def test_operation_started_event_uses_public_request_fields(tmp_path: Path
     assert frames.cameras == [f"{hand.lower()}_wrist"]
 
 
+@pytest.mark.parametrize(
+    ("pick_cameras", "missing_hand"),
+    [
+        ({"right": "right_wrist"}, "left"),
+        ({"left": "left_wrist"}, "right"),
+    ],
+)
+def test_settings_require_both_pick_cameras(
+    pick_cameras: dict[str, str], missing_hand: str
+) -> None:
+    with pytest.raises(ValueError, match=rf"pick_cameras 缺少配置: {missing_hand}"):
+        PickPlaceSettings(
+            perception_url="http://perception",
+            manipulation_url="http://manipulation",
+            camera_url="http://camera",
+            pick_cameras=pick_cameras,
+        )
+
+
+def test_settings_require_pick_cameras() -> None:
+    with pytest.raises(ValueError, match="pick_cameras"):
+        PickPlaceSettings(
+            perception_url="http://perception",
+            manipulation_url="http://manipulation",
+            camera_url="http://camera",
+        )
+
+
 @pytest.mark.asyncio
 async def test_pick_runs_subagents_once_and_reuses_idempotency_result() -> None:
     fake = FakeSubagents()
@@ -121,6 +153,23 @@ async def test_pick_runs_subagents_once_and_reuses_idempotency_result() -> None:
     assert first.status_code == second.status_code == 200
     assert first.json() == {"status": "SUCCEEDED"}
     assert fake.calls == [("pick", "locate"), ("pick", "pose"), ("pick", "execute"), ("pick", "check")]
+
+
+@pytest.mark.asyncio
+async def test_pick_rejects_request_without_hand() -> None:
+    fake = FakeSubagents()
+    app = make_app(fake)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://pick-place"
+    ) as client:
+        response = await client.post(
+            "/pick",
+            json={"task_type": "SORTING", "product_name": "可口可乐"},
+            headers={"Idempotency-Key": "task-without-hand"},
+        )
+
+    assert response.status_code == 422
+    assert fake.calls == []
 
 
 @pytest.mark.asyncio
@@ -186,6 +235,7 @@ async def test_camera_provider_uses_color_snapshot_and_depth_stream(tmp_path: Pa
         pose_estimation_url="http://pose-estimation",
         manipulation_url="http://manipulation",
         camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
         calibration_file="camera.json",
         temp_dir=str(tmp_path),
     )
@@ -233,6 +283,7 @@ async def test_camera_provider_extracts_raw_uint16_depth_multipart(tmp_path: Pat
         perception_url="http://perception",
         manipulation_url="http://manipulation",
         camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
         calibration_file="camera.json",
         temp_dir=str(tmp_path),
     )
@@ -275,6 +326,7 @@ async def test_subagent_pose_uses_multipart_files_for_real_manipulation_api(tmp_
         pose_estimation_url="http://pose-estimation",
         manipulation_url="http://manipulation",
         camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
         calibration_file=str(paths["camera"]),
     )
     frame = FrameBundle(**{field: str(path) for field, path in paths.items()})
@@ -322,6 +374,7 @@ async def test_subagent_pose_preserves_downstream_error_message(
         perception_url="http://perception",
         manipulation_url="http://manipulation",
         camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
         calibration_file=str(paths["camera"]),
     )
     frame = FrameBundle(**{field: str(path) for field, path in paths.items()})
@@ -376,6 +429,7 @@ def test_calibration_file_is_selected_by_camera() -> None:
         perception_url="http://perception",
         manipulation_url="http://manipulation",
         camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
         calibration_files={
             "head": "config/camera/head.json",
             "left_wrist": "config/camera/left_wrist.json",
@@ -403,6 +457,7 @@ async def test_subagent_health_checks_pose_and_manipulation_services() -> None:
         pose_estimation_url="http://pose-estimation",
         manipulation_url="http://manipulation",
         camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
         calibration_file="camera.json",
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -424,6 +479,7 @@ async def test_subagent_locate_uses_formal_locate_contract() -> None:
         locate_url="http://formal-locate",
         manipulation_url="http://manipulation",
         camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
         calibration_file="camera.json",
     )
     request = PickPlaceRequest(task_type="SORTING", product_name="可口可乐", hand="LEFT")

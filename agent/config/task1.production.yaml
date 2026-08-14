@@ -1,12 +1,20 @@
 services:
-  navigation: http://192.168.130.50:8081
+  navigation: http://192.168.3.226:8081
   perception: http://127.0.0.1:8083
-  pose: http://192.168.1.226:8082
+  pose: http://192.168.3.226:8082
   pick_place: http://127.0.0.1:8086
   sku: http://127.0.0.1:25540
 
 receipt_viewpoint: receipt_viewpoint
+delivery_place: delivery_place
+task_boundary: task_boundary
 log_dir: log
+
+product_hand_options:
+  H1_F_L1_C01: [LEFT, RIGHT]
+  H1_F_L1_C02: [LEFT, RIGHT]
+  H1_F_L2_C01: [LEFT, RIGHT]
+  H2_B_L3_C02: [LEFT, RIGHT]
 
 timeouts:
   connect_seconds: 3
@@ -16,3 +24,4 @@ timeouts:
   navigation_seconds: 600
   pose_seconds: 300
   pick_seconds: 600
+  place_seconds: 600

@@ -18,7 +18,6 @@
 当前相机配置：
 
 ```yaml
-pick_camera: left_wrist
 pick_cameras:
   left: left_wrist
   right: right_wrist
@@ -162,7 +161,7 @@ Content-Type: application/json
 
 ### 3.2 相机获取与深度标准化
 
-拣取根据请求 `hand` 选择 `pick_cameras.left` 或 `pick_cameras.right`，未配置时回退到 `pick_camera`；放置使用 `place_camera`。
+拣取根据请求 `hand` 选择 `pick_cameras.left` 或 `pick_cameras.right`。两项均为必填配置，缺少任一项时服务配置加载失败；放置使用 `place_camera`。
 
 RGB：
 

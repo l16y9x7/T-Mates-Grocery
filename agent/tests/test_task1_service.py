@@ -21,6 +21,8 @@ class Task1Mock:
         }
         self.pick_timeout_once = False
         self.pick_attempts = 0
+        self.place_timeout_once = False
+        self.place_attempts = 0
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -62,6 +64,12 @@ class Task1Mock:
                 self.pick_timeout_once = False
                 raise httpx.ReadTimeout("temporary timeout", request=request)
             return httpx.Response(200, json={"status": "SUCCEEDED"})
+        if path == "/place":
+            self.place_attempts += 1
+            if self.place_timeout_once:
+                self.place_timeout_once = False
+                raise httpx.ReadTimeout("temporary timeout", request=request)
+            return httpx.Response(200, json={"status": "SUCCEEDED"})
         if path in {"/navigation/navigate", "/pose/prepare"}:
             return httpx.Response(200, json={"status": "SUCCEEDED"})
         return httpx.Response(404, json={"error_code": "UNKNOWN_ENDPOINT"})
@@ -84,7 +92,12 @@ def settings() -> Task1Settings:
             navigation_seconds=0.2,
             pose_seconds=0.2,
             pick_seconds=0.2,
+            place_seconds=0.2,
         ),
+        product_hand_options={
+            "H2_F_L1_C01": ["LEFT", "RIGHT"],
+            "H2_F_L1_C04": ["LEFT", "RIGHT"],
+        },
     )
 
 
@@ -97,39 +110,56 @@ def payload(request: httpx.Request) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_task1_pick_count_one_is_serial_and_uses_sku_locations() -> None:
+async def test_task1_runs_full_pick_place_flow() -> None:
     mock = Task1Mock()
     client = Task1Client(settings(), transport=mock.transport)
     async with client:
-        result = await Task1Orchestrator(settings(), client).run(Task1Request(pick_count=1))
+        result = await Task1Orchestrator(settings(), client).run(Task1Request())
 
     assert result.status == "SUCCEEDED"
     assert result.target_items[0].product_slot_id == "H2_F_L1_C01"
-    assert result.target_items[0].picked is True
-    assert result.target_items[1].picked is False
-    assert result.held_items == {"LEFT": "可口可乐罐装"}
-    assert paths(mock) == [
-        "/navigation/health", "/perception/health", "/pose/health", "/health", "/sku/health",
-        "/navigation/navigate", "/pose/prepare", "/perception/parse",
-        "/sku/search_by_name", "/sku/search_by_name",
-        "/navigation/navigate", "/pose/prepare", "/pick",
-    ]
-    assert payload(mock.requests[-3]) == {"target_id": "H2_F_L1_C01"}
-    assert payload(mock.requests[-2]) == {"pose_type": "SHELF_PICK_READY", "shelf_level": "L1"}
+    assert [item.picked for item in result.target_items] == [True, True]
+    assert [item.placed for item in result.target_items] == [True, True]
+    assert result.held_items == {}
+    assert [payload(request)["hand"] for request in mock.requests if request.url.path == "/pick"] == ["LEFT", "RIGHT"]
+    assert [payload(request)["hand"] for request in mock.requests if request.url.path == "/place"] == ["LEFT", "RIGHT"]
+    navigation = [payload(request).get("target_id") for request in mock.requests if request.url.path == "/navigation/navigate"]
+    assert navigation[-2:] == ["delivery_place", "task_boundary"]
 
 
 @pytest.mark.asyncio
-async def test_task1_pick_count_two_picks_both_products_in_receipt_order() -> None:
+async def test_task1_picks_both_products_and_places_them() -> None:
     mock = Task1Mock()
     client = Task1Client(settings(), transport=mock.transport)
     async with client:
-        result = await Task1Orchestrator(settings(), client).run(Task1Request(pick_count=2))
+        result = await Task1Orchestrator(settings(), client).run(Task1Request())
 
     assert [item.picked for item in result.target_items] == [True, True]
-    assert result.held_items == {"LEFT": "可口可乐罐装", "RIGHT": "百事可乐瓶装"}
+    assert result.held_items == {}
     pick_requests = [request for request in mock.requests if request.url.path == "/pick"]
     assert [payload(request)["hand"] for request in pick_requests] == ["LEFT", "RIGHT"]
     assert [payload(request)["product_name"] for request in pick_requests] == list(mock.names)
+    assert len([request for request in mock.requests if request.url.path == "/place"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_task1_same_hand_is_strictly_serial(tmp_path) -> None:
+    mock = Task1Mock()
+    task_settings = settings().model_copy(update={
+        "log_dir": str(tmp_path),
+        "product_hand_options": {
+            "H2_F_L1_C01": ["LEFT"],
+            "H2_F_L1_C04": ["LEFT"],
+        },
+    })
+    client = Task1Client(task_settings, transport=mock.transport)
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
+
+    assert result.held_items == {}
+    actions = [(request.url.path, payload(request).get("target_id"), payload(request).get("product_name")) for request in mock.requests if request.url.path in {"/navigation/navigate", "/pick", "/place"}]
+    assert actions.index(("/place", None, "可口可乐罐装")) < actions.index(("/pick", None, "百事可乐瓶装"))
+    assert [payload(request)["hand"] for request in mock.requests if request.url.path in {"/pick", "/place"}] == ["LEFT", "LEFT", "LEFT", "LEFT"]
 
 
 @pytest.mark.asyncio
@@ -151,11 +181,11 @@ async def test_task1_retries_pick_with_same_idempotency_key() -> None:
     mock.pick_timeout_once = True
     client = Task1Client(settings(), transport=mock.transport)
     async with client:
-        await Task1Orchestrator(settings(), client).run(Task1Request(pick_count=1))
+        await Task1Orchestrator(settings(), client).run(Task1Request())
 
     pick_requests = [request for request in mock.requests if request.url.path == "/pick"]
-    assert mock.pick_attempts == 2
-    assert len(pick_requests) == 2
+    assert mock.pick_attempts == 3
+    assert len(pick_requests) == 3
     assert pick_requests[0].headers["Idempotency-Key"] == pick_requests[1].headers["Idempotency-Key"]
 
 
@@ -165,7 +195,7 @@ async def test_task1_writes_pickplace_style_operation_log(tmp_path) -> None:
     task_settings = settings().model_copy(update={"log_dir": str(tmp_path)})
     client = Task1Client(task_settings, transport=mock.transport)
     async with client:
-        await Task1Orchestrator(task_settings, client).run(Task1Request(pick_count=1), "web-task1-log")
+        await Task1Orchestrator(task_settings, client).run(Task1Request(), "web-task1-log")
 
     directories = list(tmp_path.iterdir())
     assert len(directories) == 1
@@ -184,8 +214,37 @@ async def test_task1_app_exposes_run_endpoint() -> None:
     orchestrator = Task1Orchestrator(settings(), client)
     app = create_app(settings(), orchestrator=orchestrator)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://task1") as http_client:
-        response = await http_client.post("/task1/run", json={"pick_count": 1})
+        response = await http_client.post("/task1/run", json={})
 
     assert response.status_code == 200
-    assert response.json()["requested_pick_count"] == 1
+    assert response.json()["status"] == "SUCCEEDED"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_task1_app_rejects_legacy_pick_count() -> None:
+    mock = Task1Mock()
+    client = Task1Client(settings(), transport=mock.transport)
+    app = create_app(settings(), orchestrator=Task1Orchestrator(settings(), client))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://task1") as http_client:
+        response = await http_client.post("/task1/run", json={"pick_count": 1})
+
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "INVALID_REQUEST"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_task1_error_response_contains_failed_step_and_message() -> None:
+    mock = Task1Mock()
+    mock.health["navigation"] = "ERROR"
+    client = Task1Client(settings(), transport=mock.transport)
+    app = create_app(settings(), orchestrator=Task1Orchestrator(settings(), client))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://task1") as http_client:
+        response = await http_client.post("/task1/run", json={})
+
+    assert response.status_code == 503
+    assert response.json()["error_code"] == "CAPABILITY_NOT_READY"
+    assert response.json()["failed_step"] == "健康检查"
+    assert "navigation" in response.json()["message"]
     await client.aclose()

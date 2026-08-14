@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import json
+from typing import Any, Callable
 
 import httpx
 from pydantic import ValidationError
@@ -40,6 +41,7 @@ class Task1Client:
     ) -> None:
         self.settings = settings
         self._client = httpx.AsyncClient(transport=transport)
+        self.trace_callback: Callable[[dict[str, Any]], None] | None = None
 
     async def __aenter__(self) -> "Task1Client":
         return self
@@ -49,6 +51,48 @@ class Task1Client:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+    def set_trace_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        self.trace_callback = callback
+
+    def _trace(
+        self,
+        *,
+        service: str,
+        method: str,
+        path: str,
+        url: str,
+        headers: dict[str, str] | None,
+        body: dict[str, Any] | None,
+        response: httpx.Response | None = None,
+        error: str | None = None,
+        attempt: int,
+    ) -> None:
+        if self.trace_callback is None:
+            return
+        response_body: object = None
+        response_headers: dict[str, str] = {}
+        status_code: int | None = None
+        if response is not None:
+            status_code = response.status_code
+            response_headers = dict(response.headers)
+            try:
+                response_body = response.json()
+            except (ValueError, json.JSONDecodeError):
+                response_body = response.text
+        self.trace_callback({
+            "interface": f"{service}{path}",
+            "service": service,
+            "method": method,
+            "url": url,
+            "headers": headers or {},
+            "body": body,
+            "attempt": attempt,
+            "status_code": status_code,
+            "response_headers": response_headers,
+            "response_body": response_body,
+            "error": error,
+        })
 
     async def check_all_health(self) -> None:
         services = tuple(HEALTH_PATHS)
@@ -162,6 +206,20 @@ class Task1Client:
             self.settings.timeouts.pick_seconds,
         )
 
+    async def place(
+        self,
+        product_name: str,
+        hand: Hand,
+        idempotency_key: str,
+    ) -> None:
+        await self._physical_action(
+            "pick_place",
+            "/place",
+            {"task_type": TaskType.SORTING.value, "product_name": product_name, "hand": hand.value},
+            idempotency_key,
+            self.settings.timeouts.place_seconds,
+        )
+
     async def _check_health(self, service: str) -> bool:
         response = await self._request(
             service,
@@ -221,19 +279,57 @@ class Task1Client:
                         method, url, json=json, headers=headers, timeout=timeout
                     )
             except (TimeoutError, httpx.TimeoutException, httpx.NetworkError) as exc:
+                self._trace(
+                    service=service,
+                    method=method,
+                    path=path,
+                    url=url,
+                    headers=headers,
+                    body=json,
+                    error=str(exc),
+                    attempt=attempt + 1,
+                )
                 if attempt == 0:
                     await asyncio.sleep(0.05)
                     continue
                 code = "ACTION_RESULT_UNKNOWN" if result_unknown_on_exhaustion else "NETWORK_ERROR"
                 raise Task1ServiceError(code, f"{service} request result could not be determined") from exc
             if not response.is_success:
+                payload: dict[str, Any] = {}
                 try:
-                    code = response.json().get("error_code", "EXECUTION_FAILED")
+                    raw_payload = response.json()
+                    if isinstance(raw_payload, dict):
+                        payload = raw_payload
                 except ValueError:
-                    code = "EXECUTION_FAILED"
+                    payload = {}
+                code = payload.get("error_code", "EXECUTION_FAILED")
+                detail = payload.get("message") or payload.get("detail")
+                message = f"{service} returned HTTP {response.status_code}"
+                if detail:
+                    message = f"{message}: {detail}"
+                self._trace(
+                    service=service,
+                    method=method,
+                    path=path,
+                    url=url,
+                    headers=headers,
+                    body=json,
+                    response=response,
+                    attempt=attempt + 1,
+                )
                 raise Task1ServiceError(
                     code if isinstance(code, str) else "EXECUTION_FAILED",
-                    f"{service} returned HTTP {response.status_code}",
+                    message,
                 )
+            self._trace(
+                service=service,
+                method=method,
+                path=path,
+                url=url,
+                headers=headers,
+                body=json,
+                response=response,
+                attempt=attempt + 1,
+            )
             return response
         raise AssertionError("unreachable retry state")

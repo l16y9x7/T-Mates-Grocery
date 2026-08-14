@@ -13,12 +13,12 @@ from pathlib import Path
 import pytest
 
 from agent.main import run_task
-from agent.models import AgentSettings, TaskType, TimeoutSettings
+from agent.models import AgentSettings, ServiceSettings, TaskType, TimeoutSettings
 from tests.mock_services import MockServices
 
 
 # 测试复用生产配置的数据结构与货位表，只缩短耗时相关配置。
-CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "agent.mock.yaml"
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "agent.production.yaml"
 
 
 def make_test_settings() -> AgentSettings:
@@ -35,7 +35,15 @@ def make_test_settings() -> AgentSettings:
         pick_seconds=0.2,
         place_seconds=0.2,
     )
-    return settings.model_copy(update={"timeouts": timeouts})
+    services = ServiceSettings(
+        navigation="http://navigation.local",
+        perception="http://perception.local",
+        pose="http://pose.local",
+        manipulation="http://manipulation.local",
+        pick_place="http://pick-place.local",
+        sku="http://sku.local",
+    )
+    return settings.model_copy(update={"services": services, "timeouts": timeouts})
 
 
 def test_run_task_works_with_cli_event_loop() -> None:
