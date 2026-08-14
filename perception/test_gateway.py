@@ -19,6 +19,10 @@ class PerceptionGatewayTest(unittest.TestCase):
         self.assertIn("/perception/place/check", paths)
         self.assertIn("/perception/parse", paths)
         self.assertIn("/perception/inspect", paths)
+        self.assertIn("/perception/health", paths)
+
+    def test_health_reports_ready(self) -> None:
+        self.assertEqual(main.perception_health(), {"status": "READY"})
 
 
 if __name__ == "__main__":

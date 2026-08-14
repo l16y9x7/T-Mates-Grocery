@@ -49,5 +49,11 @@ app.add_exception_handler(
 )
 
 
+@app.get("/perception/health")
+def perception_health() -> dict[str, str]:
+    """Report that the unified perception gateway is ready to serve requests."""
+    return {"status": "READY"}
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host=SERVICE_BIND_HOST, port=8083)
