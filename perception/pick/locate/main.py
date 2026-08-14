@@ -968,7 +968,8 @@ def locate_product_in_image(
     raw_sam_instances = list(located_instances)
     located_instances = keep_frontmost_in_overlap_chains(located_instances)
     located_instances = drop_smallest_mask_area_outlier(located_instances)
-    if len(located_instances) > 1:
+    depth_enabled_for_task = task_type.strip().upper() != "SHORTAGE"
+    if depth_enabled_for_task and len(located_instances) > 1:
         if depth_image is None and depth_image_provider is not None:
             depth_image = depth_image_provider(original_image.size)
         if depth_image is not None and depth_image.size == original_image.size:

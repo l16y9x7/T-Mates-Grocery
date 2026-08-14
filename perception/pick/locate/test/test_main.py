@@ -588,6 +588,53 @@ class LocateLogicTest(unittest.TestCase):
             self.assertEqual(len(result.instances), 1)
             self.assertIs(result.selected_instance, result.instances[0])
 
+    def test_locate_skips_depth_snapshot_for_shortage_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            image_path = temporary_path / "frame_rgb.jpg"
+            monitor_directory = temporary_path / "monitor_images"
+            Image.new("RGB", (100, 80), "white").save(image_path)
+            depth_provider = Mock(return_value=Image.new("I", (100, 80), 700))
+
+            with (
+                patch.object(
+                    main,
+                    "get_stable_qwen_bboxes",
+                    return_value=[[100.0, 100.0, 500.0, 500.0]],
+                ),
+                patch.object(
+                    main,
+                    "call_sam3",
+                    return_value=[
+                        {
+                            "bbox_xyxy": [0, 0, 20, 32],
+                            "mask_png_base64": png_base64((40, 32)),
+                            "score": 0.95,
+                        },
+                        {
+                            "bbox_xyxy": [20, 0, 40, 32],
+                            "mask_png_base64": png_base64((40, 32)),
+                            "score": 0.91,
+                        },
+                    ],
+                ),
+                patch.object(main, "MONITOR_IMAGE_DIR", monitor_directory),
+            ):
+                result = main.locate_product_in_image(
+                    {"sku_id": "SKU_001", "name": "NFC桔汁"},
+                    image_path,
+                    task_type="SHORTAGE",
+                    qwen_prompt_override="qwen prompt",
+                    sam_prompt_override="sam prompt",
+                    depth_image_provider=depth_provider,
+                )
+
+            depth_provider.assert_not_called()
+            self.assertEqual(len(result.instances), 2)
+            self.assertTrue(
+                all(instance.depth_mm is None for instance in result.instances)
+            )
+
     def test_locate_accepts_uploaded_image(self) -> None:
         image_buffer = io.BytesIO()
         Image.new("RGB", (20, 10), "white").save(image_buffer, format="JPEG")
