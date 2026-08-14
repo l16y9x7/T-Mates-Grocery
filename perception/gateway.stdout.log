@@ -1,5 +1,1 @@
-INFO:     127.0.0.1:51197 - "GET /openapi.json HTTP/1.1" 200 OK
-CAMERA_URL: http://192.168.3.226:8085/camera/snapshot?camera=head&type=color
-INFO:     127.0.0.1:59227 - "GET /video/frame?task_type=SHORTAGE&hand=right HTTP/1.1" 200 OK
-CAMERA_URL: http://192.168.3.226:8085/camera/snapshot?camera=head&type=color
-INFO:     127.0.0.1:54631 - "GET /video/frame?task_type=SHORTAGE&hand=right HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50863 - "GET /openapi.json HTTP/1.1" 200 OK

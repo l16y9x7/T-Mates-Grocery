@@ -108,6 +108,9 @@ SAM_FRONT_AREA_DOMINANCE_RATIO = float(
 SAM_SMALLEST_MASK_MAX_RATIO = float(
     os.getenv("SAM_SMALLEST_MASK_MAX_RATIO", "0.5")
 )
+SHORTAGE_MIN_SAM_QWEN_BBOX_COVERAGE = float(
+    os.getenv("SHORTAGE_MIN_SAM_QWEN_BBOX_COVERAGE", "0.25")
+)
 PICK_MIN_ASPECT_RATIO_TO_BEST = float(
     os.getenv("PICK_MIN_ASPECT_RATIO_TO_BEST", "0.75")
 )
@@ -1180,6 +1183,66 @@ def bbox_overlap_by_smaller_area(
     return intersection_width * intersection_height / smaller_area
 
 
+def bbox_coverage_ratio(
+    candidate_bbox: list[float], reference_bbox: list[float]
+) -> float:
+    """Return the fraction of the reference bbox covered by the candidate."""
+    reference_width = max(0.0, reference_bbox[2] - reference_bbox[0])
+    reference_height = max(0.0, reference_bbox[3] - reference_bbox[1])
+    reference_area = reference_width * reference_height
+    if reference_area <= 0:
+        return 0.0
+    intersection_width = max(
+        0.0,
+        min(candidate_bbox[2], reference_bbox[2])
+        - max(candidate_bbox[0], reference_bbox[0]),
+    )
+    intersection_height = max(
+        0.0,
+        min(candidate_bbox[3], reference_bbox[3])
+        - max(candidate_bbox[1], reference_bbox[1]),
+    )
+    return intersection_width * intersection_height / reference_area
+
+
+def keep_sam_instances_with_qwen_coverage(
+    instances: list[LocatedInstance],
+    qwen_bboxes_by_source: dict[int, list[float]],
+    *,
+    minimum_coverage: float = SHORTAGE_MIN_SAM_QWEN_BBOX_COVERAGE,
+) -> list[LocatedInstance]:
+    """Drop small SAM fragments while retaining each Qwen source's largest bbox."""
+    threshold = max(0.0, min(1.0, minimum_coverage))
+    indices_by_source: dict[int, list[int]] = defaultdict(list)
+    for index, instance in enumerate(instances):
+        if instance.source_qwen_index in qwen_bboxes_by_source:
+            indices_by_source[instance.source_qwen_index].append(index)
+    protected_indices = {
+        max(
+            source_indices,
+            key=lambda index: (
+                max(0.0, instances[index].bbox[2] - instances[index].bbox[0])
+                * max(0.0, instances[index].bbox[3] - instances[index].bbox[1]),
+                instances[index].score
+                if instances[index].score is not None
+                else -1.0,
+            ),
+        )
+        for source_indices in indices_by_source.values()
+    }
+    return [
+        instance
+        for index, instance in enumerate(instances)
+        if index in protected_indices
+        or instance.source_qwen_index not in qwen_bboxes_by_source
+        or bbox_coverage_ratio(
+            instance.bbox,
+            qwen_bboxes_by_source[instance.source_qwen_index],
+        )
+        >= threshold
+    ]
+
+
 def mask_foreground_pixel_count(mask_base64: str) -> int:
     encoded = mask_base64.split(",", 1)[-1]
     try:
@@ -1745,16 +1808,22 @@ def locate_product_in_image(
         for detection in detections
     ]
     qwen_bbox_records: list[QwenBBoxRecord] = []
+    qwen_bboxes_by_source: dict[int, list[float]] = {}
     located_instances: list[LocatedInstance] = []
     for qwen_index, qwen_bbox in enumerate(qwen_bboxes):
         try:
             crop_box = qwen_bbox_to_crop(qwen_bbox, inference_image.size)
         except ValueError:
             continue
+        qwen_bbox_original = qwen_bbox_to_original(
+            qwen_bbox,
+            original_image.size,
+        )
+        qwen_bboxes_by_source[qwen_index] = qwen_bbox_original
         qwen_bbox_records.append(
             QwenBBoxRecord(
                 bbox_normalized=qwen_bbox,
-                bbox_original=qwen_bbox_to_original(qwen_bbox, original_image.size),
+                bbox_original=qwen_bbox_original,
                 crop_box_original=map_crop_box_between_sizes(
                     crop_box,
                     inference_image.size,
@@ -1779,6 +1848,16 @@ def locate_product_in_image(
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
 
     raw_sam_instances = list(located_instances)
+    if task_type.strip().upper() == "SHORTAGE":
+        located_instances = keep_sam_instances_with_qwen_coverage(
+            located_instances,
+            qwen_bboxes_by_source,
+        )
+        if not located_instances:
+            raise HTTPException(
+                status_code=404,
+                detail="SAM3 候选占原始 Qwen bbox 的面积均过小",
+            )
     depth_enabled_for_task = task_type.strip().upper() != "SHORTAGE"
     upper_confidence_pick = (
         hard_case is None
