@@ -1,4 +1,8 @@
 {
+  "7喜瓶装": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的瓶装7喜，返回所有满足条件的bbox。最终返回格式：{\"name\": \"瓶装7喜\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "bottle"
+  },
   "Dove沐浴乳": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的Dove tube洗面奶，输出bbox。返回格式：{\"name\": \"Dove tube洗面奶\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "white tube"
@@ -39,6 +43,10 @@
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的绿色黄瓜味乐事薯片，输出满足条件的绿色黄瓜味乐事薯片的bbox。返回格式：{\"name\": \"绿色黄瓜味乐事薯片\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "green Lay's package"
   },
+  "NFC桔汁": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的NFC桔汁盒，返回这些NFC桔汁盒的bbox。最终返回格式：{\"name\": \"NFC桔汁盒\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "carton"
+  },
   "三只松鼠每日坚果": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的三只松鼠包装，输出满足条件的所有三只松鼠包装的bbox。返回格式：{\"name\": \"三只松鼠包装\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "package"
@@ -63,6 +71,10 @@
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的京东京造毛巾，输出满足条件的所有京东京造毛巾的bbox。返回格式：{\"name\": \"京东京造毛巾\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "plastic towel package"
   },
+  "健食力低脂香肠": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的绿白低脂香肠袋堆，返回bbox。返回格式：{\"name\": \"绿白低脂香肠袋堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "white and green package"
+  },
   "农心碗面": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的白色辛拉面碗，输出满足条件的所有白色辛拉面碗的bbox。返回格式：{\"name\": \"白色辛拉面碗\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "noodle cup"
@@ -85,7 +97,7 @@
   },
   "可口可乐罐装": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的可口可乐，输出bbox。最终返回格式：{\"name\": \"可口可乐\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "coke"
+    "sam3_prompt": "can"
   },
   "可孚棉签": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的圆形透明棉签罐子，输出bbox。返回格式：{\"name\": \"圆形透明棉签罐子\", \"bbox\": [x1, y1, x2, y2]}",
@@ -123,6 +135,26 @@
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的绿色品客薯片罐，输出满足条件的所有绿色品客薯片罐的bbox。返回格式：{\"name\": \"绿色品客薯片罐\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "pringles can"
   },
+  "外星人电解质水椰子口味": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的所有蓝椰子口味外星人电解质水瓶，输出bbox。返回格式：{\"name\": \"蓝白椰子口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "bottle"
+  },
+  "外星人电解质水白桃口味0糖": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的所有纯白白桃口味外星人电解质水瓶，输出bbox。返回格式：{\"name\": \"纯白白桃口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "bottle"
+  },
+  "外星人电解质水西柚口味": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的所有蓝白西柚口味外星人电解质水瓶，输出bbox。返回格式：{\"name\": \"蓝白西柚口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "bottle"
+  },
+  "外星人电解质水青柠口味": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的所有蓝白青柠口味外星人电解质水瓶，输出bbox。返回格式：{\"name\": \"蓝白青柠口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "bottle"
+  },
+  "外星人电解质水青柠口味0糖": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的所有纯白青柠口味外星人电解质水瓶，输出bbox。返回格式：{\"name\": \"纯白青柠口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "bottle"
+  },
   "奥利奥冰淇淋抹茶味": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的绿色奥利奥饼干盒，输出bbox。返回格式：{\"name\": \"绿色奥利奥饼干盒\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "oreo box"
@@ -135,6 +167,10 @@
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的粉色桃子奥利奥饼干盒，输出bbox。返回格式：{\"name\": \"粉色桃子奥利奥饼干盒\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "oreo box"
   },
+  "奥利奥香甜不腻": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的蓝色奥利奥原味饼干盒，输出满足条件的所有蓝色奥利奥原味饼干盒的bbox。返回格式：{\"name\": \"蓝色奥利奥原味饼干盒\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "oreo box"
+  },
   "好丽友派": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的好丽友派包装盒，输出bbox。返回格式：{\"name\": \"好丽友派包装盒\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "box"
@@ -142,6 +178,10 @@
   "好人家火锅底料": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的小块装火锅底料堆，输出bbox。返回格式：{\"name\": \"小块装火锅底料堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "hotpot package"
+  },
+  "好友趣蜂蜜黄油味": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的好友趣包装袋，输出满足条件的所有好友趣包装袋的bbox。返回格式：{\"name\": \"好友趣包装袋\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "snack package"
   },
   "好友趣韩国泡菜味": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的好友趣包装袋，输出bbox。返回格式：{\"name\": \"好友趣包装袋\", \"bbox\": [x1, y1, x2, y2]}",
@@ -219,6 +259,10 @@
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的绿色纸巾包，输出bbox。返回格式：{\"name\": \"绿色纸巾包\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "green package"
   },
+  "慢碳十色糙米": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的淡蓝色标签慢碳十色糙米罐，输出bbox。返回格式：{\"name\": \"淡蓝色标签慢碳十色糙米罐\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "container"
+  },
   "拖鞋": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的拖鞋袋，输出bbox。返回格式：{\"name\": \"拖鞋袋\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "package"
@@ -247,6 +291,10 @@
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的蓝白医用外科口罩盒，输出bbox。返回格式：{\"name\": \"蓝白医用外科口罩盒\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "blue and white box"
   },
+  "百事可乐瓶装": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的百事可乐pepsi瓶，返回bbox。最终返回格式：{\"name\": \"百事可乐pepsi瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "pepsi bottle"
+  },
   "百岁山矿泉水": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的百岁山矿泉水瓶，输出完整的bbox。返回格式：{\"name\": \"百岁山矿泉水瓶\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "transparent bottle"
@@ -262,6 +310,10 @@
   "百醇草莓香草味": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的粉色百醇包装盒，输出满足条件的粉色百醇包装盒的bbox。返回格式：{\"name\": \"粉色百醇包装盒\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "pink box"
+  },
+  "纯棉酒店大毛巾": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的PICC毛巾包，返回bbox。最终返回格式：{\"name\": \"PICC毛巾包\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "PICC towel package"
   },
   "纯甄酸奶": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的蓝色酸奶盒子，输出他们的bbox。返回格式：{\"name\": \"蓝色酸奶盒子\", \"bbox\": [x1, y1, x2, y2]}",
@@ -319,6 +371,14 @@
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的橙色罐装芬达，输出满足条件的所有橙色罐装芬达的bbox。返回格式：{\"name\": \"橙色罐装芬达\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "fanta can"
   },
+  "草原红太阳烧烤料原味": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的棕色烧烤料小瓶子，输出满足条件的所有棕色烧烤料小瓶子的bbox。返回格式：{\"name\": \"棕色烧烤料小瓶子\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "labelled bottle"
+  },
+  "草原红太阳烧烤料香辣味": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的红色烧烤料小瓶子，输出满足条件的所有红色烧烤料小瓶子的bbox。返回格式：{\"name\": \"红色烧烤料小瓶子\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "labelled bottle"
+  },
   "草原红太阳烧烤酱原味": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的绿色烧烤酱袋子，输出满足条件的所有绿色烧烤酱袋子的bbox。返回格式：{\"name\": \"绿色烧烤酱袋子\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "green sauce package"
@@ -330,6 +390,14 @@
   "蒙牛纯牛奶": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的绿白纯牛奶，输出满足条件的所有纯牛奶的bbox。返回格式：{\"name\": \"纯牛奶\", \"bbox\": [x1, y1, x2, y2]",
     "sam3_prompt": "box"
+  },
+  "蒸鱼豉油": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的棕色瓶盖蒸鱼豉油瓶，输出bbox。返回格式：{\"name\": \"棕色瓶盖蒸鱼豉油瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "bottle"
+  },
+  "薄盐生抽": {
+    "qwen3_prompt": "你正在俯视一个托盘，找到其中的紫色瓶盖薄盐生抽瓶，输出bbox。返回格式：{\"name\": \"紫色瓶盖薄盐生抽瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "bottle"
   },
   "薯愿非油炸清新番茄味": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的绿色薯愿盒子，输出满足条件的所有绿色薯愿盒子的bbox。返回格式：{\"name\": \"绿色薯愿盒子\", \"bbox\": [x1, y1, x2, y2]}",
@@ -355,76 +423,8 @@
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的雪碧罐子，返回bbox。最终返回格式：{\"name\": \"雪碧罐子\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "can"
   },
-  "7喜瓶装": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的瓶装7喜，返回所有满足条件的bbox。最终返回格式：{\"name\": \"瓶装7喜\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "bottle"
-  },
-  "NFC桔汁": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的NFC桔汁盒，返回这些NFC桔汁盒的bbox。最终返回格式：{\"name\": \"NFC桔汁盒\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "carton"
-  },
-  "奥利奥香甜不腻": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的蓝色奥利奥原味饼干盒，输出满足条件的所有蓝色奥利奥原味饼干盒的bbox。返回格式：{\"name\": \"蓝色奥利奥原味饼干盒\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "oreo box"
-  },
-  "百事可乐瓶装": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的百事可乐pepsi瓶，返回bbox。最终返回格式：{\"name\": \"百事可乐pepsi瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "pepsi bottle"
-  },
-  "薄盐生抽": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的紫色瓶盖薄盐生抽瓶，输出bbox。返回格式：{\"name\": \"紫色瓶盖薄盐生抽瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "bottle"
-  },
-  "草原红太阳烧烤料香辣味": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的红色烧烤料小瓶子，输出满足条件的所有红色烧烤料小瓶子的bbox。返回格式：{\"name\": \"红色烧烤料小瓶子\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "labelled bottle"
-  },
-  "草原红太阳烧烤料原味": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的棕色烧烤料小瓶子，输出满足条件的所有棕色烧烤料小瓶子的bbox。返回格式：{\"name\": \"棕色烧烤料小瓶子\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "labelled bottle"
-  },
-  "纯棉酒店大毛巾": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的PICC毛巾包，返回bbox。最终返回格式：{\"name\": \"PICC毛巾包\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "PICC towel package"
-  },
   "高纤七色糙米": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的淡蓝色标签高纤七色糙米罐，输出满足条件的所有淡蓝色标签高纤七色糙米罐的bbox。返回格式：{\"name\": \"淡蓝色标签高纤七色糙米罐\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "container"
-  },
-  "好友趣蜂蜜黄油味": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的好友趣包装袋，输出满足条件的所有好友趣包装袋的bbox。返回格式：{\"name\": \"好友趣包装袋\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "snack package"
-  },
-  "健食力低脂香肠": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的绿白低脂香肠袋堆，返回bbox。返回格式：{\"name\": \"绿白低脂香肠袋堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "white and green package"
-  },
-  "慢碳十色糙米": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的淡蓝色标签慢碳十色糙米罐，输出bbox。返回格式：{\"name\": \"淡蓝色标签慢碳十色糙米罐\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "container"
-  },
-  "外星人电解质水白桃口味0糖": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的所有纯白白桃口味外星人电解质水瓶，输出bbox。返回格式：{\"name\": \"纯白白桃口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "bottle"
-  },
-  "外星人电解质水青柠口味": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的所有蓝白青柠口味外星人电解质水瓶，输出bbox。返回格式：{\"name\": \"蓝白青柠口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "bottle"
-  },
-  "外星人电解质水青柠口味0糖": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的所有纯白青柠口味外星人电解质水瓶，输出bbox。返回格式：{\"name\": \"纯白青柠口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "bottle"
-  },
-  "外星人电解质水西柚口味": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的所有蓝白西柚口味外星人电解质水瓶，输出bbox。返回格式：{\"name\": \"蓝白西柚口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "bottle"
-  },
-  "外星人电解质水椰子口味": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的所有蓝椰子口味外星人电解质水瓶，输出bbox。返回格式：{\"name\": \"蓝白椰子口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "bottle"
-  },
-  "蒸鱼豉油": {
-    "qwen3_prompt": "你正在俯视一个托盘，找到其中的棕色瓶盖蒸鱼豉油瓶，输出bbox。返回格式：{\"name\": \"棕色瓶盖蒸鱼豉油瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "bottle"
   }
 }
