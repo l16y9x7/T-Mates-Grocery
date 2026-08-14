@@ -12,6 +12,7 @@ import re
 import sys
 import tempfile
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -102,6 +103,9 @@ PICK_MIN_ASPECT_RATIO_TO_BEST = float(
 )
 PICK_OCCLUSION_DEPTH_MARGIN_MM = float(
     os.getenv("PICK_OCCLUSION_DEPTH_MARGIN_MM", "30")
+)
+PICK_FRONT_ROW_DEPTH_TOLERANCE_MM = float(
+    os.getenv("PICK_FRONT_ROW_DEPTH_TOLERANCE_MM", "30")
 )
 PICK_OCCLUSION_MAX_NEIGHBOR_GAP_RATIO = float(
     os.getenv("PICK_OCCLUSION_MAX_NEIGHBOR_GAP_RATIO", "0.25")
@@ -903,6 +907,7 @@ def locate_product_in_image(
     qwen_prompt_override: str | None = None,
     sam_prompt_override: str | None = None,
     depth_image: Image.Image | None = None,
+    depth_image_provider: Callable[[tuple[int, int]], Image.Image | None] | None = None,
 ) -> LocateDebugResponse:
     """使用已查询的 SKU 信息，在指定 RGB 图片上运行完整定位流程。"""
     if not image_path.is_file():
@@ -960,19 +965,21 @@ def locate_product_in_image(
     if not located_instances:
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
 
-    if depth_image is not None and depth_image.size == original_image.size:
-        located_instances = [
-            instance.model_copy(
-                update={
-                    "depth_mm": estimate_instance_depth_mm(instance, depth_image)
-                }
-            )
-            for instance in located_instances
-        ]
-
     raw_sam_instances = list(located_instances)
     located_instances = keep_frontmost_in_overlap_chains(located_instances)
     located_instances = drop_smallest_mask_area_outlier(located_instances)
+    if len(located_instances) > 1:
+        if depth_image is None and depth_image_provider is not None:
+            depth_image = depth_image_provider(original_image.size)
+        if depth_image is not None and depth_image.size == original_image.size:
+            located_instances = [
+                instance.model_copy(
+                    update={
+                        "depth_mm": estimate_instance_depth_mm(instance, depth_image)
+                    }
+                )
+                for instance in located_instances
+            ]
     selected_instance = select_pick_instance(
         located_instances,
         list(original_image.size),
@@ -1063,17 +1070,14 @@ def locate_product_debug(
                 detail="指定 image_name 时必须同时提供 image_base64",
             )
         image_path = get_latest_rgb(request.hand)
-        depth_image: Image.Image | None = None
-        try:
-            with Image.open(image_path) as camera_image:
-                depth_image = fetch_camera_depth(request.hand, camera_image.size)
-        except (UnidentifiedImageError, OSError, ValueError):
-            pass
         try:
             return locate_product_in_image(
                 product,
                 image_path,
-                depth_image=depth_image,
+                depth_image_provider=lambda expected_size: fetch_camera_depth(
+                    request.hand,
+                    expected_size,
+                ),
                 **prompt_overrides,
             )
         except HTTPException as error:
@@ -1246,16 +1250,44 @@ def keep_depth_unoccluded_pick_candidates(
     return selected or instances
 
 
+def keep_front_row_pick_candidates(
+    instances: list[LocatedInstance],
+    *,
+    depth_tolerance_mm: float = PICK_FRONT_ROW_DEPTH_TOLERANCE_MM,
+) -> list[LocatedInstance]:
+    """保留深度最小的一层候选；完全无有效深度时沿用原候选。"""
+    candidates_with_depth = [
+        instance
+        for instance in instances
+        if instance.depth_mm is not None
+        and math.isfinite(instance.depth_mm)
+        and instance.depth_mm > 0
+    ]
+    if not candidates_with_depth:
+        return instances
+
+    nearest_depth_mm = min(
+        instance.depth_mm for instance in candidates_with_depth
+    )
+    maximum_front_depth_mm = nearest_depth_mm + max(0.0, depth_tolerance_mm)
+    return [
+        instance
+        for instance in candidates_with_depth
+        if instance.depth_mm <= maximum_front_depth_mm
+    ]
+
+
 def select_pick_instance(
     instances: list[LocatedInstance],
     image_size: list[int],
 ) -> LocatedInstance:
-    """先排除明显遮挡的候选，再选择最靠近画面中心的实例。"""
+    """先排除遮挡并保留最前排候选，再选择最靠近画面中心的实例。"""
     if not instances:
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
 
     candidates = keep_depth_unoccluded_pick_candidates(instances)
     candidates = keep_visibly_complete_pick_candidates(candidates)
+    candidates = keep_front_row_pick_candidates(candidates)
     image_center_x = image_size[0] / 2
     image_center_y = image_size[1] / 2
     return min(

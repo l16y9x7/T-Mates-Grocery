@@ -499,7 +499,7 @@ class LocateLogicTest(unittest.TestCase):
                     return_value=("qwen prompt", "sam prompt"),
                 ),
                 patch.object(main, "get_latest_rgb", return_value=image_path),
-                patch.object(main, "fetch_camera_depth", return_value=None),
+                patch.object(main, "fetch_camera_depth", return_value=None) as depth_mock,
                 patch.object(
                     main,
                     "get_stable_qwen_bboxes",
@@ -516,6 +516,7 @@ class LocateLogicTest(unittest.TestCase):
                     )
                 )
 
+            depth_mock.assert_called_once_with("left", (100, 80))
             self.assertEqual(result.sku_id, "SKU_001")
             self.assertEqual(result.product_name, "NFC桔汁")
             self.assertEqual(result.image_name, "frame_rgb.jpg")
@@ -538,6 +539,54 @@ class LocateLogicTest(unittest.TestCase):
             for instance in result.instances:
                 with Image.open(io.BytesIO(base64.b64decode(instance.mask))) as mask:
                     self.assertEqual(mask.size, (100, 80))
+
+    def test_locate_skips_depth_snapshot_for_single_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            image_path = temporary_path / "frame_rgb.jpg"
+            monitor_directory = temporary_path / "monitor_images"
+            Image.new("RGB", (100, 80), "white").save(image_path)
+
+            with (
+                patch.object(
+                    main,
+                    "lookup_sku_by_name",
+                    return_value={"sku_id": "SKU_001", "name": "NFC桔汁"},
+                ),
+                patch.object(main, "get_latest_rgb", return_value=image_path),
+                patch.object(main, "fetch_camera_depth") as depth_mock,
+                patch.object(
+                    main,
+                    "get_stable_qwen_bboxes",
+                    return_value=[[100.0, 100.0, 500.0, 500.0]],
+                ),
+                patch.object(
+                    main,
+                    "call_sam3",
+                    return_value=[
+                        {
+                            "bbox_xyxy": [0, 0, 40, 32],
+                            "mask_png_base64": png_base64((40, 32)),
+                            "score": 0.95,
+                        }
+                    ],
+                ),
+                patch.object(main, "MONITOR_IMAGE_DIR", monitor_directory),
+            ):
+                result = main.locate_product_debug(
+                    main.LocateRequest(
+                        task_type="SORTING",
+                        product_name="NFC桔汁",
+                        hand="left",
+                        qwen3_prompt="qwen prompt",
+                        sam3_prompt="sam prompt",
+                    ),
+                    allow_prompt_overrides=True,
+                )
+
+            depth_mock.assert_not_called()
+            self.assertEqual(len(result.instances), 1)
+            self.assertIs(result.selected_instance, result.instances[0])
 
     def test_locate_accepts_uploaded_image(self) -> None:
         image_buffer = io.BytesIO()
@@ -776,6 +825,65 @@ class LocateLogicTest(unittest.TestCase):
             occluded_center,
             main.keep_depth_unoccluded_pick_candidates(instances),
         )
+
+    def test_depth_selection_prefers_front_row_before_image_center(self) -> None:
+        center_back = main.LocatedInstance(
+            bbox=[280, 140, 360, 340],
+            mask="center-back",
+            depth_mm=800,
+        )
+        expected = main.LocatedInstance(
+            bbox=[400, 140, 480, 340],
+            mask="right-front",
+            depth_mm=700,
+        )
+
+        selected = main.select_pick_instance([center_back, expected], [640, 480])
+
+        self.assertIs(selected, expected)
+
+    def test_depth_selection_uses_center_within_same_front_row(self) -> None:
+        left_front = main.LocatedInstance(
+            bbox=[160, 140, 240, 340],
+            mask="left-front",
+            depth_mm=700,
+        )
+        expected = main.LocatedInstance(
+            bbox=[280, 140, 360, 340],
+            mask="center-front",
+            depth_mm=725,
+        )
+        back = main.LocatedInstance(
+            bbox=[400, 140, 480, 340],
+            mask="right-back",
+            depth_mm=800,
+        )
+
+        front_row = main.keep_front_row_pick_candidates(
+            [left_front, expected, back]
+        )
+        selected = main.select_pick_instance(
+            [left_front, expected, back],
+            [640, 480],
+        )
+
+        self.assertEqual(front_row, [left_front, expected])
+        self.assertIs(selected, expected)
+
+    def test_depth_selection_falls_back_to_center_without_valid_depth(self) -> None:
+        expected = main.LocatedInstance(
+            bbox=[280, 140, 360, 340],
+            mask="center",
+        )
+        right = main.LocatedInstance(
+            bbox=[400, 140, 480, 340],
+            mask="right",
+            depth_mm=None,
+        )
+
+        selected = main.select_pick_instance([expected, right], [640, 480])
+
+        self.assertIs(selected, expected)
 
 
 if __name__ == "__main__":
