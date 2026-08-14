@@ -70,6 +70,48 @@ class LocateLogicTest(unittest.TestCase):
 
             self.assertEqual(raised.exception.status_code, 400)
 
+    def test_fetch_camera_depth_parses_raw_16uc1(self) -> None:
+        values = [0, 625, 710, 845]
+        response = Mock(
+            content=b"".join(value.to_bytes(2, "little") for value in values),
+            headers={
+                "X-Image-Width": "2",
+                "X-Image-Height": "2",
+                "X-Image-Encoding": "16UC1",
+                "X-Image-Step": "4",
+                "X-Image-Is-Bigendian": "0",
+            },
+        )
+        response.raise_for_status.return_value = None
+
+        with patch.object(main.requests, "get", return_value=response) as get_mock:
+            depth_image = main.fetch_camera_depth("left", (2, 2))
+
+        self.assertIsNotNone(depth_image)
+        self.assertEqual(list(depth_image.getdata()), values)
+        get_mock.assert_called_once_with(
+            main.LEFT_CAMERA_DEPTH_SNAPSHOT_URL,
+            timeout=main.CAMERA_SNAPSHOT_TIMEOUT_SECONDS,
+        )
+
+    def test_fetch_camera_depth_rejects_unaligned_size(self) -> None:
+        response = Mock(
+            content=b"\x00" * 8,
+            headers={
+                "X-Image-Width": "2",
+                "X-Image-Height": "2",
+                "X-Image-Encoding": "16UC1",
+                "X-Image-Step": "4",
+                "X-Image-Is-Bigendian": "0",
+            },
+        )
+        response.raise_for_status.return_value = None
+
+        with patch.object(main.requests, "get", return_value=response):
+            depth_image = main.fetch_camera_depth("left", (4, 2))
+
+        self.assertIsNone(depth_image)
+
     def test_formal_request_without_image_returns_400_when_camera_fails(self) -> None:
         request = main.LocateRequest(
             task_type="SORTING",
@@ -457,6 +499,7 @@ class LocateLogicTest(unittest.TestCase):
                     return_value=("qwen prompt", "sam prompt"),
                 ),
                 patch.object(main, "get_latest_rgb", return_value=image_path),
+                patch.object(main, "fetch_camera_depth", return_value=None),
                 patch.object(
                     main,
                     "get_stable_qwen_bboxes",
@@ -599,6 +642,106 @@ class LocateLogicTest(unittest.TestCase):
         self.assertEqual(
             main.normalize_bbox_to_1_1000([-10, 0, 100, 120], [100, 100]),
             [1, 1, 1000, 1000],
+        )
+
+    def test_pick_selection_rejects_narrow_occluded_center_candidate(self) -> None:
+        narrow_center = main.LocatedInstance(
+            bbox=[325, 140, 379, 346],
+            mask="narrow-center",
+            score=0.95,
+        )
+        expected = main.LocatedInstance(
+            bbox=[375, 133, 460, 349],
+            mask="expected",
+            score=0.95,
+        )
+        instances = [
+            main.LocatedInstance(
+                bbox=[158, 133, 256, 381],
+                mask="left-complete",
+                score=0.95,
+            ),
+            main.LocatedInstance(
+                bbox=[277, 148, 329, 333],
+                mask="left-narrow",
+                score=0.95,
+            ),
+            narrow_center,
+            expected,
+            main.LocatedInstance(
+                bbox=[506, 155, 587, 336],
+                mask="right-complete",
+                score=0.95,
+            ),
+        ]
+
+        selected = main.select_pick_instance(instances, [640, 480])
+
+        self.assertIs(selected, expected)
+        self.assertNotIn(
+            narrow_center,
+            main.keep_visibly_complete_pick_candidates(instances),
+        )
+
+    def test_pick_selection_keeps_complete_center_candidate(self) -> None:
+        expected = main.LocatedInstance(
+            bbox=[280, 140, 360, 340],
+            mask="center",
+            score=0.8,
+        )
+        instances = [
+            expected,
+            main.LocatedInstance(
+                bbox=[400, 140, 488, 340],
+                mask="right",
+                score=0.9,
+            ),
+        ]
+
+        selected = main.select_pick_instance(instances, [640, 480])
+
+        self.assertIs(selected, expected)
+
+    def test_estimate_instance_depth_uses_mask_median(self) -> None:
+        depth_image = Image.new("I", (4, 2))
+        depth_image.putdata([700, 710, 720, 730, 5000, 0, 5000, 5000])
+        instance = main.LocatedInstance(
+            bbox=[0, 0, 4, 2],
+            mask=mask_base64_with_pixel_count((4, 2), 4),
+        )
+
+        depth_mm = main.estimate_instance_depth_mm(
+            instance,
+            depth_image,
+            min_valid_pixels=4,
+        )
+
+        self.assertEqual(depth_mm, 715.0)
+
+    def test_depth_selection_rejects_candidate_behind_both_neighbors(self) -> None:
+        left_front = main.LocatedInstance(
+            bbox=[190, 140, 270, 340],
+            mask="left-front",
+            depth_mm=700,
+        )
+        occluded_center = main.LocatedInstance(
+            bbox=[280, 140, 360, 340],
+            mask="occluded-center",
+            depth_mm=800,
+        )
+        expected = main.LocatedInstance(
+            bbox=[365, 140, 445, 340],
+            mask="right-front",
+            depth_mm=710,
+        )
+        instances = [left_front, occluded_center, expected]
+
+        selected = main.select_pick_instance(instances, [640, 480])
+
+        self.assertIs(selected, expected)
+        self.assertNotIn(
+            occluded_center,
+            main.keep_depth_unoccluded_pick_candidates(instances),
         )
 
 

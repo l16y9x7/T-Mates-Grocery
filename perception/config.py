@@ -62,6 +62,26 @@ def camera_snapshot_url(camera: str) -> str:
     )
 
 
+def camera_depth_snapshot_url(camera: str) -> str:
+    """Return the configured raw 16UC1 depth snapshot URL for a wrist camera."""
+
+    defaults = {
+        "left": f"{CAMERA_SERVICE_URL}/camera/snapshot?camera=left_wrist&type=depth",
+        "right": f"{CAMERA_SERVICE_URL}/camera/snapshot?camera=right_wrist&type=depth",
+    }
+    environment_names = {
+        "left": "LEFT_CAMERA_DEPTH_SNAPSHOT_URL",
+        "right": "RIGHT_CAMERA_DEPTH_SNAPSHOT_URL",
+    }
+    normalized_camera = camera.strip().lower()
+    if normalized_camera not in defaults:
+        raise ValueError(f"unsupported depth camera: {camera}")
+    return (
+        os.getenv(environment_names[normalized_camera], "").strip()
+        or defaults[normalized_camera]
+    )
+
+
 def hand_camera_snapshot_url(hand: str) -> str:
     """Resolve left/right robot hand names to their wrist camera URLs."""
 

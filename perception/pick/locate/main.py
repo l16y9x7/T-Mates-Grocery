@@ -29,6 +29,7 @@ if __package__ and __package__.startswith("perception."):
         QWEN3_URL as CONFIG_QWEN3_URL,
         SAM3_URL as CONFIG_SAM3_URL,
         SKU_API_URL as CONFIG_SKU_API_URL,
+        camera_depth_snapshot_url,
         camera_snapshot_url,
     )
 else:
@@ -40,6 +41,7 @@ else:
         QWEN3_URL as CONFIG_QWEN3_URL,
         SAM3_URL as CONFIG_SAM3_URL,
         SKU_API_URL as CONFIG_SKU_API_URL,
+        camera_depth_snapshot_url,
         camera_snapshot_url,
     )
 
@@ -56,11 +58,17 @@ MONITOR_IMAGE_DIR = Path(
 )
 LEFT_CAMERA_SNAPSHOT_URL = camera_snapshot_url("left")
 RIGHT_CAMERA_SNAPSHOT_URL = camera_snapshot_url("right")
+LEFT_CAMERA_DEPTH_SNAPSHOT_URL = camera_depth_snapshot_url("left")
+RIGHT_CAMERA_DEPTH_SNAPSHOT_URL = camera_depth_snapshot_url("right")
 # 保留旧常量名称，兼容现有左手相机配置与测试。
 CAMERA_SNAPSHOT_URL = LEFT_CAMERA_SNAPSHOT_URL
 CAMERA_SNAPSHOT_URLS = {
     "left": LEFT_CAMERA_SNAPSHOT_URL,
     "right": RIGHT_CAMERA_SNAPSHOT_URL,
+}
+CAMERA_DEPTH_SNAPSHOT_URLS = {
+    "left": LEFT_CAMERA_DEPTH_SNAPSHOT_URL,
+    "right": RIGHT_CAMERA_DEPTH_SNAPSHOT_URL,
 }
 CAMERA_SNAPSHOT_TIMEOUT_SECONDS = float(
     os.getenv("CAMERA_SNAPSHOT_TIMEOUT_SECONDS", "5")
@@ -89,6 +97,22 @@ SAM_FRONT_AREA_DOMINANCE_RATIO = float(
 SAM_SMALLEST_MASK_MAX_RATIO = float(
     os.getenv("SAM_SMALLEST_MASK_MAX_RATIO", "0.5")
 )
+PICK_MIN_ASPECT_RATIO_TO_BEST = float(
+    os.getenv("PICK_MIN_ASPECT_RATIO_TO_BEST", "0.75")
+)
+PICK_OCCLUSION_DEPTH_MARGIN_MM = float(
+    os.getenv("PICK_OCCLUSION_DEPTH_MARGIN_MM", "30")
+)
+PICK_OCCLUSION_MAX_NEIGHBOR_GAP_RATIO = float(
+    os.getenv("PICK_OCCLUSION_MAX_NEIGHBOR_GAP_RATIO", "0.25")
+)
+PICK_OCCLUSION_MIN_VERTICAL_OVERLAP_RATIO = float(
+    os.getenv("PICK_OCCLUSION_MIN_VERTICAL_OVERLAP_RATIO", "0.5")
+)
+PICK_MIN_VALID_DEPTH_PIXELS = int(
+    os.getenv("PICK_MIN_VALID_DEPTH_PIXELS", "50")
+)
+CAMERA_DEPTH_UNIT_MM = float(os.getenv("CAMERA_DEPTH_UNIT_MM", "1.0"))
 REQUEST_TIMEOUT_SECONDS = 120
 
 app = FastAPI(title="Sorting Pick Locate", version="2.0.0")
@@ -109,6 +133,7 @@ class LocatedInstance(BaseModel):
     bbox: list[float]
     mask: str
     score: float | None = None
+    depth_mm: float | None = None
 
 
 class QwenBBoxRecord(BaseModel):
@@ -200,6 +225,47 @@ def fetch_camera_snapshot(hand: str = "left") -> Path | None:
     except OSError:
         return None
     return snapshot_path
+
+
+def fetch_camera_depth(
+    hand: str,
+    expected_size: tuple[int, int],
+) -> Image.Image | None:
+    """读取相机服务返回的原始 16UC1 深度帧；不可用时静默回退。"""
+    camera_url = CAMERA_DEPTH_SNAPSHOT_URLS.get(hand.strip().lower())
+    if camera_url is None:
+        raise HTTPException(status_code=400, detail="hand 只能是 left 或 right")
+    try:
+        response = requests.get(
+            camera_url,
+            timeout=CAMERA_SNAPSHOT_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        depth_bytes = response.content
+        width = int(response.headers["X-Image-Width"])
+        height = int(response.headers["X-Image-Height"])
+        encoding = response.headers["X-Image-Encoding"].strip().upper()
+        step = int(response.headers["X-Image-Step"])
+        is_bigendian = int(response.headers["X-Image-Is-Bigendian"])
+    except (requests.RequestException, KeyError, TypeError, ValueError):
+        return None
+
+    if (
+        encoding != "16UC1"
+        or (width, height) != expected_size
+        or width <= 0
+        or height <= 0
+        or step != width * 2
+        or len(depth_bytes) != step * height
+        or is_bigendian not in {0, 1}
+    ):
+        return None
+
+    raw_mode = "I;16B" if is_bigendian else "I;16L"
+    try:
+        return Image.frombytes(raw_mode, (width, height), depth_bytes)
+    except (OSError, ValueError):
+        return None
 
 
 def store_monitor_image(image_path: Path) -> str:
@@ -679,6 +745,42 @@ def mask_foreground_pixel_count(mask_base64: str) -> int:
     return sum(histogram[128:])
 
 
+def estimate_instance_depth_mm(
+    instance: LocatedInstance,
+    depth_image: Image.Image,
+    *,
+    min_valid_pixels: int = PICK_MIN_VALID_DEPTH_PIXELS,
+) -> float | None:
+    """计算实例 mask 内非零深度的中位数，单位为毫米。"""
+    encoded = instance.mask.split(",", 1)[-1]
+    try:
+        mask_bytes = base64.b64decode(encoded, validate=True)
+        with Image.open(io.BytesIO(mask_bytes)) as source_mask:
+            mask_image = source_mask.convert("L")
+    except (ValueError, binascii.Error, UnidentifiedImageError, OSError):
+        return None
+    if mask_image.size != depth_image.size:
+        return None
+
+    valid_depths = sorted(
+        float(depth_value) * CAMERA_DEPTH_UNIT_MM
+        for mask_value, depth_value in zip(
+            mask_image.getdata(),
+            depth_image.getdata(),
+        )
+        if mask_value >= 128
+        and isinstance(depth_value, (int, float))
+        and depth_value > 0
+    )
+    if len(valid_depths) < max(1, min_valid_pixels):
+        return None
+
+    middle = len(valid_depths) // 2
+    if len(valid_depths) % 2:
+        return valid_depths[middle]
+    return (valid_depths[middle - 1] + valid_depths[middle]) / 2
+
+
 def select_frontmost_instance(
     instances: list[LocatedInstance],
 ) -> LocatedInstance:
@@ -798,6 +900,7 @@ def locate_product_in_image(
     task_type: str = "SORTING",
     qwen_prompt_override: str | None = None,
     sam_prompt_override: str | None = None,
+    depth_image: Image.Image | None = None,
 ) -> LocateDebugResponse:
     """使用已查询的 SKU 信息，在指定 RGB 图片上运行完整定位流程。"""
     if not image_path.is_file():
@@ -854,6 +957,16 @@ def locate_product_in_image(
 
     if not located_instances:
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
+
+    if depth_image is not None and depth_image.size == original_image.size:
+        located_instances = [
+            instance.model_copy(
+                update={
+                    "depth_mm": estimate_instance_depth_mm(instance, depth_image)
+                }
+            )
+            for instance in located_instances
+        ]
 
     raw_sam_instances = list(located_instances)
     located_instances = keep_frontmost_in_overlap_chains(located_instances)
@@ -937,8 +1050,19 @@ def locate_product_debug(
                 detail="指定 image_name 时必须同时提供 image_base64",
             )
         image_path = get_latest_rgb(request.hand)
+        depth_image: Image.Image | None = None
         try:
-            return locate_product_in_image(product, image_path, **prompt_overrides)
+            with Image.open(image_path) as camera_image:
+                depth_image = fetch_camera_depth(request.hand, camera_image.size)
+        except (UnidentifiedImageError, OSError, ValueError):
+            pass
+        try:
+            return locate_product_in_image(
+                product,
+                image_path,
+                depth_image=depth_image,
+                **prompt_overrides,
+            )
         except HTTPException as error:
             if not capture_inference_errors:
                 raise
@@ -989,17 +1113,151 @@ def normalize_bbox_to_1_1000(
     ]
 
 
-def make_locate_response(debug_response: LocateDebugResponse) -> LocateResponse:
-    if not debug_response.instances:
+def bbox_width_height_ratio(instance: LocatedInstance) -> float:
+    """返回 bbox 宽高比；退化 bbox 视为不可见。"""
+    bbox_width = max(0.0, instance.bbox[2] - instance.bbox[0])
+    bbox_height = max(0.0, instance.bbox[3] - instance.bbox[1])
+    return bbox_width / bbox_height if bbox_height > 0 else 0.0
+
+
+def keep_visibly_complete_pick_candidates(
+    instances: list[LocatedInstance],
+    min_ratio_to_best: float = PICK_MIN_ASPECT_RATIO_TO_BEST,
+) -> list[LocatedInstance]:
+    """过滤相对同类最佳外观明显过窄、通常被左右遮挡的实例。"""
+    if len(instances) < 2:
+        return instances
+
+    aspect_ratios = [bbox_width_height_ratio(instance) for instance in instances]
+    best_aspect_ratio = max(aspect_ratios)
+    if best_aspect_ratio <= 0:
+        return instances
+
+    relative_threshold = max(0.0, min(1.0, min_ratio_to_best))
+    minimum_aspect_ratio = best_aspect_ratio * relative_threshold
+    filtered = [
+        instance
+        for instance, aspect_ratio in zip(instances, aspect_ratios)
+        if aspect_ratio >= minimum_aspect_ratio
+    ]
+    return filtered or instances
+
+
+def bbox_vertical_overlap_by_smaller_height(
+    first_bbox: list[float],
+    second_bbox: list[float],
+) -> float:
+    first_height = max(0.0, first_bbox[3] - first_bbox[1])
+    second_height = max(0.0, second_bbox[3] - second_bbox[1])
+    smaller_height = min(first_height, second_height)
+    if smaller_height <= 0:
+        return 0.0
+    overlap = max(
+        0.0,
+        min(first_bbox[3], second_bbox[3])
+        - max(first_bbox[1], second_bbox[1]),
+    )
+    return overlap / smaller_height
+
+
+def bbox_horizontal_gap(first_bbox: list[float], second_bbox: list[float]) -> float:
+    """返回两个 bbox 的水平净间距；水平重叠时为 0。"""
+    if first_bbox[2] < second_bbox[0]:
+        return second_bbox[0] - first_bbox[2]
+    if second_bbox[2] < first_bbox[0]:
+        return first_bbox[0] - second_bbox[2]
+    return 0.0
+
+
+def keep_depth_unoccluded_pick_candidates(
+    instances: list[LocatedInstance],
+    *,
+    depth_margin_mm: float = PICK_OCCLUSION_DEPTH_MARGIN_MM,
+    max_neighbor_gap_ratio: float = PICK_OCCLUSION_MAX_NEIGHBOR_GAP_RATIO,
+    min_vertical_overlap_ratio: float = PICK_OCCLUSION_MIN_VERTICAL_OVERLAP_RATIO,
+) -> list[LocatedInstance]:
+    """移除左右两侧都存在更近邻居的后排实例。"""
+    if len(instances) < 3:
+        return instances
+
+    selected: list[LocatedInstance] = []
+    for candidate in instances:
+        candidate_depth = candidate.depth_mm
+        if (
+            candidate_depth is None
+            or not math.isfinite(candidate_depth)
+            or candidate_depth <= 0
+        ):
+            selected.append(candidate)
+            continue
+
+        candidate_width = max(0.0, candidate.bbox[2] - candidate.bbox[0])
+        candidate_center_x = (candidate.bbox[0] + candidate.bbox[2]) / 2
+        closer_sides: set[str] = set()
+        for neighbor in instances:
+            if neighbor is candidate:
+                continue
+            neighbor_depth = neighbor.depth_mm
+            if (
+                neighbor_depth is None
+                or not math.isfinite(neighbor_depth)
+                or neighbor_depth <= 0
+                or neighbor_depth + max(0.0, depth_margin_mm) >= candidate_depth
+            ):
+                continue
+            if (
+                bbox_vertical_overlap_by_smaller_height(
+                    candidate.bbox,
+                    neighbor.bbox,
+                )
+                < min_vertical_overlap_ratio
+            ):
+                continue
+            neighbor_width = max(0.0, neighbor.bbox[2] - neighbor.bbox[0])
+            allowed_gap = (
+                max(0.0, max_neighbor_gap_ratio)
+                * min(candidate_width, neighbor_width)
+            )
+            if bbox_horizontal_gap(candidate.bbox, neighbor.bbox) > allowed_gap:
+                continue
+
+            neighbor_center_x = (neighbor.bbox[0] + neighbor.bbox[2]) / 2
+            if neighbor_center_x < candidate_center_x:
+                closer_sides.add("left")
+            elif neighbor_center_x > candidate_center_x:
+                closer_sides.add("right")
+
+        if closer_sides != {"left", "right"}:
+            selected.append(candidate)
+
+    return selected or instances
+
+
+def select_pick_instance(
+    instances: list[LocatedInstance],
+    image_size: list[int],
+) -> LocatedInstance:
+    """先排除明显遮挡的候选，再选择最靠近画面中心的实例。"""
+    if not instances:
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
-    image_center_x = debug_response.image_size[0] / 2
-    image_center_y = debug_response.image_size[1] / 2
-    selected_instance = min(
-        debug_response.instances,
+
+    candidates = keep_depth_unoccluded_pick_candidates(instances)
+    candidates = keep_visibly_complete_pick_candidates(candidates)
+    image_center_x = image_size[0] / 2
+    image_center_y = image_size[1] / 2
+    return min(
+        candidates,
         key=lambda instance: (
             ((instance.bbox[0] + instance.bbox[2]) / 2 - image_center_x) ** 2
             + ((instance.bbox[1] + instance.bbox[3]) / 2 - image_center_y) ** 2
         ),
+    )
+
+
+def make_locate_response(debug_response: LocateDebugResponse) -> LocateResponse:
+    selected_instance = select_pick_instance(
+        debug_response.instances,
+        debug_response.image_size,
     )
     return LocateResponse(
         product_name=debug_response.product_name,
