@@ -4,3 +4,5 @@ __pycache__/
 
 test_data/
 *.zip
+monitor_images/
+latest_camera_rgb.jpg
