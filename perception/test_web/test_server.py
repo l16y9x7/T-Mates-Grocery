@@ -19,6 +19,11 @@ class PromptMappingTest(unittest.TestCase):
         qwen_html = (server.STATIC_DIR / "qwen_debug.html").read_text(encoding="utf-8")
         qwen_js = (server.STATIC_DIR / "qwen_debug.js").read_text(encoding="utf-8")
         self.assertIn('id="locateImageInput"', index_html)
+        self.assertIn('id="batchRgbImage"', index_html)
+        self.assertIn('id="batchDepthImage"', index_html)
+        self.assertIn("/api/sorting-batch-results", app_js)
+        self.assertIn("rerunBatchResultsWithOverwrite", app_js)
+        self.assertIn("重跑当前项（--overwrite）", index_html)
         self.assertIn("requestPayload.image_base64", app_js)
         self.assertIn('id="runFullLocate"', qwen_html)
         self.assertIn('image_name: originalImageName', qwen_js)
@@ -41,6 +46,134 @@ class PromptMappingTest(unittest.TestCase):
             server.SKU_CATALOG_PATH,
             expected_root.parent / "sku" / "products.json",
         )
+
+    def test_sorting_batch_gallery_lists_and_serves_rgb_depth_and_result(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_name = "record_20260813_081055_905807"
+            record_root = root / record_name
+            record_root.mkdir()
+            (record_root / "rgb.jpg").write_bytes(b"rgb")
+            (record_root / "测试商品.jpg").write_bytes(b"result")
+            (record_root / "测试商品.json").write_text(
+                json.dumps(
+                    {
+                        "response": {
+                            "qwen3_prompt_used": "测试 Qwen prompt",
+                            "sam3_prompt_used": "测试 SAM prompt",
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            server.np.save(
+                record_root / "depth_mm.npy",
+                server.np.array([[0, 450], [500, 700]], dtype=server.np.uint16),
+            )
+            summary_path = root / "sorting_pick_locate_batch_results.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "total_records": 1,
+                        "total_detections": 1,
+                        "completed": 1,
+                        "successes": 1,
+                        "failures": 0,
+                        "results": [
+                            {
+                                "record": record_name,
+                                "product_name": "测试商品",
+                                "status": "success",
+                                "selected_depth_mm": 450,
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(server, "SORTING_BATCH_ROOT", root),
+                patch.object(server, "SORTING_BATCH_RESULTS_PATH", summary_path),
+                patch.object(
+                    server,
+                    "is_hard_case_request",
+                    return_value=False,
+                ),
+                patch.object(
+                    server,
+                    "load_prompt_pair_mapping",
+                    return_value={
+                        "测试商品": {
+                            "qwen3_prompt": "测试 Qwen prompt",
+                            "sam3_prompt": "测试 SAM prompt",
+                        }
+                    },
+                ),
+            ):
+                result = server.list_sorting_batch_results()
+                record = result["records"][0]
+                self.assertEqual(record["record"], record_name)
+                self.assertIn("/rgb?", record["rgb_url"])
+                self.assertIn("/depth?", record["depth_url"])
+                self.assertIn("product_name=", record["items"][0]["result_url"])
+                self.assertEqual(
+                    record["items"][0]["qwen3_prompt_used"],
+                    "测试 Qwen prompt",
+                )
+                self.assertTrue(
+                    record["items"][0]["prompt_matches_current_mapping"]
+                )
+
+                rgb_response = server.get_sorting_batch_image(record_name, "rgb")
+                self.assertEqual(Path(rgb_response.path), record_root / "rgb.jpg")
+                depth_response = server.get_sorting_batch_image(record_name, "depth")
+                self.assertTrue(depth_response.body.startswith(b"\x89PNG\r\n\x1a\n"))
+                result_response = server.get_sorting_batch_image(
+                    record_name,
+                    "result",
+                    product_name="测试商品",
+                )
+                self.assertEqual(Path(result_response.path), record_root / "测试商品.jpg")
+
+    def test_sorting_batch_rerun_starts_selected_overwrite_once(self) -> None:
+        process = Mock()
+        process.pid = 4321
+        process.poll.return_value = None
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner_path = root / "batch_record_inference.py"
+            runner_path.write_text("# test runner\n", encoding="utf-8")
+            log_path = root / "rerun.log"
+            record_name = "record_20260813_081055_905807"
+            record_root = root / record_name
+            record_root.mkdir()
+            (record_root / "测试商品.json").write_text("{}", encoding="utf-8")
+            with (
+                patch.object(server, "SORTING_BATCH_ROOT", root),
+                patch.object(server, "SORTING_BATCH_RESULTS_PATH", root / "results.json"),
+                patch.object(server, "SORTING_BATCH_RUNNER_PATH", runner_path),
+                patch.object(server, "SORTING_BATCH_RERUN_LOG_PATH", log_path),
+                patch.object(server, "SORTING_BATCH_PROCESS", None),
+                patch.object(server, "SORTING_BATCH_PROCESS_STARTED_AT", None),
+                patch.object(server, "SORTING_BATCH_PROCESS_TARGET", None),
+                patch.object(server.subprocess, "Popen", return_value=process) as popen,
+            ):
+                request = server.SortingBatchRerunRequest(
+                    record=record_name,
+                    product_name="测试商品",
+                )
+                first = server.start_sorting_batch_rerun(request)
+                second = server.start_sorting_batch_rerun(request)
+
+        self.assertTrue(first["running"])
+        self.assertEqual(first["pid"], 4321)
+        self.assertEqual(second["pid"], 4321)
+        popen.assert_called_once()
+        command = popen.call_args.args[0]
+        self.assertIn("--overwrite", command)
+        self.assertEqual(command[-4:], ["--record", record_name, "--product-name", "测试商品"])
 
     def test_qwen_infer_samples_include_all_current_pairs(self) -> None:
         result = server.list_qwen_infer_samples()

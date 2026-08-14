@@ -17,6 +17,11 @@ const locateImageInput = document.querySelector("#locateImageInput");
 const locateDepthInput = document.querySelector("#locateDepthInput");
 const locateDepthByteOrder = document.querySelector("#locateDepthByteOrder");
 const clearLocateImage = document.querySelector("#clearLocateImage");
+const batchRecordSelect = document.querySelector("#batchRecordSelect");
+const batchProductSelect = document.querySelector("#batchProductSelect");
+const batchPrevious = document.querySelector("#batchPrevious");
+const batchNext = document.querySelector("#batchNext");
+const batchRefresh = document.querySelector("#batchRefresh");
 
 const colors = ["#2dd4bf", "#f59e0b", "#60a5fa", "#f472b6", "#a78bfa", "#fb7185"];
 const qwenSampleColors = ["#a78bfa", "#2dd4bf", "#f59e0b"];
@@ -31,6 +36,205 @@ let offlineImageName = "";
 let offlineImageBase64 = "";
 let offlineDepthName = "";
 let offlineDepthBase64 = "";
+let batchRecords = [];
+let batchRerunPollTimer = null;
+
+function setBatchImage(imageSelector, emptySelector, url, emptyText) {
+  const image = document.querySelector(imageSelector);
+  const empty = document.querySelector(emptySelector);
+  image.removeAttribute("src");
+  empty.textContent = emptyText;
+  empty.hidden = Boolean(url);
+  image.hidden = !url;
+  if (!url) return;
+  image.onload = () => {
+    image.hidden = false;
+    empty.hidden = true;
+  };
+  image.onerror = () => {
+    image.hidden = true;
+    empty.textContent = "图片加载失败";
+    empty.hidden = false;
+  };
+  image.src = url;
+}
+
+function currentBatchRecord() {
+  return batchRecords[Number(batchRecordSelect.value) || 0] || null;
+}
+
+function renderBatchProduct() {
+  const record = currentBatchRecord();
+  const item = record?.items?.[Number(batchProductSelect.value) || 0] || null;
+  if (!record || !item) return;
+  setBatchImage("#batchRgbImage", "#batchRgbEmpty", record.rgb_url, "没有 RGB 图片");
+  setBatchImage(
+    "#batchDepthImage",
+    "#batchDepthEmpty",
+    record.depth_url,
+    "没有深度数据",
+  );
+  setBatchImage(
+    "#batchResultImage",
+    "#batchResultEmpty",
+    item.result_url,
+    "没有检测结果图",
+  );
+  document.querySelector("#batchResultLabel").textContent = `${item.product_name}.jpg`;
+  const status = document.querySelector("#batchResultStatus");
+  status.className = `batch-result-status ${item.status === "success" ? "success" : "error"}`;
+  status.textContent = item.status === "success" ? "检测成功" : "检测失败";
+  document.querySelector("#batchResultDetail").textContent = JSON.stringify(
+    {
+      record: record.record,
+      product_name: item.product_name,
+      sku_id: item.sku_id,
+      level: item.level,
+      hand: item.hand,
+      selected_depth_mm: item.selected_depth_mm,
+      selected_bbox_pixel: item.selected_bbox_pixel,
+      elapsed_seconds: item.elapsed_seconds,
+      error: item.error,
+      prompt_mapping_file: item.prompt_mapping_file,
+      prompt_matches_current_mapping: item.prompt_matches_current_mapping,
+      qwen3_prompt_used: item.qwen3_prompt_used,
+      sam3_prompt_used: item.sam3_prompt_used,
+    },
+    null,
+    2,
+  );
+}
+
+function renderBatchRecord(preferredProductName = "") {
+  const recordIndex = Number(batchRecordSelect.value) || 0;
+  const record = batchRecords[recordIndex];
+  batchProductSelect.replaceChildren();
+  (record?.items || []).forEach((item, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = `${item.status === "success" ? "✓" : "✕"} ${item.product_name}`;
+    option.selected = item.product_name === preferredProductName;
+    batchProductSelect.append(option);
+  });
+  batchProductSelect.disabled = !record?.items?.length;
+  batchPrevious.disabled = recordIndex <= 0;
+  batchNext.disabled = recordIndex >= batchRecords.length - 1;
+  renderBatchProduct();
+}
+
+async function loadBatchResults() {
+  const selectedRecordName = currentBatchRecord()?.record;
+  const selectedProductName =
+    currentBatchRecord()?.items?.[Number(batchProductSelect.value) || 0]?.product_name || "";
+  batchRefresh.disabled = true;
+  document.querySelector("#batchSummary").textContent = "正在读取批测结果…";
+  try {
+    const data = await api("/api/sorting-batch-results", { cache: "no-store" });
+    batchRecords = data.records || [];
+    batchRecordSelect.replaceChildren();
+    batchRecords.forEach((record, index) => {
+      const failures = record.items.filter((item) => item.status !== "success").length;
+      const option = document.createElement("option");
+      option.value = String(index);
+      option.textContent = `${record.record} · ${record.items.length} 项${failures ? ` · ${failures} 失败` : ""}`;
+      option.selected = record.record === selectedRecordName;
+      batchRecordSelect.append(option);
+    });
+    if (selectedRecordName && !batchRecords.some((record) => record.record === selectedRecordName)) {
+      batchRecordSelect.value = "0";
+    }
+    batchRecordSelect.disabled = batchRecords.length === 0;
+    const summary = data.summary || {};
+    document.querySelector("#batchSummary").textContent =
+      `${summary.total_records || 0} 个 record · ${summary.completed || 0}/${summary.total_detections || 0} 项完成 · ` +
+      `${summary.successes || 0} 成功 · ${summary.failures || 0} 失败`;
+    renderBatchRecord(selectedProductName);
+  } catch (error) {
+    batchRecords = [];
+    batchRecordSelect.disabled = true;
+    batchProductSelect.disabled = true;
+    document.querySelector("#batchSummary").textContent = error.message;
+    document.querySelector("#batchResultStatus").textContent = "批测结果加载失败";
+  } finally {
+    batchRefresh.disabled = false;
+  }
+}
+
+function batchProgressText(status) {
+  const progress = status.progress || {};
+  const completed = Number(progress.completed || 0);
+  const total = Number(progress.total_detections || 0);
+  const counts = total ? `${completed}/${total}` : `${completed}`;
+  const target = status.target;
+  const label = target ? `${target.record} / ${target.product_name}` : "当前项";
+  return `正在覆盖重跑 ${label} · ${counts}`;
+}
+
+function stopBatchRerunPolling() {
+  if (batchRerunPollTimer !== null) {
+    clearTimeout(batchRerunPollTimer);
+    batchRerunPollTimer = null;
+  }
+}
+
+async function pollBatchRerunStatus() {
+  stopBatchRerunPolling();
+  try {
+    const status = await api("/api/sorting-batch-results/rerun");
+    if (status.running) {
+      batchRefresh.disabled = true;
+      batchRefresh.textContent = "批测运行中…";
+      document.querySelector("#batchSummary").textContent = batchProgressText(status);
+      batchRerunPollTimer = setTimeout(pollBatchRerunStatus, 2000);
+      return;
+    }
+
+    batchRefresh.disabled = false;
+    batchRefresh.textContent = "重跑当前项（--overwrite）";
+    if (status.state === "succeeded") {
+      await loadBatchResults();
+    } else if (status.state === "failed") {
+      const detail = status.last_log_line || `进程退出码 ${status.exit_code}`;
+      document.querySelector("#batchSummary").textContent = `批测失败：${detail}`;
+    }
+  } catch (error) {
+    batchRefresh.disabled = false;
+    batchRefresh.textContent = "重跑当前项（--overwrite）";
+    document.querySelector("#batchSummary").textContent = `读取批测进度失败：${error.message}`;
+  }
+}
+
+async function rerunBatchResultsWithOverwrite() {
+  const record = currentBatchRecord();
+  const item = record?.items?.[Number(batchProductSelect.value) || 0];
+  if (!record || !item) {
+    document.querySelector("#batchSummary").textContent = "请先选择要重跑的 record 和商品";
+    return;
+  }
+  stopBatchRerunPolling();
+  batchRefresh.disabled = true;
+  batchRefresh.textContent = "正在启动…";
+  document.querySelector("#batchSummary").textContent =
+    `正在覆盖重跑 ${record.record} / ${item.product_name}…`;
+  try {
+    const status = await api("/api/sorting-batch-results/rerun", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        record: record.record,
+        product_name: item.product_name,
+      }),
+    });
+    if (!status.running && status.state === "failed") {
+      throw new Error(status.last_log_line || `进程退出码 ${status.exit_code}`);
+    }
+    await pollBatchRerunStatus();
+  } catch (error) {
+    batchRefresh.disabled = false;
+    batchRefresh.textContent = "重跑当前项（--overwrite）";
+    document.querySelector("#batchSummary").textContent = `启动批测失败：${error.message}`;
+  }
+}
 
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -836,6 +1040,19 @@ samPrompt.addEventListener("input", () => setStatus("#saveSamPromptStatus", "未
 cropDetectionSelect.addEventListener("change", () => {
   drawSelectedCrop().catch((error) => setStatus("#samStatus", error.message, "error"));
 });
+batchRecordSelect.addEventListener("change", () => renderBatchRecord());
+batchProductSelect.addEventListener("change", renderBatchProduct);
+batchPrevious.addEventListener("click", () => {
+  batchRecordSelect.value = String(Math.max(0, Number(batchRecordSelect.value) - 1));
+  renderBatchRecord();
+});
+batchNext.addEventListener("click", () => {
+  batchRecordSelect.value = String(
+    Math.min(batchRecords.length - 1, Number(batchRecordSelect.value) + 1),
+  );
+  renderBatchRecord();
+});
+batchRefresh.addEventListener("click", rerunBatchResultsWithOverwrite);
 document.querySelector("#qwenCoordinateMode").addEventListener("change", () => {
   if (cropChoices.length) {
     drawSelectedCrop().catch((error) => setStatus("#samStatus", error.message, "error"));
@@ -847,5 +1064,6 @@ loadSkus().catch((error) => {
   setStatus("#saveSamPromptStatus", error.message, "error");
   setStatus("#samStatus", error.message, "error");
 });
+loadBatchResults().finally(pollBatchRerunStatus);
 
 syncSamPairedSku();

@@ -5,16 +5,21 @@ import json
 import mimetypes
 import os
 import re
+import subprocess
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path, PureWindowsPath
 from types import ModuleType
+from urllib.parse import quote
 
+import cv2
+import numpy as np
 import requests
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -30,6 +35,14 @@ INSPECT_ROOT = PERCEPTION_ROOT / "inspect"
 DATA_ROOT = PERCEPTION_ROOT / "test_data"
 STATIC_DIR = ROOT / "static"
 RGB_DIR = DATA_ROOT / "2026-08-04"
+SORTING_BATCH_ROOT = DATA_ROOT / "2026-08-13"
+SORTING_BATCH_RESULTS_PATH = SORTING_BATCH_ROOT / "sorting_pick_locate_batch_results.json"
+SORTING_BATCH_RUNNER_PATH = LOCATE_ROOT / "test" / "batch_record_inference.py"
+SORTING_BATCH_RERUN_LOG_PATH = SORTING_BATCH_ROOT / "sorting_pick_locate_batch_rerun.log"
+SORTING_BATCH_PROCESS: subprocess.Popen | None = None
+SORTING_BATCH_PROCESS_LOCK = threading.Lock()
+SORTING_BATCH_PROCESS_STARTED_AT: float | None = None
+SORTING_BATCH_PROCESS_TARGET: dict[str, str] | None = None
 SKU_CATALOG_PATH = PERCEPTION_ROOT / "sku" / "products.json"
 PROMPT_PAIR_MAPPING_PATH = LOCATE_ROOT / "qwen_sam_prompt_mapping.json"
 HARD_CASE_PROMPT_MAPPING_PATH = LOCATE_ROOT / "qwen_sam_prompt_mapping_hard_case.json"
@@ -139,6 +152,11 @@ class LocateDebugProxyRequest(BaseModel):
     depth_is_bigendian: bool = False
     qwen3_prompt: str | None = None
     sam3_prompt: str | None = None
+
+
+class SortingBatchRerunRequest(BaseModel):
+    record: str
+    product_name: str
 
 
 class SamCropRequest(BaseModel):
@@ -566,6 +584,341 @@ def run_full_inspect(request: FullInspectRunRequest) -> dict:
 def list_images() -> dict:
     images = sorted(path.name for path in RGB_DIR.glob("*_rgb.*"))
     return {"images": images, "default": images[-1] if images else None}
+
+
+def sorting_batch_record_directory(record: str) -> Path:
+    if not re.fullmatch(r"record_\d{8}_\d{6}_\d+", record):
+        raise HTTPException(status_code=400, detail="record 名称不合法")
+    directory = (SORTING_BATCH_ROOT / record).resolve()
+    if not directory.is_relative_to(SORTING_BATCH_ROOT.resolve()):
+        raise HTTPException(status_code=400, detail="record 路径不合法")
+    if not directory.is_dir():
+        raise HTTPException(status_code=404, detail="record 目录不存在")
+    return directory
+
+
+def sorting_batch_asset_url(
+    record: str,
+    kind: str,
+    path: Path,
+    product_name: str | None = None,
+) -> str:
+    version = path.stat().st_mtime_ns if path.is_file() else 0
+    url = f"/api/sorting-batch-results/image/{quote(record, safe='')}/{kind}?v={version}"
+    if product_name is not None:
+        url += f"&product_name={quote(product_name, safe='')}"
+    return url
+
+
+def sorting_batch_prompt_usage(result_path: Path) -> tuple[str | None, str | None]:
+    result_json_path = result_path.with_suffix(".json")
+    if not result_json_path.is_file():
+        return None, None
+    try:
+        result = json.loads(result_json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(result, dict):
+        return None, None
+    response = result.get("response")
+    if not isinstance(response, dict):
+        return None, None
+    qwen_prompt = response.get("qwen3_prompt_used")
+    sam_prompt = response.get("sam3_prompt_used")
+    return (
+        qwen_prompt if isinstance(qwen_prompt, str) else None,
+        sam_prompt if isinstance(sam_prompt, str) else None,
+    )
+
+
+@app.get("/api/sorting-batch-results")
+def list_sorting_batch_results() -> dict:
+    if not SORTING_BATCH_RESULTS_PATH.is_file():
+        raise HTTPException(status_code=404, detail="尚未生成 sorting 批测结果")
+    summary = load_json_file(SORTING_BATCH_RESULTS_PATH, "sorting 批测结果")
+    raw_results = summary.get("results")
+    if not isinstance(raw_results, list):
+        raise HTTPException(status_code=500, detail="sorting 批测结果缺少 results")
+
+    records_by_name: dict[str, dict] = {}
+    for raw_result in raw_results:
+        if not isinstance(raw_result, dict):
+            continue
+        record = str(raw_result.get("record", "")).strip()
+        product_name = str(raw_result.get("product_name", "")).strip()
+        if not record or not product_name:
+            continue
+        record_directory = sorting_batch_record_directory(record)
+        rgb_path = record_directory / "rgb.jpg"
+        depth_path = record_directory / "depth_mm.npy"
+        result_path = record_directory / f"{product_name}.jpg"
+        level = raw_result.get("level")
+        hand = raw_result.get("hand")
+        hard_case = is_hard_case_request(product_name, "SORTING", level, hand)
+        mapping_path = prompt_mapping_path("SORTING", hard_case=hard_case)
+        mapping = load_prompt_pair_mapping("SORTING", hard_case=hard_case)
+        current_prompt_pair = mapping.get(product_name)
+        qwen_prompt_used, sam_prompt_used = sorting_batch_prompt_usage(result_path)
+        prompt_matches_current_mapping = None
+        if current_prompt_pair is not None and qwen_prompt_used is not None:
+            current_qwen_prompt = current_prompt_pair["qwen3_prompt"]
+            qwen_matches = (
+                qwen_prompt_used.startswith(current_qwen_prompt)
+                if hard_case
+                else qwen_prompt_used == current_qwen_prompt
+            )
+            prompt_matches_current_mapping = (
+                qwen_matches
+                and sam_prompt_used == current_prompt_pair["sam3_prompt"]
+            )
+        record_result = records_by_name.setdefault(
+            record,
+            {
+                "record": record,
+                "rgb_url": (
+                    sorting_batch_asset_url(record, "rgb", rgb_path)
+                    if rgb_path.is_file()
+                    else None
+                ),
+                "depth_url": (
+                    sorting_batch_asset_url(record, "depth", depth_path)
+                    if depth_path.is_file()
+                    else None
+                ),
+                "items": [],
+            },
+        )
+        record_result["items"].append(
+            {
+                "product_name": product_name,
+                "sku_id": raw_result.get("sku_id"),
+                "level": level,
+                "hand": hand,
+                "status": raw_result.get("status", "error"),
+                "selected_depth_mm": raw_result.get("selected_depth_mm"),
+                "selected_bbox_pixel": raw_result.get("selected_bbox_pixel"),
+                "elapsed_seconds": raw_result.get("elapsed_seconds"),
+                "error": raw_result.get("error"),
+                "qwen3_prompt_used": qwen_prompt_used,
+                "sam3_prompt_used": sam_prompt_used,
+                "prompt_mapping_file": mapping_path.name,
+                "prompt_matches_current_mapping": prompt_matches_current_mapping,
+                "result_url": (
+                    sorting_batch_asset_url(
+                        record,
+                        "result",
+                        result_path,
+                        product_name=product_name,
+                    )
+                    if result_path.is_file()
+                    else None
+                ),
+            }
+        )
+
+    return {
+        "summary": {
+            "total_records": summary.get("total_records", len(records_by_name)),
+            "total_detections": summary.get("total_detections", len(raw_results)),
+            "completed": summary.get("completed", len(raw_results)),
+            "successes": summary.get("successes", 0),
+            "failures": summary.get("failures", 0),
+            "updated_at_unix": summary.get("updated_at_unix"),
+        },
+        "records": list(records_by_name.values()),
+    }
+
+
+def sorting_batch_progress() -> dict:
+    if not SORTING_BATCH_RESULTS_PATH.is_file():
+        return {
+            "completed": 0,
+            "total_detections": 0,
+            "successes": 0,
+            "failures": 0,
+        }
+    try:
+        summary = json.loads(SORTING_BATCH_RESULTS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {
+            "completed": 0,
+            "total_detections": 0,
+            "successes": 0,
+            "failures": 0,
+        }
+    return {
+        key: summary.get(key, 0)
+        for key in ("completed", "total_detections", "successes", "failures")
+    }
+
+
+def sorting_batch_last_log_line() -> str | None:
+    try:
+        lines = SORTING_BATCH_RERUN_LOG_PATH.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return None
+    return lines[-1] if lines else None
+
+
+def sorting_batch_rerun_status() -> dict:
+    process = SORTING_BATCH_PROCESS
+    exit_code = process.poll() if process is not None else None
+    running = process is not None and exit_code is None
+    if running:
+        state = "running"
+    elif process is None:
+        state = "idle"
+    elif exit_code == 0:
+        state = "succeeded"
+    else:
+        state = "failed"
+    progress = sorting_batch_progress()
+    if SORTING_BATCH_PROCESS_TARGET is not None:
+        progress = {
+            "completed": 0 if running else 1,
+            "total_detections": 1,
+            "successes": 1 if state == "succeeded" else 0,
+            "failures": 1 if state == "failed" else 0,
+        }
+    return {
+        "state": state,
+        "running": running,
+        "pid": process.pid if process is not None else None,
+        "exit_code": exit_code,
+        "started_at_unix": SORTING_BATCH_PROCESS_STARTED_AT,
+        "target": SORTING_BATCH_PROCESS_TARGET,
+        "progress": progress,
+        "last_log_line": sorting_batch_last_log_line(),
+    }
+
+
+@app.get("/api/sorting-batch-results/rerun")
+def get_sorting_batch_rerun_status() -> dict:
+    return sorting_batch_rerun_status()
+
+
+@app.post("/api/sorting-batch-results/rerun", status_code=202)
+def start_sorting_batch_rerun(request: SortingBatchRerunRequest) -> dict:
+    global SORTING_BATCH_PROCESS, SORTING_BATCH_PROCESS_STARTED_AT
+    global SORTING_BATCH_PROCESS_TARGET
+    with SORTING_BATCH_PROCESS_LOCK:
+        if (
+            SORTING_BATCH_PROCESS is not None
+            and SORTING_BATCH_PROCESS.poll() is None
+        ):
+            return sorting_batch_rerun_status()
+        if not SORTING_BATCH_RUNNER_PATH.is_file():
+            raise HTTPException(status_code=500, detail="sorting 批测脚本不存在")
+        record = request.record.strip()
+        product_name = request.product_name.strip()
+        record_directory = sorting_batch_record_directory(record)
+        if not product_name or "/" in product_name or "\\" in product_name:
+            raise HTTPException(status_code=400, detail="商品名称不合法")
+        if not (record_directory / f"{product_name}.json").is_file():
+            raise HTTPException(status_code=404, detail="当前单项批测结果不存在")
+        SORTING_BATCH_ROOT.mkdir(parents=True, exist_ok=True)
+        environment = os.environ.copy()
+        environment["PYTHONUTF8"] = "1"
+        try:
+            with SORTING_BATCH_RERUN_LOG_PATH.open(
+                "w",
+                encoding="utf-8",
+            ) as log_file:
+                SORTING_BATCH_PROCESS = subprocess.Popen(
+                    [
+                        sys.executable,
+                        str(SORTING_BATCH_RUNNER_PATH),
+                        "--overwrite",
+                        "--record",
+                        record,
+                        "--product-name",
+                        product_name,
+                    ],
+                    cwd=str(PERCEPTION_ROOT),
+                    env=environment,
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+        except OSError as error:
+            raise HTTPException(
+                status_code=500,
+                detail=f"启动 sorting 批测失败: {error}",
+            ) from error
+        SORTING_BATCH_PROCESS_STARTED_AT = time.time()
+        SORTING_BATCH_PROCESS_TARGET = {
+            "record": record,
+            "product_name": product_name,
+        }
+        return sorting_batch_rerun_status()
+
+
+def render_depth_preview(depth_path: Path) -> bytes:
+    try:
+        depth = np.load(depth_path, allow_pickle=False)
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=500, detail=f"读取深度数据失败: {error}") from error
+    depth = np.asarray(depth).squeeze()
+    if depth.ndim != 2:
+        raise HTTPException(status_code=500, detail="深度数据必须是二维数组")
+    valid = np.isfinite(depth) & (depth > 0)
+    if not np.any(valid):
+        raise HTTPException(status_code=422, detail="深度数据没有有效像素")
+
+    valid_values = depth[valid].astype(np.float32)
+    near_mm, far_mm = np.percentile(valid_values, [2, 98])
+    if far_mm <= near_mm:
+        near_mm = float(valid_values.min())
+        far_mm = float(valid_values.max())
+    if far_mm <= near_mm:
+        far_mm = near_mm + 1.0
+    normalized = np.zeros(depth.shape, dtype=np.uint8)
+    normalized[valid] = np.clip(
+        (depth[valid] - near_mm) * 255.0 / (far_mm - near_mm),
+        0,
+        255,
+    ).astype(np.uint8)
+    # Invert before TURBO so nearer pixels are warm and farther pixels are cool.
+    preview = cv2.applyColorMap(255 - normalized, cv2.COLORMAP_TURBO)
+    preview[~valid] = 0
+    ok, encoded = cv2.imencode(".png", preview)
+    if not ok:
+        raise HTTPException(status_code=500, detail="深度预览编码失败")
+    return encoded.tobytes()
+
+
+@app.get("/api/sorting-batch-results/image/{record}/{kind}")
+def get_sorting_batch_image(
+    record: str,
+    kind: str,
+    product_name: str | None = None,
+) -> Response:
+    record_directory = sorting_batch_record_directory(record)
+    if kind == "rgb":
+        path = record_directory / "rgb.jpg"
+        media_type = "image/jpeg"
+    elif kind == "depth":
+        path = record_directory / "depth_mm.npy"
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="深度数据不存在")
+        return Response(
+            content=render_depth_preview(path),
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+    elif kind == "result":
+        product_name = (product_name or "").strip()
+        if not product_name or "/" in product_name or "\\" in product_name:
+            raise HTTPException(status_code=400, detail="商品名称不合法")
+        path = (record_directory / f"{product_name}.jpg").resolve()
+        if not path.is_relative_to(record_directory):
+            raise HTTPException(status_code=400, detail="结果图片路径不合法")
+        media_type = "image/jpeg"
+    else:
+        raise HTTPException(status_code=400, detail="图片类型不合法")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="批测图片不存在")
+    return FileResponse(path, media_type=media_type)
 
 
 @app.get("/api/skus")

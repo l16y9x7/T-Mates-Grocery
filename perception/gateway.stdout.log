@@ -1,0 +1,8 @@
+INFO:     127.0.0.1:58591 - "GET /openapi.json HTTP/1.1" 200 OK
+[Locate Qwen3] prompt before request:
+找到图片中货架上的精制盐堆，输出满足条件的所有精制盐堆的bbox，每一堆分开。返回格式：{"name": "精制盐堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中货架上的精制盐堆，输出满足条件的所有精制盐堆的bbox，每一堆分开。返回格式：{"name": "精制盐堆", "bbox": [x1, y1, x2, y2]}
+[Locate Qwen3] prompt before request:
+找到图片中货架上的精制盐堆，输出满足条件的所有精制盐堆的bbox，每一堆分开。返回格式：{"name": "精制盐堆", "bbox": [x1, y1, x2, y2]}
+INFO:     127.0.0.1:60060 - "POST /perception/pick/locate/debug HTTP/1.1" 200 OK

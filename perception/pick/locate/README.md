@@ -67,11 +67,11 @@ python main.py
 
 1. 调用 `GET /sku/search_by_name` 查询完整 SKU 信息。
 2. 根据 `task_type` 从对应 JSON 读取该商品的 Qwen3 与 SAM3 Prompt：SORTING 使用 `qwen_sam_prompt_mapping.json`，SHORTAGE 使用 `qwen_sam_prompt_mapping_shortage.json`，MISPLACED 使用 `qwen_sam_prompt_mapping_misplaced.json`。
-3. Qwen3 以 `temperature=0.5` 独立采样三次。
-4. 对跨采样 bbox 聚类，只保留至少由两个不同采样支持且匹配 IoU 严格大于 `0.85` 的目标；同一目标的坐标取支持框平均值。
-5. 将 Qwen `[0,1000]` 归一化 bbox 转为原图像素坐标，向外扩张 10% 后裁图。
-6. 在每个去重后的 Qwen crop 上调用 SAM3。
-7. 将 SAM3 bbox 和 mask 映射回原始 RGB 图片。
+3. 仅将 RGB 拉伸到 `1280×720` 推理画布；原始 RGB 与 depth 均保持原尺寸。
+4. Qwen3 在该 `1280×720` RGB 上以 `temperature=0.5` 独立采样三次。
+5. 对跨采样 bbox 聚类，只保留至少由两个不同采样支持且匹配 IoU 严格大于 `0.85` 的目标；同一目标的坐标取支持框平均值。
+6. 将 Qwen `[0,1000]` bbox 转为 `1280×720` 推理画布像素坐标，向外扩张 10% 后裁图，并在每个去重后的 crop 上调用 SAM3。
+7. 将 SAM3 bbox 和 mask 按 X/Y 比例映射回原始 RGB 图片；响应的 `image_size` 是原图尺寸，`inference_image_size` 是 `[1280, 720]`。
 8. 普通 case 在存在有效深度且有多个 SAM 实例时，先计算每个 mask 内的深度中位数，并保留距最近实例 30 mm 内的第一排；没有有效深度时保持原候选。
 9. 对第一排候选构建重叠链，每条链只保留按 mask 面积与密度判断最靠前的一个实例，然后执行最终 PICK。
 
@@ -188,6 +188,36 @@ product_name
 Debug API 的离线图片请求可额外提供 `depth_image_name`、`depth_image_base64` 和可选的
 `depth_is_bigendian`。深度文件支持二维数值型 NPY、16 位单通道 PNG/TIFF 或无头 16UC1 RAW/BIN，且
 尺寸必须与 RGB 一致。未提供离线深度数据时，上传 RGB 的流程继续使用无深度回退。
+
+对于竖直堆叠、抓取时需要拿顶部单件的特定 SORTING SKU，服务不读取深度，而是在 SAM3
+最高分前 `0.10` 的候选中选择 bbox 中心最高的实例。当前包括得宝纸巾、海氏海诺创口贴、
+德佑湿巾、心相印纸巾、农心碗面、妙洁海绵百洁布、三种康师傅桶面、纯棉酒店大毛巾、
+京东京造毛巾、小苏打、心相印厨房纸巾和拖鞋。阈值可通过
+`PICK_UPPER_CONFIDENCE_SCORE_MARGIN` 调整。
+
+`中盐精制盐` 同样不读取深度，但不使用上方高置信度规则，而是保留 SAM3 原始候选并
+选择实际前景像素数最多的 mask；置信度与 bbox 面积只在 mask 面积相同时用于打破平局。
+
+### 2026-08-13 record 批量 RGB+depth 测试
+
+`test/batch_record_inference.py` 默认读取
+`test_data/2026-08-13/sorting_pick_locate_batch.json`，通过当前 8083 Debug API 对映射中的每个
+record/商品组合运行 `SORTING` 检测。脚本从 `robot_state.json` 读取左右腕，上传同目录的
+`rgb.jpg` 和 `depth_mm.npy`，并把标注图保存为 record 目录下的 `{product_name}.jpg`。
+同名 JSON 保存精简响应；全局进度保存在 `sorting_pick_locate_batch_results.json`。
+
+```powershell
+# 只校验 52 个 record、商品名、层级、手腕和输入文件
+python pick\locate\test\batch_record_inference.py --dry-run
+
+# 断点续跑：跳过成功项，失败项会重新检测
+python pick\locate\test\batch_record_inference.py
+
+# 从头覆盖全部结果
+python pick\locate\test\batch_record_inference.py --overwrite
+```
+
+连续 3 个系统连接错误时脚本会自动中止，避免在推理服务不可达时批量生成无效结果。
 
 默认请求 `127.0.0.1` 上的两个服务：
 

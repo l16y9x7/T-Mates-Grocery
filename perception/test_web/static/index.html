@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>视觉 Prompt 实验台</title>
-    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/style.css?v=20260814-batch-gallery" />
   </head>
   <body>
     <main class="shell">
@@ -44,6 +44,68 @@
           </label>
         </div>
       </header>
+
+      <section class="batch-review" aria-labelledby="batchReviewTitle">
+        <div class="batch-review-heading">
+          <div>
+            <p class="eyebrow">SORTING BATCH / 2026-08-13</p>
+            <h2 id="batchReviewTitle">批量 Pick / Locate 结果</h2>
+            <p id="batchSummary" class="batch-summary">正在读取批测结果…</p>
+          </div>
+          <div class="batch-navigation">
+            <label class="image-picker">
+              <span>record</span>
+              <select id="batchRecordSelect" disabled></select>
+            </label>
+            <label class="image-picker">
+              <span>product_name</span>
+              <select id="batchProductSelect" disabled></select>
+            </label>
+            <div class="batch-buttons">
+              <button id="batchPrevious" type="button" disabled>上一个</button>
+              <button id="batchNext" type="button" disabled>下一个</button>
+              <button id="batchRefresh" type="button">重跑当前项（--overwrite）</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="batch-image-grid">
+          <figure class="batch-image-card">
+            <figcaption>
+              <strong>原始 RGB</strong>
+              <span>rgb.jpg</span>
+            </figcaption>
+            <div class="batch-image-frame">
+              <img id="batchRgbImage" alt="当前 record 的原始 RGB" />
+              <span id="batchRgbEmpty">等待批测结果</span>
+            </div>
+          </figure>
+          <figure class="batch-image-card depth-card">
+            <figcaption>
+              <strong>深度图</strong>
+              <span>近处暖色 · 远处冷色 · 无效值黑色</span>
+            </figcaption>
+            <div class="batch-image-frame">
+              <img id="batchDepthImage" alt="当前 record 的深度可视化" />
+              <span id="batchDepthEmpty">等待深度数据</span>
+            </div>
+          </figure>
+          <figure class="batch-image-card result-card">
+            <figcaption>
+              <strong>检测结果</strong>
+              <span id="batchResultLabel">{product_name}.jpg</span>
+            </figcaption>
+            <div class="batch-image-frame">
+              <img id="batchResultImage" alt="当前商品的 Pick / Locate 检测结果" />
+              <span id="batchResultEmpty">等待检测结果</span>
+            </div>
+          </figure>
+        </div>
+        <div class="batch-detail-row">
+          <span id="batchResultStatus" class="batch-result-status">等待加载</span>
+          <code id="batchResultDetail">{}</code>
+        </div>
+      </section>
 
       <section class="offline-image-controls">
         <div>
@@ -240,6 +302,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=20260814-npy-depth"></script>
+    <script src="/static/app.js?v=20260814-batch-gallery"></script>
   </body>
 </html>

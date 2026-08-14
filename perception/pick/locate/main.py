@@ -90,6 +90,8 @@ QWEN3_MODEL = CONFIG_QWEN3_MODEL
 QWEN_SAMPLE_COUNT = 3
 QWEN_TEMPERATURE = 0.5
 QWEN_CONSENSUS_IOU = 0.85
+RGB_INFERENCE_SIZE = (1280, 720)
+RGB_INFERENCE_JPEG_QUALITY = 95
 CROP_PADDING_RATIO = 0.1
 SAM3_THRESHOLD = 0.5
 SAM3_MASK_THRESHOLD = 0.5
@@ -120,8 +122,38 @@ PICK_OCCLUSION_MIN_VERTICAL_OVERLAP_RATIO = float(
 PICK_MIN_VALID_DEPTH_PIXELS = int(
     os.getenv("PICK_MIN_VALID_DEPTH_PIXELS", "50")
 )
+PICK_UPPER_CONFIDENCE_SCORE_MARGIN = float(
+    os.getenv("PICK_UPPER_CONFIDENCE_SCORE_MARGIN", "0.10")
+)
 CAMERA_DEPTH_UNIT_MM = float(os.getenv("CAMERA_DEPTH_UNIT_MM", "1.0"))
 REQUEST_TIMEOUT_SECONDS = 120
+
+# These products are presented as vertically stacked packs/cups. SAM3 often
+# returns both the exposed top item and a larger mask spanning the lower stack.
+# For SORTING, pick the upper near-best-score instance directly and do not use
+# depth, which describes shelf frontage rather than the top item to grasp.
+UPPER_CONFIDENCE_PICK_PRODUCTS = frozenset(
+    {
+        "得宝纸巾",
+        "海氏海诺创口贴",
+        "德佑湿巾",
+        "心相印纸巾",
+        "农心碗面",
+        "妙洁海绵百洁布",
+        "康师傅香辣牛肉面",
+        "康师傅鲜虾鱼板面",
+        "康师傅老坛酸菜牛肉面",
+        "纯棉酒店大毛巾",
+        "京东京造毛巾",
+        "小苏打",
+        "心相印厨房纸巾",
+        "拖鞋",
+    }
+)
+
+# Salt bags frequently produce several overlapping top/edge fragments. For this
+# SKU, the complete pick region is represented most reliably by mask area.
+MAX_MASK_AREA_PICK_PRODUCTS = frozenset({"中盐精制盐"})
 
 LOCATION_PATTERN = re.compile(
     r"^H(?P<shelf>[12])_(?P<face>[FB])_L(?P<level>[1-5])_C(?P<column>\d{2})$"
@@ -258,6 +290,7 @@ class LocateDebugResponse(BaseModel):
     image_base64: str
     image_media_type: str
     image_size: list[int]
+    inference_image_size: list[int] | None = None
     qwen3_prompt_used: str | None = None
     sam3_prompt_used: str | None = None
     raw_qwen_bboxes: list[RawQwenBBoxRecord] = Field(default_factory=list)
@@ -713,9 +746,36 @@ def load_prompt_pair(
     return qwen_prompt.strip(), sam_prompt.strip()
 
 
-def call_qwen3(prompt: str, image_path: Path) -> str:
-    media_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
-    image_base64 = base64.b64encode(image_path.read_bytes()).decode("ascii")
+def prepare_rgb_inference_image(
+    original_image: Image.Image,
+) -> tuple[Image.Image, bytes]:
+    """Use the same RGB inference canvas size as qwen-debug."""
+    resized_image = original_image.resize(
+        RGB_INFERENCE_SIZE,
+        resample=Image.Resampling.BILINEAR,
+    )
+    buffer = io.BytesIO()
+    resized_image.save(
+        buffer,
+        format="JPEG",
+        quality=RGB_INFERENCE_JPEG_QUALITY,
+    )
+    inference_bytes = buffer.getvalue()
+    # qwen-debug crops from the decoded JPEG canvas, not from its pre-encode
+    # canvas pixels. Decode once here so Qwen and SAM3 observe the same RGB.
+    with Image.open(io.BytesIO(inference_bytes)) as encoded_image:
+        inference_image = encoded_image.convert("RGB")
+    return inference_image, inference_bytes
+
+
+def call_qwen3(prompt: str, image_source: Path | bytes) -> str:
+    if isinstance(image_source, Path):
+        media_type = mimetypes.guess_type(image_source.name)[0] or "image/jpeg"
+        image_bytes = image_source.read_bytes()
+    else:
+        media_type = "image/jpeg"
+        image_bytes = image_source
+    image_base64 = base64.b64encode(image_bytes).decode("ascii")
     print(f"[Locate Qwen3] prompt before request:\n{prompt}", flush=True)
     response = requests.post(
         QWEN3_URL,
@@ -880,12 +940,15 @@ class QwenConsensusBBoxes(list[list[float]]):
         self.samples = samples
 
 
-def get_stable_qwen_bboxes(prompt: str, image_path: Path) -> list[list[float]]:
+def get_stable_qwen_bboxes(
+    prompt: str,
+    image_source: Path | bytes,
+) -> list[list[float]]:
     samples: list[tuple[int, list[dict[str, Any]]]] = []
     errors: list[str] = []
     for sample_index in range(1, QWEN_SAMPLE_COUNT + 1):
         try:
-            content = call_qwen3(prompt, image_path)
+            content = call_qwen3(prompt, image_source)
             samples.append((sample_index, parse_qwen_detections(content)))
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as error:
             errors.append(f"第 {sample_index} 次: {error}")
@@ -935,6 +998,37 @@ def qwen_bbox_to_original(
     ]
 
 
+def map_bbox_between_sizes(
+    bbox: list[float],
+    source_size: tuple[int, int],
+    target_size: tuple[int, int],
+) -> list[float]:
+    source_width, source_height = source_size
+    target_width, target_height = target_size
+    scale_x = target_width / source_width
+    scale_y = target_height / source_height
+    return [
+        max(0.0, min(float(target_width), float(bbox[0]) * scale_x)),
+        max(0.0, min(float(target_height), float(bbox[1]) * scale_y)),
+        max(0.0, min(float(target_width), float(bbox[2]) * scale_x)),
+        max(0.0, min(float(target_height), float(bbox[3]) * scale_y)),
+    ]
+
+
+def map_crop_box_between_sizes(
+    crop_box: tuple[int, int, int, int],
+    source_size: tuple[int, int],
+    target_size: tuple[int, int],
+) -> list[int]:
+    mapped = map_bbox_between_sizes(list(crop_box), source_size, target_size)
+    return [
+        math.floor(mapped[0]),
+        math.floor(mapped[1]),
+        math.ceil(mapped[2]),
+        math.ceil(mapped[3]),
+    ]
+
+
 def call_sam3(prompt: str, crop_image: Image.Image) -> list[dict[str, Any]]:
     buffer = io.BytesIO()
     crop_image.save(buffer, format="JPEG", quality=95)
@@ -965,7 +1059,8 @@ def call_sam3(prompt: str, crop_image: Image.Image) -> list[dict[str, Any]]:
 def map_mask_to_original(
     mask_base64: str,
     crop_box: tuple[int, int, int, int],
-    original_size: tuple[int, int],
+    inference_size: tuple[int, int],
+    original_size: tuple[int, int] | None = None,
 ) -> str:
     encoded = mask_base64.split(",", 1)[-1]
     try:
@@ -983,8 +1078,14 @@ def map_mask_to_original(
             resample=Image.Resampling.NEAREST,
         )
 
-    original_mask = Image.new("L", original_size, 0)
-    original_mask.paste(crop_mask, (crop_box[0], crop_box[1]))
+    inference_mask = Image.new("L", inference_size, 0)
+    inference_mask.paste(crop_mask, (crop_box[0], crop_box[1]))
+    output_size = original_size or inference_size
+    original_mask = (
+        inference_mask.resize(output_size, resample=Image.Resampling.NEAREST)
+        if output_size != inference_size
+        else inference_mask
+    )
     output = io.BytesIO()
     original_mask.save(output, format="PNG")
     return base64.b64encode(output.getvalue()).decode("ascii")
@@ -993,7 +1094,8 @@ def map_mask_to_original(
 def map_sam_instance_to_original(
     instance: dict[str, Any],
     crop_box: tuple[int, int, int, int],
-    original_size: tuple[int, int],
+    inference_size: tuple[int, int],
+    original_size: tuple[int, int] | None = None,
     source_qwen_index: int | None = None,
 ) -> LocatedInstance:
     bbox = instance.get("bbox_xyxy")
@@ -1008,18 +1110,28 @@ def map_sam_instance_to_original(
         raise HTTPException(status_code=502, detail="SAM3 实例缺少 mask_png_base64")
 
     crop_x1, crop_y1, _, _ = crop_box
-    image_width, image_height = original_size
-    original_bbox = [
-        max(0.0, min(float(image_width), float(bbox[0]) + crop_x1)),
-        max(0.0, min(float(image_height), float(bbox[1]) + crop_y1)),
-        max(0.0, min(float(image_width), float(bbox[2]) + crop_x1)),
-        max(0.0, min(float(image_height), float(bbox[3]) + crop_y1)),
+    output_size = original_size or inference_size
+    inference_bbox = [
+        float(bbox[0]) + crop_x1,
+        float(bbox[1]) + crop_y1,
+        float(bbox[2]) + crop_x1,
+        float(bbox[3]) + crop_y1,
     ]
+    original_bbox = map_bbox_between_sizes(
+        inference_bbox,
+        inference_size,
+        output_size,
+    )
     score_value = instance.get("score")
     score = float(score_value) if isinstance(score_value, (int, float)) else None
     return LocatedInstance(
         bbox=original_bbox,
-        mask=map_mask_to_original(mask, crop_box, original_size),
+        mask=map_mask_to_original(
+            mask,
+            crop_box,
+            inference_size,
+            output_size,
+        ),
         score=score,
         source_qwen_index=source_qwen_index,
     )
@@ -1130,6 +1242,75 @@ def select_frontmost_instance(
             item[3],
         ),
     )[0]
+
+
+def uses_upper_confidence_pick(product_name: str, task_type: str) -> bool:
+    """Whether SORTING should pick an upper stacked item without depth."""
+    return (
+        task_type.strip().upper() == "SORTING"
+        and product_name.strip() in UPPER_CONFIDENCE_PICK_PRODUCTS
+    )
+
+
+def select_upper_high_confidence_instance(
+    instances: list[LocatedInstance],
+    *,
+    score_margin: float = PICK_UPPER_CONFIDENCE_SCORE_MARGIN,
+) -> LocatedInstance:
+    """Pick the uppermost instance among candidates close to the best score."""
+    if not instances:
+        raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
+    if len(instances) == 1:
+        return instances[0]
+
+    scored = [
+        instance
+        for instance in instances
+        if instance.score is not None and math.isfinite(instance.score)
+    ]
+    if scored:
+        best_score = max(instance.score for instance in scored)
+        minimum_score = best_score - max(0.0, score_margin)
+        candidates = [
+            instance
+            for instance in scored
+            if instance.score >= minimum_score
+        ]
+    else:
+        candidates = instances
+
+    return min(
+        candidates,
+        key=lambda instance: (
+            (instance.bbox[1] + instance.bbox[3]) / 2,
+            -(instance.score if instance.score is not None else -1.0),
+            instance.bbox[3],
+        ),
+    )
+
+
+def uses_max_mask_area_pick(product_name: str, task_type: str) -> bool:
+    return (
+        task_type.strip().upper() == "SORTING"
+        and product_name.strip() in MAX_MASK_AREA_PICK_PRODUCTS
+    )
+
+
+def select_largest_mask_area_instance(
+    instances: list[LocatedInstance],
+) -> LocatedInstance:
+    """Select the instance with the largest actual SAM foreground mask."""
+    if not instances:
+        raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
+    return max(
+        instances,
+        key=lambda instance: (
+            mask_foreground_pixel_count(instance.mask),
+            instance.score if instance.score is not None else -1.0,
+            (instance.bbox[2] - instance.bbox[0])
+            * (instance.bbox[3] - instance.bbox[1]),
+        ),
+    )
 
 
 def keep_frontmost_in_overlap_chains(
@@ -1512,7 +1693,16 @@ def locate_product_in_image(
             "这里使用调用方指定的层。不要输出同品牌在其他货架层的商品；"
             f"{bbox_instruction}"
         )
-    qwen_bboxes = get_stable_qwen_bboxes(qwen_prompt, image_path)
+    try:
+        with Image.open(image_path) as source_image:
+            original_image = source_image.convert("RGB")
+    except (UnidentifiedImageError, OSError) as error:
+        raise HTTPException(status_code=500, detail=f"读取 RGB 图片失败: {error}") from error
+    inference_image, inference_image_bytes = prepare_rgb_inference_image(
+        original_image
+    )
+
+    qwen_bboxes = get_stable_qwen_bboxes(qwen_prompt, inference_image_bytes)
     if hard_case is not None and len(qwen_bboxes) > 1:
         # Hard cases use Qwen only to obtain one broad brand-row crop. Product
         # columns/flavours are determined from SAM instances afterwards.
@@ -1525,12 +1715,6 @@ def locate_product_in_image(
             ]],
             getattr(qwen_bboxes, "samples", []),
         )
-
-    try:
-        with Image.open(image_path) as source_image:
-            original_image = source_image.convert("RGB")
-    except (UnidentifiedImageError, OSError) as error:
-        raise HTTPException(status_code=500, detail=f"读取 RGB 图片失败: {error}") from error
 
     raw_qwen_bbox_records = [
         RawQwenBBoxRecord(
@@ -1546,23 +1730,28 @@ def locate_product_in_image(
     located_instances: list[LocatedInstance] = []
     for qwen_index, qwen_bbox in enumerate(qwen_bboxes):
         try:
-            crop_box = qwen_bbox_to_crop(qwen_bbox, original_image.size)
+            crop_box = qwen_bbox_to_crop(qwen_bbox, inference_image.size)
         except ValueError:
             continue
         qwen_bbox_records.append(
             QwenBBoxRecord(
                 bbox_normalized=qwen_bbox,
                 bbox_original=qwen_bbox_to_original(qwen_bbox, original_image.size),
-                crop_box_original=list(crop_box),
+                crop_box_original=map_crop_box_between_sizes(
+                    crop_box,
+                    inference_image.size,
+                    original_image.size,
+                ),
             )
         )
-        crop_image = original_image.crop(crop_box)
+        crop_image = inference_image.crop(crop_box)
         for instance in call_sam3(sam_prompt, crop_image):
             if isinstance(instance, dict):
                 located_instances.append(
                     map_sam_instance_to_original(
                         instance,
                         crop_box,
+                        inference_image.size,
                         original_image.size,
                         source_qwen_index=qwen_index,
                     )
@@ -1573,7 +1762,28 @@ def locate_product_in_image(
 
     raw_sam_instances = list(located_instances)
     depth_enabled_for_task = task_type.strip().upper() != "SHORTAGE"
-    if hard_case is None and depth_enabled_for_task and len(located_instances) > 1:
+    upper_confidence_pick = (
+        hard_case is None
+        and uses_upper_confidence_pick(canonical_name, task_type)
+    )
+    max_mask_area_pick = (
+        hard_case is None
+        and uses_max_mask_area_pick(canonical_name, task_type)
+    )
+    special_no_depth_pick = upper_confidence_pick or max_mask_area_pick
+    if hard_case is None and not special_no_depth_pick:
+        # Reject visibly incomplete/sliver masks before depth. Otherwise a tiny
+        # mask on a nearer neighboring object can establish the front-row depth
+        # and discard the complete target before area/overlap rules can run.
+        located_instances = keep_visibly_complete_pick_candidates(
+            located_instances
+        )
+    if (
+        not special_no_depth_pick
+        and hard_case is None
+        and depth_enabled_for_task
+        and len(located_instances) > 1
+    ):
         if depth_image is None and depth_image_provider is not None:
             depth_image = depth_image_provider(original_image.size)
         if depth_image is not None and depth_image.size == original_image.size:
@@ -1590,13 +1800,13 @@ def locate_product_in_image(
             # otherwise a rear/partial mask can bridge several front products and
             # make the entire component collapse to the wrong instance.
             located_instances = keep_front_row_pick_candidates(located_instances)
-    if hard_case is None:
+    if hard_case is None and not special_no_depth_pick:
         located_instances = keep_frontmost_in_overlap_chains(located_instances)
         # Preserve the original global outlier rule for normal SKUs. A hard-case
         # row can contain a legitimately smaller perspective-edge display group,
         # so its rear-row filtering is performed inside each mapped group below.
         located_instances = drop_smallest_mask_area_outlier(located_instances)
-    else:
+    elif hard_case is not None:
         # Hard cases now use one broad Qwen crop. Preserve all SAM instances here;
         # first-row filtering must run before overlap de-duplication so rear/partial
         # masks cannot transitively merge separate front-row product columns.
@@ -1642,6 +1852,18 @@ def locate_product_in_image(
         if len(hard_case_selected) != 1:
             raise HTTPException(status_code=500, detail="hard case 目标实例标记无效")
         selected_instance = hard_case_selected[0]
+    elif max_mask_area_pick:
+        # Preserve all candidates so the selected mask area remains auditable
+        # against SAM3's original numbering.
+        selected_instance = select_largest_mask_area_instance(
+            located_instances
+        )
+    elif upper_confidence_pick:
+        # Preserve all candidates in the Debug response so the selected upper
+        # bbox remains auditable against SAM3's original candidate numbering.
+        selected_instance = select_upper_high_confidence_instance(
+            located_instances
+        )
     else:
         selected_instance = select_pick_instance(
             located_instances,
@@ -1661,6 +1883,7 @@ def locate_product_in_image(
         image_base64=base64.b64encode(image_path.read_bytes()).decode("ascii"),
         image_media_type=mimetypes.guess_type(image_path.name)[0] or "image/jpeg",
         image_size=list(original_image.size),
+        inference_image_size=list(inference_image.size),
         qwen3_prompt_used=qwen_prompt,
         sam3_prompt_used=sam_prompt,
         raw_qwen_bboxes=raw_qwen_bbox_records,
@@ -1710,6 +1933,7 @@ def make_locate_debug_error_response(
         image_base64=base64.b64encode(image_bytes).decode("ascii"),
         image_media_type=mimetypes.guess_type(image_path.name)[0] or "image/jpeg",
         image_size=image_size,
+        inference_image_size=list(RGB_INFERENCE_SIZE),
         qwen3_prompt_used=qwen3_prompt_used,
         sam3_prompt_used=sam3_prompt_used,
         error=detail,
@@ -1787,7 +2011,11 @@ def locate_product_debug(
         image_path = Path(temporary_directory) / image_name
         image_path.write_bytes(image_bytes)
         depth_image: Image.Image | None = None
-        if has_depth_name and has_depth_base64:
+        skip_uploaded_depth = (
+            uses_upper_confidence_pick(product_name, task_type)
+            or uses_max_mask_area_pick(product_name, task_type)
+        )
+        if has_depth_name and has_depth_base64 and not skip_uploaded_depth:
             try:
                 with Image.open(image_path) as source_image:
                     expected_size = source_image.size

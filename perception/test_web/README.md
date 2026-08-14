@@ -10,6 +10,16 @@ python server.py
 
 浏览器打开：`http://127.0.0.1:8082`。
 
+首页顶部会读取 `test_data/2026-08-13/sorting_pick_locate_batch_results.json`，按 record 和
+商品浏览批量 Sorting Pick/Locate 结果。页面并排展示原始 `rgb.jpg`、由
+`depth_mm.npy` 动态生成的彩色深度预览，以及 `{product_name}.jpg` 检测结果；深度预览中
+近处为暖色、远处为冷色、无效深度为黑色。
+
+“重跑当前项（--overwrite）”只会覆盖当前下拉框选中的 `record + product_name`，由 8082
+后端在后台执行带 `--overwrite --record ... --product-name ...` 的批测命令。页面每 2 秒读取
+一次状态，运行期间会禁用按钮以避免重复任务，完成后自动重新载入图片和总汇总；其他检测项
+不会重跑。初次打开首页只展示现有结果，不会自动启动推理。
+
 可用页面：
 
 - `/`：Locate Debug 与 Prompt 管理；

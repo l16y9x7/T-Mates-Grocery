@@ -208,7 +208,7 @@
     "sam3_prompt": "frontmost container with neck"
   },
   "宝矿力水特": {
-    "qwen3_prompt": "找到图片中货架上的蓝色不透明宝矿力水特水瓶堆，输出完整的bbox。返回格式：{\"name\": \"蓝色不透明宝矿力水特水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的完整的蓝色不透明宝矿力水特水瓶堆，输出完整的bbox。返回格式：{\"name\": \"蓝色不透明宝矿力水特水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost bottle"
   },
   "小苏打": {
@@ -269,7 +269,7 @@
   },
   "杯子": {
     "qwen3_prompt": "找到图片货架上的一排杯子，输出一个完整的bbox。返回格式：{\"name\": \"杯子\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "cup"
+    "sam3_prompt": "package"
   },
   "水溶C100瓶装": {
     "qwen3_prompt": "找到图片中从上往下第一层的水溶C100水瓶堆，输出完整的bbox。返回格式：{\"name\": \"水溶C100水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
@@ -296,7 +296,7 @@
     "sam3_prompt": "frontmost pepsi bottle"
   },
   "百岁山矿泉水": {
-    "qwen3_prompt": "找到图片中货架上的百岁山矿泉水瓶堆，输出完整的bbox。返回格式：{\"name\": \"百岁山矿泉水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的右侧百岁山矿泉水瓶堆，不是宝矿力水特，输出完整的bbox。返回格式：{\"name\": \"百岁山矿泉水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost transparent bottle"
   },
   "百草味海苔肉松蛋卷": {
@@ -344,7 +344,7 @@
     "sam3_prompt": "frontmost bottle"
   },
   "舒克牙膏柠檬百香果": {
-    "qwen3_prompt": "找到图片中货架上的黄白色长方体直立包装堆，输出一个完整的bbox。返回格式：{\"name\": \"黄白色长方体直立包装堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的银白色长方体直立包装堆右边的橙白色长方体直立包装堆，输出一个完整的bbox。返回格式：{\"name\": \"橙白色长方体直立包装堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost box"
   },
   "舒克牙膏海盐薄荷": {
@@ -384,7 +384,7 @@
     "sam3_prompt": "frontmost green sauce package"
   },
   "草原红太阳烧烤酱香辣": {
-    "qwen3_prompt": "找到图片中货架上的红色烧烤酱袋子堆，输出满足条件的所有红色烧烤酱袋子堆的bbox，每一堆分开。返回格式：{\"name\": \"红色烧烤酱袋子堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的红色烧烤酱袋子堆，注意不是绿色的，输出满足条件的所有红色烧烤酱袋子堆的bbox，每一堆分开。返回格式：{\"name\": \"红色烧烤酱袋子堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost red sauce package"
   },
   "蒙牛纯牛奶": {
@@ -393,7 +393,7 @@
   },
   "蒸鱼豉油": {
     "qwen3_prompt": "找到图片中货架的绿色包装棕色瓶盖蒸鱼豉油瓶，输出满足条件的所有绿色包装棕色瓶盖蒸鱼豉油瓶的bbox。返回格式：{\"name\": \"绿色包装棕色瓶盖蒸鱼豉油瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost bottle"
+    "sam3_prompt": "frontmost green bottle"
   },
   "薄盐生抽": {
     "qwen3_prompt": "找到图片中货架上的紫色瓶盖薄盐生抽瓶，输出满足条件的所有紫色瓶盖薄盐生抽瓶的bbox。返回格式：{\"name\": \"紫色瓶盖薄盐生抽瓶\", \"bbox\": [x1, y1, x2, y2]}",
@@ -420,8 +420,8 @@
     "sam3_prompt": "frontmost bottle"
   },
   "雪碧罐装": {
-    "qwen3_prompt": "找到图中货架上所有的雪碧瓶，返回一个完整包含所有雪碧瓶的大bbox。最终返回格式：{\"name\": \"雪碧瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost can"
+    "qwen3_prompt": "找到图中货架上所有的雪碧瓶，返回一个完整包含所有雪碧瓶堆的大bbox。最终返回格式：{\"name\": \"雪碧瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost green can"
   },
   "高纤七色糙米": {
     "qwen3_prompt": "找到图片中货架上的淡蓝色标签高纤七色糙米罐，输出满足条件的所有淡蓝色标签高纤七色糙米罐的bbox。返回格式：{\"name\": \"淡蓝色标签高纤七色糙米罐\", \"bbox\": [x1, y1, x2, y2]}",
