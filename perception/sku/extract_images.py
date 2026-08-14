@@ -15,7 +15,7 @@ from PIL import Image, ImageOps
 ROOT = Path(__file__).resolve().parent
 DEFAULT_SOURCE = ROOT.parents[2] / "商超场景-“零售服务岗”摆放标准图.docx"
 CATALOG_PATH = ROOT / "products.json"
-IMAGES_DIR = ROOT / "images"
+IMAGES_DIR = ROOT / "images_new"
 
 
 @dataclass(frozen=True)
@@ -169,9 +169,8 @@ def main() -> None:
         sku_id = product["sku_id"]
         image_paths: list[str] = []
         for image_index, image in enumerate(images_by_name[name], start=1):
-            extension = ".png" if image.source_suffix == ".png" else ".jpg"
             index_suffix = "" if len(images_by_name[name]) == 1 else f"_{image_index:02d}"
-            filename = f"{sku_id}{index_suffix}{extension}"
+            filename = f"{sku_id}{index_suffix}.jpg"
             destination = IMAGES_DIR / filename
             save_image(image, destination)
             image_paths.append(f"images/{filename}")

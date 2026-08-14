@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>视觉 Prompt 实验台</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">PERCEPTION / PICK / LOCATE</p>
+          <h1>视觉 Prompt 实验台</h1>
+          <p class="subtitle">Qwen3-VL 粗定位后裁图，再用 SAM3 完成局部精分割。</p>
+        </div>
+        <div class="request-controls">
+          <a href="/qwen-debug" class="engine-tag">Qwen3 独立测试</a>
+          <a href="/qwen-review" class="engine-tag">Inspection Qwen Review</a>
+          <label class="image-picker">
+            <span>task_type</span>
+            <select id="requestTaskType">
+              <option value="SORTING">SORTING</option>
+              <option value="SHORTAGE">SHORTAGE</option>
+              <option value="MISPLACED">MISPLACED</option>
+            </select>
+          </label>
+          <label class="image-picker">
+            <span>hand</span>
+            <select id="requestHand">
+              <option value="left">left</option>
+              <option value="right">right</option>
+            </select>
+          </label>
+        </div>
+      </header>
+
+      <section class="workspace">
+        <article class="panel qwen-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="engine-tag">QWEN3-VL</span>
+              <h2>三次采样定位</h2>
+            </div>
+            <label class="coordinate-mode" hidden>
+              <span>坐标类型</span>
+              <select id="qwenCoordinateMode">
+                <option value="normalized">0–1000 归一化</option>
+                <option value="pixel">图像像素</option>
+              </select>
+            </label>
+          </div>
+
+          <label class="prompt-field">
+            <span>Prompt</span>
+            <textarea
+              id="qwenPrompt"
+              rows="6"
+              placeholder='例如：找到图中的所有目标商品，只返回 [{"name":"abc","bbox":[x1,y1,x2,y2]}]'
+            ></textarea>
+          </label>
+
+          <div class="prompt-save-row">
+            <label class="sku-field">
+              <span>目标商品名称</span>
+              <input
+                id="qwenSku"
+                list="qwenSkuOptions"
+                autocomplete="off"
+                placeholder="输入目标商品名称"
+              />
+              <datalist id="qwenSkuOptions"></datalist>
+            </label>
+            <button id="saveQwenPrompt" class="save-prompt-button">保存当前 Prompt</button>
+            <span id="savePromptStatus" class="status">未保存</span>
+          </div>
+
+          <button id="runQwen" class="run-button qwen-button">运行 Locate Debug 完整推理</button>
+
+          <div class="sample-legend" aria-label="Qwen 三次采样颜色" hidden>
+            <span><i class="sample-dot sample-one"></i>第 1 次</span>
+            <span><i class="sample-dot sample-two"></i>第 2 次</span>
+            <span><i class="sample-dot sample-three"></i>第 3 次</span>
+            <strong>temperature 0.5</strong>
+          </div>
+
+          <div class="result-title canvas-title">
+            <span>Qwen 原始 bbox（过滤前）</span>
+            <span class="coordinate-note">三次采样使用不同颜色</span>
+          </div>
+          <div class="canvas-frame">
+            <canvas id="rawQwenCanvas"></canvas>
+            <div id="rawQwenEmpty" class="canvas-empty">运行 Locate Debug 获取原始 bbox</div>
+          </div>
+
+          <div class="result-title canvas-title">
+            <span>Qwen 共识 bbox（过滤后）</span>
+          </div>
+          <div class="canvas-frame">
+            <canvas id="qwenCanvas"></canvas>
+            <div id="qwenEmpty" class="canvas-empty">运行 Locate Debug 获取相机原图与 Qwen bbox</div>
+          </div>
+
+          <div class="result-block">
+            <div class="result-title">
+              <span>Qwen 共识 bbox</span>
+              <span id="qwenStatus" class="status">等待运行</span>
+            </div>
+            <pre id="qwenResult">[]</pre>
+          </div>
+
+          <div class="result-block">
+            <div class="result-title">
+              <span>Debug 元数据</span>
+              <span class="coordinate-note">原图来自 Locate Debug 响应</span>
+            </div>
+            <pre id="qwenIouResult">{}</pre>
+          </div>
+
+          <div class="result-block raw-result-block">
+            <div class="result-title">
+              <span>完整 Debug 响应摘要</span>
+            </div>
+            <pre id="qwenRawResult">等待运行</pre>
+          </div>
+        </article>
+
+        <article class="panel sam-panel">
+          <div class="panel-heading">
+            <div>
+              <span class="engine-tag">QWEN CROP → SAM3</span>
+              <h2>局部精分割</h2>
+            </div>
+            <span class="coordinate-note">bbox 外扩 10%</span>
+          </div>
+
+          <label class="prompt-field crop-field" hidden>
+            <span>Qwen 检测结果</span>
+            <select id="cropDetectionSelect" disabled>
+              <option value="">请先运行 Qwen3</option>
+            </select>
+          </label>
+
+          <label class="prompt-field">
+            <span>SAM3 Prompt</span>
+            <textarea
+              id="samPrompt"
+              rows="6"
+              placeholder="例如：beverage bottle"
+            ></textarea>
+          </label>
+          <div class="prompt-save-row sam-prompt-save-row">
+            <div class="paired-sku-field">
+              <span>目标商品名称</span>
+              <strong id="samPairedSku">请在左侧输入商品名称</strong>
+              <small>保存时会同时记录左侧当前的 Qwen3 Prompt</small>
+            </div>
+            <button id="saveSamPrompt" class="save-prompt-button sam-save-prompt-button">
+              保存 SAM3 Prompt 范式
+            </button>
+            <span id="saveSamPromptStatus" class="status">未保存</span>
+          </div>
+          <button id="runSam" class="run-button sam-button" disabled hidden>
+            在 Qwen Crop 上运行 SAM3
+          </button>
+
+          <div class="result-title canvas-title">
+            <span>SAM3 原始 bbox / mask（过滤前）</span>
+          </div>
+          <div class="canvas-frame">
+            <canvas id="rawSamCanvas"></canvas>
+            <div id="rawSamEmpty" class="canvas-empty">运行 Locate Debug 获取 SAM3 原始实例</div>
+          </div>
+
+          <div class="result-title canvas-title">
+            <span>SAM3 bbox / mask（过滤后）</span>
+          </div>
+          <div class="canvas-frame">
+            <canvas id="samCanvas"></canvas>
+            <div id="samEmpty" class="canvas-empty">运行 Locate Debug 获取原图与最终 SAM3 实例</div>
+          </div>
+
+          <div class="result-block">
+            <div class="result-title">
+              <span>Crop 分割结果</span>
+              <span id="samStatus" class="status">等待运行</span>
+            </div>
+            <pre id="samResult">[]</pre>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <script src="/static/app.js?v=20260807-task-prompts"></script>
+  </body>
+</html>

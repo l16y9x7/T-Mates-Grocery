@@ -58,6 +58,63 @@ class RowDetectionTest(unittest.TestCase):
         assert row is not None
         self.assertEqual(row.index, 2)
 
+    def test_matches_bbox_only_when_layout_and_overlap_are_reliable(self) -> None:
+        result = detect_rows(_synthetic_shelf())
+
+        matches = result.match_bboxes(
+            [[500, 275, 100, 120], [500, 180, 100, 80]],
+            expected_row_count=3,
+            min_overlap_ratio=0.6,
+        )
+
+        self.assertIsNotNone(matches[0])
+        assert matches[0] is not None
+        self.assertEqual(matches[0].row_index, 2)
+        self.assertEqual(matches[0].row_bbox, result.rows[1].bbox)
+        self.assertGreaterEqual(matches[0].overlap_ratio, 0.6)
+        self.assertIsNone(matches[1])
+
+    def test_match_bboxes_falls_back_when_row_count_is_unexpected(self) -> None:
+        result = detect_rows(_synthetic_shelf())
+
+        matches = result.match_bboxes(
+            [[500, 275, 100, 120]],
+            expected_row_count=2,
+        )
+
+        self.assertEqual(matches, [None])
+
+    def test_bottom_row_window_maps_extra_detected_row_to_sku_row(self) -> None:
+        result = detect_rows(_synthetic_shelf())
+
+        matches = result.match_bboxes_to_row_window(
+            [[500, 500, 100, 100], [500, 40, 100, 100]],
+            row_count=2,
+            anchor="bottom",
+            min_overlap_ratio=0.6,
+        )
+
+        self.assertIsNotNone(matches[0])
+        assert matches[0] is not None
+        self.assertEqual(matches[0].detected_row_index, 3)
+        self.assertEqual(matches[0].row_index, 2)
+        self.assertIsNone(matches[1])
+
+    def test_row_window_falls_back_with_more_than_one_extra_row(self) -> None:
+        image = np.full((720, 1280, 3), 45, dtype=np.uint8)
+        for top in (120, 255, 390, 525, 660):
+            cv2.rectangle(image, (20, top), (1259, top + 15), (25, 25, 210), -1)
+        result = detect_rows(image)
+
+        matches = result.match_bboxes_to_row_window(
+            [[500, 550, 100, 70]],
+            row_count=3,
+            anchor="bottom",
+        )
+
+        self.assertEqual(len(result.rows), 5)
+        self.assertEqual(matches, [None])
+
 
     def test_blank_image_has_no_rails_or_rows(self) -> None:
         image = np.full((720, 1280, 3), 80, dtype=np.uint8)
@@ -83,6 +140,41 @@ class RowDetectionTest(unittest.TestCase):
         self.assertEqual(len(result.rails), 2)
         self.assertEqual(len(result.rows), 2)
         self.assertTrue(all(rail.line is not None for rail in result.rails))
+
+    def test_lower_pose_returns_bottom_three_rows_and_uses_image_bottom(self) -> None:
+        image = np.full((720, 1280, 3), 45, dtype=np.uint8)
+        for top in (105, 315, 530):
+            cv2.rectangle(image, (20, top), (1259, top + 15), (25, 25, 210), -1)
+        config = RowDetectionConfig(pose_type="SHELF_VIEW_LOWER")
+
+        result = detect_rows(image, config)
+
+        self.assertEqual(len(result.rows), 3)
+        self.assertEqual(result.rows[0].bbox[1], 113)
+        self.assertEqual(result.rows[-1].bbox[1] + result.rows[-1].bbox[3], 720)
+        self.assertIsNone(result.rows[-1].lower_rail_index)
+
+    def test_upper_pose_returns_top_two_rows(self) -> None:
+        config = RowDetectionConfig(pose_type="SHELF_VIEW_UPPER")
+
+        result = detect_rows(_synthetic_shelf(), config)
+
+        self.assertEqual(len(result.rows), 2)
+        self.assertEqual(result.rows[0].bbox[1], 0)
+        self.assertEqual(result.rows[-1].bbox[1] + result.rows[-1].bbox[3], 446)
+
+    def test_lower_pose_does_not_treat_floor_after_fourth_rail_as_row(self) -> None:
+        image = np.full((720, 1280, 3), 45, dtype=np.uint8)
+        for top in (75, 285, 455, 590):
+            cv2.rectangle(image, (20, top), (1259, top + 15), (25, 25, 210), -1)
+        config = RowDetectionConfig(pose_type="SHELF_VIEW_LOWER")
+
+        result = detect_rows(image, config)
+
+        self.assertEqual(len(result.rows), 3)
+        self.assertEqual(result.rows[0].bbox[1], 83)
+        self.assertEqual(result.rows[-1].bbox[1] + result.rows[-1].bbox[3], 598)
+        self.assertIsNotNone(result.rows[-1].lower_rail_index)
 
 
 if __name__ == "__main__":

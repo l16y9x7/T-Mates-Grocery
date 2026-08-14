@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from main import LocateRequest, locate_product_debug, normalize_bbox_to_1_1000
+if __package__:
+    from .main import LocateRequest, locate_product_debug, normalize_bbox_to_1_1000
+else:
+    from main import LocateRequest, locate_product_debug, normalize_bbox_to_1_1000
+
+
+PERCEPTION_ROOT = Path(__file__).resolve().parents[2]
+if str(PERCEPTION_ROOT) not in sys.path:
+    sys.path.insert(0, str(PERCEPTION_ROOT))
+from config import SERVICE_BIND_HOST  # noqa: E402
 
 
 app = FastAPI(title="Sorting Pick Locate Multi Instance", version="2.0.0")
@@ -44,6 +55,6 @@ def locate_product(request: LocateRequest) -> LocateResponse:
 if __name__ == "__main__":
     uvicorn.run(
         app,
-        host="0.0.0.0",
+        host=SERVICE_BIND_HOST,
         port=int(os.getenv("MULTI_LOCATE_PORT", "8083")),
     )

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import logging
 import re
 import sys
 import time
@@ -29,8 +30,10 @@ if __package__:
         QwenReviewError,
         QwenReviewResult,
         QwenReviewer,
+        ReviewRowConstraint,
         ReviewedFinding,
     )
+    from .row_detection import RowDetectionConfig, RowDetectionResult, detect_rows
 else:
     INSPECT_ROOT = Path(__file__).resolve().parent
     if str(INSPECT_ROOT) not in sys.path:
@@ -42,13 +45,22 @@ else:
         QwenReviewError,
         QwenReviewResult,
         QwenReviewer,
+        ReviewRowConstraint,
         ReviewedFinding,
     )
+    from row_detection import RowDetectionConfig, RowDetectionResult, detect_rows
 
 
 TaskType = Literal["SHORTAGE", "MISPLACED"]
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 FUSION_IOU_THRESHOLD = 0.4
+MIN_ROW_OVERLAP_RATIO = 0.6
+EXPECTED_ROW_COUNTS: dict[PoseType, int] = {
+    "": 1,
+    "SHELF_VIEW_UPPER": 2,
+    "SHELF_VIEW_LOWER": 3,
+}
+logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(
     title="Shelf Inspection",
@@ -86,9 +98,10 @@ class MisplacedProductFinding(BaseModel):
     gt_product_name: str
 
 
-InspectApiResponse = (
-    list[ShortageProductFinding] | list[MisplacedProductFinding]
-)
+class InspectApiResponse(BaseModel):
+    findings: list[ShortageProductFinding | MisplacedProductFinding] = Field(
+        default_factory=list
+    )
 
 
 class Finding(BaseModel):
@@ -140,19 +153,35 @@ class InspectionContext:
     reference_item_area: float | None = None
 
 
+@dataclass(frozen=True)
+class AlgorithmExecution:
+    """One public algorithm result plus optional internal review artifacts."""
+
+    result: AlgorithmResult
+    review_image: np.ndarray | None = None
+
+
+@dataclass(frozen=True)
+class InspectionExecution:
+    """Inspection response and the image sharing its bbox coordinate system."""
+
+    response: InspectResponse
+    review_image: np.ndarray
+
+
 class InspectionAlgorithm(Protocol):
     """Interface implemented by every detector participating in fusion."""
 
     name: str
 
-    def run(self, context: InspectionContext) -> AlgorithmResult:
+    def run(self, context: InspectionContext) -> AlgorithmExecution | AlgorithmResult:
         ...
 
 
 class ComparisonBasedAlgorithm:
     name = "comparison_based"
 
-    def run(self, context: InspectionContext) -> AlgorithmResult:
+    def run(self, context: InspectionContext) -> AlgorithmExecution:
         started_at = time.perf_counter()
         misplaced = context.task_type == "MISPLACED"
         config = ComparisonConfig(
@@ -172,14 +201,17 @@ class ComparisonBasedAlgorithm:
             )
             for region in result.shortages
         ]
-        return AlgorithmResult(
-            name=self.name,
-            success=True,
-            elapsed_ms=_elapsed_ms(started_at),
-            findings=findings,
-            difference_mode=result.difference_mode,
-            threshold=result.threshold,
-            alignment_success=result.alignment.success,
+        return AlgorithmExecution(
+            result=AlgorithmResult(
+                name=self.name,
+                success=True,
+                elapsed_ms=_elapsed_ms(started_at),
+                findings=findings,
+                difference_mode=result.difference_mode,
+                threshold=result.threshold,
+                alignment_success=result.alignment.success,
+            ),
+            review_image=result.aligned_current,
         )
 
 
@@ -192,20 +224,30 @@ class InspectionPipeline:
             raise ValueError("at least one inspection algorithm is required")
 
     def inspect(self, context: InspectionContext) -> InspectResponse:
+        return self.inspect_with_artifacts(context).response
+
+    def inspect_with_artifacts(self, context: InspectionContext) -> InspectionExecution:
+        """Run detectors and retain the aligned image used by their bboxes."""
+
+        executions: list[AlgorithmExecution] = []
         algorithm_results: list[AlgorithmResult] = []
         for algorithm in self.algorithms:
             started_at = time.perf_counter()
             try:
-                algorithm_results.append(algorithm.run(context))
+                execution = algorithm.run(context)
+                if isinstance(execution, AlgorithmResult):
+                    execution = AlgorithmExecution(result=execution)
             except Exception as error:  # Keep future multi-algorithm fusion available.
-                algorithm_results.append(
-                    AlgorithmResult(
+                execution = AlgorithmExecution(
+                    result=AlgorithmResult(
                         name=algorithm.name,
                         success=False,
                         elapsed_ms=_elapsed_ms(started_at),
                         error=f"{type(error).__name__}: {error}",
                     )
                 )
+            executions.append(execution)
+            algorithm_results.append(execution.result)
 
         successful = [result for result in algorithm_results if result.success]
         if not successful:
@@ -215,15 +257,26 @@ class InspectionPipeline:
             raise RuntimeError(f"all inspection algorithms failed: {errors}")
 
         findings = fuse_findings(successful)
-        return InspectResponse(
-            location_id=context.location_id,
-            pose_type=context.pose_type,
-            task_type=context.task_type,
-            has_anomaly=bool(findings),
-            image_size=[1280, 720],
-            bbox_format=["x", "y", "width", "height"],
-            findings=findings,
-            algorithms=algorithm_results,
+        review_image = next(
+            (
+                execution.review_image
+                for execution in executions
+                if execution.result.success and execution.review_image is not None
+            ),
+            cv2.resize(context.current, (1280, 720), interpolation=cv2.INTER_LINEAR),
+        )
+        return InspectionExecution(
+            response=InspectResponse(
+                location_id=context.location_id,
+                pose_type=context.pose_type,
+                task_type=context.task_type,
+                has_anomaly=bool(findings),
+                image_size=[1280, 720],
+                bbox_format=["x", "y", "width", "height"],
+                findings=findings,
+                algorithms=algorithm_results,
+            ),
+            review_image=review_image,
         )
 
 
@@ -238,6 +291,29 @@ def inspect_images(
     pipeline: InspectionPipeline | None = None,
 ) -> InspectResponse:
     """Python entry point used by the HTTP route and offline callers."""
+
+    return inspect_images_with_artifacts(
+        task_type,
+        baseline,
+        current,
+        location_id=location_id,
+        pose_type=pose_type,
+        reference_item_area=reference_item_area,
+        pipeline=pipeline,
+    ).response
+
+
+def inspect_images_with_artifacts(
+    task_type: TaskType,
+    baseline: np.ndarray,
+    current: np.ndarray,
+    *,
+    location_id: str,
+    pose_type: PoseType,
+    reference_item_area: float | None = None,
+    pipeline: InspectionPipeline | None = None,
+) -> InspectionExecution:
+    """Run inspection and retain the aligned current image for Qwen review."""
 
     if task_type not in {"SHORTAGE", "MISPLACED"}:
         raise ValueError("task_type must be SHORTAGE or MISPLACED")
@@ -258,7 +334,42 @@ def inspect_images(
         current=current,
         reference_item_area=reference_item_area,
     )
-    return (pipeline or InspectionPipeline()).inspect(context)
+    return (pipeline or InspectionPipeline()).inspect_with_artifacts(context)
+
+
+def build_row_constraints(
+    findings: Sequence[Finding],
+    row_detection: RowDetectionResult,
+    pose_type: PoseType,
+) -> list[ReviewRowConstraint | None]:
+    """Map findings to reliable top-to-bottom shelf rows, otherwise fall back."""
+
+    bboxes = [finding.bbox for finding in findings]
+    expected_row_count = EXPECTED_ROW_COUNTS[pose_type]
+    if pose_type in {"SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"}:
+        matches = row_detection.match_bboxes_to_row_window(
+            bboxes,
+            row_count=expected_row_count,
+            anchor="top" if pose_type == "SHELF_VIEW_UPPER" else "bottom",
+            min_overlap_ratio=MIN_ROW_OVERLAP_RATIO,
+        )
+    else:
+        matches = row_detection.match_bboxes(
+            bboxes,
+            expected_row_count=expected_row_count,
+            min_overlap_ratio=MIN_ROW_OVERLAP_RATIO,
+        )
+    return [
+        ReviewRowConstraint(
+            row_index=match.row_index,
+            row_bbox=match.row_bbox,
+            overlap_ratio=match.overlap_ratio,
+            detected_row_index=match.detected_row_index,
+        )
+        if match is not None
+        else None
+        for match in matches
+    ]
 
 
 @router.post("/perception/inspect", response_model=InspectApiResponse)
@@ -268,7 +379,7 @@ def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
     baseline = decode_image(request.baseline_image_base64, "baseline_image_base64")
     current = decode_image(request.current_image_base64, "current_image_base64")
     try:
-        result = inspect_images(
+        execution = inspect_images_with_artifacts(
             request.task_type,
             baseline,
             current,
@@ -278,16 +389,33 @@ def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
         )
     except RuntimeError as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
+    result = execution.response
     if not result.findings:
-        return []
+        return InspectApiResponse()
+
+    try:
+        row_detection = detect_rows(
+            baseline,
+            RowDetectionConfig(pose_type=request.pose_type),
+        )
+        row_constraints = build_row_constraints(
+            result.findings,
+            row_detection,
+            request.pose_type,
+        )
+    except (ValueError, cv2.error) as error:
+        logger.warning("Shelf row detection failed; using all SKU candidates: %s", error)
+        row_constraints = [None] * len(result.findings)
 
     try:
         review = QwenReviewer(debug_root=DEFAULT_DEBUG_ROOT).review(
             task_type=request.task_type,
             location_id=request.location_id,
             pose_type=request.pose_type,
-            current=current,
+            current=execution.review_image,
+            baseline=baseline,
             bboxes=[finding.bbox for finding in result.findings],
+            row_constraints=row_constraints,
         )
     except QwenReviewError as error:
         raise HTTPException(
@@ -308,21 +436,25 @@ def build_product_findings(
     """Convert validated Qwen findings into the public response contract."""
 
     if task_type == "SHORTAGE":
-        return [
-            ShortageProductFinding(
-                shortage_product_name=finding.shortage_product_name or ""
+        return InspectApiResponse(
+            findings=[
+                ShortageProductFinding(
+                    shortage_product_name=finding.shortage_product_name or ""
+                )
+                for finding in reviewed_findings
+                if finding.shortage_product_name
+            ]
+        )
+    return InspectApiResponse(
+        findings=[
+            MisplacedProductFinding(
+                misplaced_product_name=finding.misplaced_product_name or "",
+                gt_product_name=finding.gt_product_name or "",
             )
             for finding in reviewed_findings
-            if finding.shortage_product_name
+            if finding.misplaced_product_name and finding.gt_product_name
         ]
-    return [
-        MisplacedProductFinding(
-            misplaced_product_name=finding.misplaced_product_name or "",
-            gt_product_name=finding.gt_product_name or "",
-        )
-        for finding in reviewed_findings
-        if finding.misplaced_product_name and finding.gt_product_name
-    ]
+    )
 
 
 def decode_image(value: str, field_name: str) -> np.ndarray:

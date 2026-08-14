@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 import cv2
 import numpy as np
@@ -19,6 +19,7 @@ import numpy as np
 
 ImageInput = str | Path | np.ndarray
 BBox = tuple[int, int, int, int]
+PoseType = Literal["", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class RowDetectionConfig:
     merge_y_gap_ratio: float = 0.010
     min_product_row_height_ratio: float = 0.075
     include_trailing_row: bool = False
+    pose_type: PoseType = ""
     enable_hough_fallback: bool = True
     hough_min_line_ratio: float = 0.125
     hough_max_line_gap_ratio: float = 0.125
@@ -80,6 +82,8 @@ class RowDetectionConfig:
                 raise ValueError(f"{name} must be in (0, 1]")
         if self.morphology_height <= 0:
             raise ValueError("morphology_height must be positive")
+        if self.pose_type not in {"", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"}:
+            raise ValueError("pose_type is invalid")
 
 
 @dataclass(frozen=True)
@@ -102,9 +106,20 @@ class ShelfRow:
     lower_rail_index: int | None
 
 
+@dataclass(frozen=True)
+class ShelfRowMatch:
+    """Reliable vertical assignment of one bbox to a detected shelf row."""
+
+    row_index: int
+    row_bbox: BBox
+    overlap_ratio: float
+    detected_row_index: int | None = None
+
+
 @dataclass
 class RowDetectionResult:
     image_size: tuple[int, int]
+    pose_type: PoseType
     rails: list[ShelfRail]
     rows: list[ShelfRow]
     red_mask: np.ndarray = field(repr=False)
@@ -130,9 +145,122 @@ class RowDetectionResult:
                 best_row = row
         return best_row
 
+    def match_bboxes(
+        self,
+        bboxes: Sequence[Sequence[int | float]],
+        *,
+        expected_row_count: int | None = None,
+        min_overlap_ratio: float = 0.6,
+    ) -> list[ShelfRowMatch | None]:
+        """Assign bboxes to rows only when the row layout and overlap are reliable."""
+
+        if expected_row_count is not None and expected_row_count <= 0:
+            raise ValueError("expected_row_count must be positive")
+        if not 0 <= min_overlap_ratio <= 1:
+            raise ValueError("min_overlap_ratio must be in [0, 1]")
+        if expected_row_count is not None and len(self.rows) != expected_row_count:
+            return [None] * len(bboxes)
+
+        matches: list[ShelfRowMatch | None] = []
+        for bbox in bboxes:
+            if len(bbox) != 4:
+                raise ValueError("bbox must be [x, y, width, height]")
+            _, y, _, height = (float(value) for value in bbox)
+            row = self.row_for_bbox(bbox)
+            if row is None or height <= 0:
+                matches.append(None)
+                continue
+            _, row_y, _, row_height = row.bbox
+            overlap = max(
+                0.0,
+                min(y + height, row_y + row_height) - max(y, row_y),
+            )
+            overlap_ratio = overlap / height
+            if overlap_ratio < min_overlap_ratio:
+                matches.append(None)
+                continue
+            matches.append(
+                ShelfRowMatch(
+                    row_index=row.index,
+                    row_bbox=row.bbox,
+                    overlap_ratio=round(overlap_ratio, 4),
+                    detected_row_index=row.index,
+                )
+            )
+        return matches
+
+    def match_bboxes_to_row_window(
+        self,
+        bboxes: Sequence[Sequence[int | float]],
+        *,
+        row_count: int,
+        anchor: Literal["top", "bottom"],
+        min_overlap_ratio: float = 0.6,
+    ) -> list[ShelfRowMatch | None]:
+        """Map bboxes into a top/bottom row window and renumber it from one.
+
+        Cameras can include one adjacent shelf row outside the requested pose.
+        SKU candidate rows are pose-relative, so an upper view uses the top N
+        detected rows while a lower view uses the bottom N detected rows.  More
+        than one extra row is treated as an unreliable layout and falls back.
+        """
+
+        if row_count <= 0:
+            raise ValueError("row_count must be positive")
+        if anchor not in {"top", "bottom"}:
+            raise ValueError("anchor must be top or bottom")
+        if not 0 <= min_overlap_ratio <= 1:
+            raise ValueError("min_overlap_ratio must be in [0, 1]")
+        if len(self.rows) < row_count or len(self.rows) > row_count + 1:
+            return [None] * len(bboxes)
+
+        selected_rows = (
+            self.rows[:row_count]
+            if anchor == "top"
+            else self.rows[-row_count:]
+        )
+        sku_index_by_detected_index = {
+            row.index: sku_index
+            for sku_index, row in enumerate(selected_rows, start=1)
+        }
+        matches: list[ShelfRowMatch | None] = []
+        for bbox in bboxes:
+            if len(bbox) != 4:
+                raise ValueError("bbox must be [x, y, width, height]")
+            _, y, _, height = (float(value) for value in bbox)
+            if height <= 0:
+                matches.append(None)
+                continue
+            bottom = y + height
+            best_row: ShelfRow | None = None
+            best_overlap = 0.0
+            for row in selected_rows:
+                _, row_y, _, row_height = row.bbox
+                overlap = max(
+                    0.0,
+                    min(bottom, row_y + row_height) - max(y, row_y),
+                )
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_row = row
+            overlap_ratio = best_overlap / height
+            if best_row is None or overlap_ratio < min_overlap_ratio:
+                matches.append(None)
+                continue
+            matches.append(
+                ShelfRowMatch(
+                    row_index=sku_index_by_detected_index[best_row.index],
+                    row_bbox=best_row.bbox,
+                    overlap_ratio=round(overlap_ratio, 4),
+                    detected_row_index=best_row.index,
+                )
+            )
+        return matches
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "image_size": list(self.image_size),
+            "pose_type": self.pose_type,
             "rails": [asdict(rail) for rail in self.rails],
             "rows": [asdict(row) for row in self.rows],
         }
@@ -469,30 +597,61 @@ def _build_rows(
     config: RowDetectionConfig,
 ) -> list[ShelfRow]:
     min_height = max(20, int(round(height * config.min_product_row_height_ratio)))
-    rows: list[ShelfRow] = []
+    rail_rows: list[ShelfRow] = []
     top = 0
     for rail_index, rail in enumerate(rails):
         # Center lines are a more stable boundary than axis-aligned rail boxes
         # when perspective turns a long shelf edge into a tall diagonal bbox.
         rail_y = rail.y_center
         if rail_y - top >= min_height:
-            rows.append(
+            rail_rows.append(
                 ShelfRow(
-                    index=len(rows) + 1,
+                    index=len(rail_rows) + 1,
                     bbox=(0, top, width, rail_y - top),
                     lower_rail_index=rail_index,
                 )
             )
         top = rail_y
-    if config.include_trailing_row and height - top >= min_height:
-        rows.append(
-            ShelfRow(
-                index=len(rows) + 1,
-                bbox=(0, top, width, height - top),
-                lower_rail_index=None,
-            )
+    trailing_row: ShelfRow | None = None
+    if height - top >= min_height:
+        trailing_row = ShelfRow(
+            index=len(rail_rows) + 1,
+            bbox=(0, top, width, height - top),
+            lower_rail_index=None,
         )
-    return rows
+
+    if config.pose_type == "SHELF_VIEW_UPPER":
+        # Upper images always correspond to the first two product rows.  Only
+        # use the image bottom when the second lower rail itself is missing.
+        candidates = list(rail_rows)
+        if len(candidates) < 2 and trailing_row is not None:
+            candidates.append(trailing_row)
+        selected = candidates[:2]
+    elif config.pose_type == "SHELF_VIEW_LOWER":
+        # A lower image normally contains a partial row above the target three.
+        # Four detected rails therefore close all three target rows.  With only
+        # three rails, the bottom target row has no visible lower rail and the
+        # image boundary closes it instead.
+        if len(rail_rows) >= 4:
+            selected = rail_rows[-3:]
+        else:
+            candidates = list(rail_rows)
+            if trailing_row is not None:
+                candidates.append(trailing_row)
+            selected = candidates[-3:]
+    else:
+        candidates = list(rail_rows)
+        if config.include_trailing_row and trailing_row is not None:
+            candidates.append(trailing_row)
+        selected = candidates
+    return [
+        ShelfRow(
+            index=index,
+            bbox=row.bbox,
+            lower_rail_index=row.lower_rail_index,
+        )
+        for index, row in enumerate(selected, start=1)
+    ]
 
 
 def detect_rows(
@@ -541,6 +700,7 @@ def detect_rows(
     rows = _build_rows(rails, width, height, settings)
     return RowDetectionResult(
         image_size=(width, height),
+        pose_type=settings.pose_type,
         rails=rails,
         rows=rows,
         red_mask=red_mask,

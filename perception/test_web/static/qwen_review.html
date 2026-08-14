@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Inspection · Qwen Review</title>
+    <link rel="stylesheet" href="/static/qwen_review.css?v=3" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">INSPECTION · QWEN3-VL · ROW CONSTRAINT</p>
+          <h1>Qwen Review</h1>
+          <p>查看对齐、货架行约束、实际候选图，以及逐个异常区域的 Qwen 复核结果。</p>
+        </div>
+        <nav aria-label="调试页面导航">
+          <a href="/qwen-debug">Qwen / SAM3 Debug</a>
+          <a href="/">Locate Debug</a>
+        </nav>
+      </header>
+
+      <section class="toolbar card" aria-label="样例选择">
+        <label>
+          <span>任务</span>
+          <select id="taskSelect">
+            <option value="SHORTAGE">SHORTAGE</option>
+            <option value="MISPLACED">MISPLACED</option>
+          </select>
+        </label>
+        <label>
+          <span>Pair</span>
+          <select id="pairSelect"></select>
+        </label>
+        <label>
+          <span>异常区域</span>
+          <select id="regionSelect"></select>
+        </label>
+        <label>
+          <span>temperature</span>
+          <input id="temperature" type="number" min="0" max="2" step="0.1" value="0" />
+        </label>
+        <button id="runButton" class="primary" type="button">运行当前阶段</button>
+        <button id="runFullButton" class="full-run" type="button">运行完整巡检链路</button>
+        <span id="runStatus" class="status">正在读取样例…</span>
+        <span id="fullRunStatus" class="status">完整链路尚未运行</span>
+      </section>
+
+      <section class="full-chain-card card" aria-labelledby="fullChainTitle">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">FULL INSPECTION PIPELINE</p>
+            <h2 id="fullChainTitle">缺货检测 → 商品身份完整链路</h2>
+          </div>
+          <span id="fullChainMeta" class="meta">尚未运行</span>
+        </div>
+        <dl class="timing-grid full-chain-grid" aria-label="完整巡检链路耗时">
+          <div class="primary-timing">
+            <dt>完整链路端到端</dt>
+            <dd id="fullEndToEndTiming">—</dd>
+          </div>
+          <div>
+            <dt>后端至结果就绪</dt>
+            <dd id="fullBackendTiming">—</dd>
+          </div>
+          <div>
+            <dt>inspect 主链路</dt>
+            <dd id="fullInspectTiming">—</dd>
+          </div>
+          <div>
+            <dt>返回异常数</dt>
+            <dd id="fullFindingCount">—</dd>
+          </div>
+        </dl>
+        <p class="timing-scope">
+          此按钮从 baseline/current 重新开始，直接调用 inspect Python 入口，实际执行差分配准、
+          缺货 bbox、货架行映射、SKU 候选和 Qwen 商品身份确认。它使用运行时公共 Prompt，
+          不使用下方当前 region 的编辑内容。
+        </p>
+        <pre id="fullInspectResult" class="full-chain-result">等待完整巡检</pre>
+      </section>
+
+      <section class="constraint-card card" aria-labelledby="constraintTitle">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">ROW CONSTRAINT</p>
+            <h2 id="constraintTitle">当前区域的货架行约束</h2>
+          </div>
+          <span id="rowStatusBadge" class="badge neutral">等待样例</span>
+        </div>
+        <dl class="constraint-grid">
+          <div>
+            <dt>检测行 → SKU 行</dt>
+            <dd id="rowIndexValue">—</dd>
+          </div>
+          <div>
+            <dt>行边界框</dt>
+            <dd id="rowBBoxValue">—</dd>
+          </div>
+          <div>
+            <dt>异常框行内占比</dt>
+            <dd id="rowOverlapValue">—</dd>
+          </div>
+          <div>
+            <dt>候选过滤</dt>
+            <dd id="candidateFilterValue">—</dd>
+          </div>
+        </dl>
+        <p id="constraintHint" class="hint">有有效行约束时，SHORTAGE 只把目标行可见的 SKU 候选发送给 Qwen。</p>
+      </section>
+
+      <section class="result-layout">
+        <article class="card result-card">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">RESULT</p>
+              <h2>识别结果</h2>
+            </div>
+            <span id="resultMeta" class="meta">尚未运行</span>
+          </div>
+          <dl class="timing-grid" aria-label="区域审核耗时">
+            <div class="primary-timing">
+              <dt>本页审核端到端</dt>
+              <dd id="endToEndTiming">—</dd>
+            </div>
+            <div>
+              <dt>后端至解析完成</dt>
+              <dd id="backendTiming">—</dd>
+            </div>
+            <div>
+              <dt>Qwen 请求</dt>
+              <dd id="qwenTiming">—</dd>
+            </div>
+          </dl>
+          <p class="timing-scope">
+            本页审核端到端 = 点击运行到结果返回，包含本地候选图组装、网络、Qwen、解析与保存。
+            本页使用已生成的 bbox 和候选图，不包含前置差分、货架行检测及实时 SKU 查询。
+          </p>
+          <pre id="parsedResult" class="result-json">等待推理</pre>
+          <h3>Qwen 原始输出</h3>
+          <pre id="rawOutput">等待推理</pre>
+        </article>
+
+        <article class="card prompt-card">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">PROMPT</p>
+              <h2>当前区域 Prompt</h2>
+            </div>
+            <span id="promptSource" class="meta"></span>
+          </div>
+          <label id="promptStageControl" class="prompt-stage-control">
+            <span>审核阶段</span>
+            <select id="promptStageSelect"></select>
+          </label>
+          <textarea id="promptInput" spellcheck="false"></textarea>
+          <div class="prompt-actions">
+            <button id="savePromptButton" type="button">保存此样例 Prompt</button>
+            <span id="saveStatus" class="status"></span>
+          </div>
+          <p class="hint">请保留 SYSTEM / USER 区块、连续的 [IMAGE N] 标记，以及当前阶段实际候选商品名称和编号顺序。MISPLACED 使用 SKU 编号拼图，SHORTAGE 仍逐张列出 CANDIDATE。保存内容只覆盖当前样例和当前阶段，不修改公共 Prompt 模板。</p>
+        </article>
+      </section>
+
+      <section class="card input-section">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">MODEL INPUTS</p>
+            <h2>实际发送给 Qwen 的图片</h2>
+          </div>
+          <span id="inputCount" class="meta">0 张</span>
+        </div>
+        <p id="inputScopeNote" class="section-note">IMAGE 1 是当前审核阶段的主图；后续图片为该阶段候选输入，编号与 Prompt 一致。</p>
+        <div id="modelInputs" class="image-grid"></div>
+      </section>
+
+      <section class="card source-section">
+        <div class="section-heading">
+          <div>
+            <p class="section-label muted-label">INSPECTION PIPELINE</p>
+            <h2>对齐与货架行检测</h2>
+          </div>
+          <span class="not-sent">仅用于定位与检查</span>
+        </div>
+        <div class="source-grid">
+          <figure id="baselineFigure">
+            <figcaption>
+              <strong>Baseline</strong>
+              <small>货架基准图，也是行检测的坐标系</small>
+            </figcaption>
+            <div class="source-image-wrap">
+              <img id="baselineImage" alt="货架基准图" />
+              <span class="image-unavailable">暂无图片</span>
+            </div>
+          </figure>
+          <figure id="currentFigure">
+            <figcaption>
+              <strong>Raw current</strong>
+              <small>相机采集的原始当前图</small>
+            </figcaption>
+            <div class="source-image-wrap">
+              <img id="currentImage" alt="原始当前图" />
+              <span class="image-unavailable">暂无图片</span>
+            </div>
+          </figure>
+          <figure id="alignedCurrentFigure">
+            <figcaption>
+              <strong>Aligned current</strong>
+              <small>配准到 baseline 坐标系后的当前图</small>
+            </figcaption>
+            <div class="source-image-wrap">
+              <img id="alignedCurrentImage" alt="对齐后的当前图" />
+              <span class="image-unavailable">暂无对齐结果</span>
+            </div>
+          </figure>
+          <figure id="rowOverlayFigure">
+            <figcaption>
+              <strong>Rows / rails overlay</strong>
+              <small>货架横梁与可用货架行检测结果</small>
+            </figcaption>
+            <div class="source-image-wrap">
+              <img id="rowOverlayImage" alt="货架行和横梁检测叠加图" />
+              <span class="image-unavailable">暂无行检测叠加图</span>
+            </div>
+          </figure>
+        </div>
+      </section>
+    </main>
+    <script src="/static/qwen_review.js?v=7"></script>
+  </body>
+</html>

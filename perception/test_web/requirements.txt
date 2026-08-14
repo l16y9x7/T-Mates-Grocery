@@ -1,0 +1,3 @@
+# test_web now lives at the perception root and directly consumes inspection
+# artifacts that depend on OpenCV/numpy. Keep one canonical dependency list.
+-r ../requirements.txt
