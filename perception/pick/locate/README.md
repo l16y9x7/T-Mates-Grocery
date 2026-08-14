@@ -26,13 +26,13 @@ python main.py
 
 可使用 `SKU_API_URL`、`QWEN3_URL`、`QWEN3_MODEL`、`SAM3_URL` 环境变量覆盖。
 
-未随请求上传图片时，只从根目录 `config.py` 配置的相机服务获取当前 RGB，不读取本地测试图片。非本机 IP 统一由 `CAMERA_SERVICE_HOST` 配置；仍可通过 `CAMERA_SERVICE_URL`、`CAMERA_SNAPSHOT_URL` 和 `CAMERA_SNAPSHOT_TIMEOUT_SECONDS` 覆盖地址与超时，通过 `CAMERA_SNAPSHOT_CACHE_DIR` 指定快照缓存目录。
+未随请求上传图片时，只从根目录 `config.py` 配置的相机服务获取当前 RGB，不读取本地测试图片。`SORTING` 按 `hand` 使用 `left_wrist`/`right_wrist`；`SHORTAGE` 和 `MISPLACED` 固定使用 `head`。其中 `SHORTAGE` 不请求深度，`MISPLACED` 使用与 RGB 对齐的 `head` 深度。非本机 IP 统一由 `CAMERA_SERVICE_HOST` 配置；仍可通过 `CAMERA_SERVICE_URL`、`CAMERA_SNAPSHOT_URL` 和 `CAMERA_SNAPSHOT_TIMEOUT_SECONDS` 覆盖地址与超时，通过 `CAMERA_SNAPSHOT_CACHE_DIR` 指定快照缓存目录。
 
 ## 接口
 
 ### `GET /video/frame`
 
-返回当前 RGB 图片。服务只请求 `CAMERA_SNAPSHOT_URL` 并验证响应是有效 JPG/PNG；连接失败、非 2xx、空响应、图片无效或缓存失败时返回 HTTP 400，不读取本地图片。
+返回当前 RGB 图片。默认 `task_type=SORTING`，按 `hand` 返回对应腕部相机；传入 `task_type=SHORTAGE` 或 `task_type=MISPLACED` 时返回头部相机。服务会验证响应是有效 JPG/PNG；连接失败、非 2xx、空响应、图片无效或缓存失败时返回 HTTP 400，不读取本地图片。
 
 ### `POST /perception/pick/locate`
 

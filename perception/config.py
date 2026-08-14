@@ -63,15 +63,17 @@ def camera_snapshot_url(camera: str) -> str:
 
 
 def camera_depth_snapshot_url(camera: str) -> str:
-    """Return the configured raw 16UC1 depth snapshot URL for a wrist camera."""
+    """Return the configured raw 16UC1 depth snapshot URL for a camera."""
 
     defaults = {
         "left": f"{CAMERA_SERVICE_URL}/camera/snapshot?camera=left_wrist&type=depth",
         "right": f"{CAMERA_SERVICE_URL}/camera/snapshot?camera=right_wrist&type=depth",
+        "head": f"{CAMERA_SERVICE_URL}/camera/snapshot?camera=head&type=depth",
     }
     environment_names = {
         "left": "LEFT_CAMERA_DEPTH_SNAPSHOT_URL",
         "right": "RIGHT_CAMERA_DEPTH_SNAPSHOT_URL",
+        "head": "HEAD_CAMERA_DEPTH_SNAPSHOT_URL",
     }
     normalized_camera = camera.strip().lower()
     if normalized_camera not in defaults:

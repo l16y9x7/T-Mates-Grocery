@@ -63,17 +63,21 @@ MONITOR_IMAGE_DIR = Path(
 )
 LEFT_CAMERA_SNAPSHOT_URL = camera_snapshot_url("left")
 RIGHT_CAMERA_SNAPSHOT_URL = camera_snapshot_url("right")
+HEAD_CAMERA_SNAPSHOT_URL = camera_snapshot_url("head")
 LEFT_CAMERA_DEPTH_SNAPSHOT_URL = camera_depth_snapshot_url("left")
 RIGHT_CAMERA_DEPTH_SNAPSHOT_URL = camera_depth_snapshot_url("right")
+HEAD_CAMERA_DEPTH_SNAPSHOT_URL = camera_depth_snapshot_url("head")
 # 保留旧常量名称，兼容现有左手相机配置与测试。
 CAMERA_SNAPSHOT_URL = LEFT_CAMERA_SNAPSHOT_URL
 CAMERA_SNAPSHOT_URLS = {
     "left": LEFT_CAMERA_SNAPSHOT_URL,
     "right": RIGHT_CAMERA_SNAPSHOT_URL,
+    "head": HEAD_CAMERA_SNAPSHOT_URL,
 }
 CAMERA_DEPTH_SNAPSHOT_URLS = {
     "left": LEFT_CAMERA_DEPTH_SNAPSHOT_URL,
     "right": RIGHT_CAMERA_DEPTH_SNAPSHOT_URL,
+    "head": HEAD_CAMERA_DEPTH_SNAPSHOT_URL,
 }
 CAMERA_SNAPSHOT_TIMEOUT_SECONDS = float(
     os.getenv("CAMERA_SNAPSHOT_TIMEOUT_SECONDS", "5")
@@ -311,12 +315,12 @@ class LocateResponse(BaseModel):
     image_path: str
 
 
-def get_latest_rgb(hand: str = "left") -> Path:
+def get_latest_rgb(camera: str = "left") -> Path:
     """只读取相机快照接口；不可用或内容无效时返回 HTTP 400。"""
-    normalized_hand = hand.strip().lower()
-    if normalized_hand not in CAMERA_SNAPSHOT_URLS:
-        raise HTTPException(status_code=400, detail="hand 只能是 left 或 right")
-    camera_snapshot = fetch_camera_snapshot(normalized_hand)
+    normalized_camera = camera.strip().lower()
+    if normalized_camera not in CAMERA_SNAPSHOT_URLS:
+        raise HTTPException(status_code=400, detail="camera 只能是 left、right 或 head")
+    camera_snapshot = fetch_camera_snapshot(normalized_camera)
     if camera_snapshot is not None:
         return camera_snapshot
     raise HTTPException(
@@ -325,12 +329,12 @@ def get_latest_rgb(hand: str = "left") -> Path:
     )
 
 
-def fetch_camera_snapshot(hand: str = "left") -> Path | None:
+def fetch_camera_snapshot(camera: str = "left") -> Path | None:
     """获取并验证相机快照；任何读取错误都返回 None。"""
-    camera_url = CAMERA_SNAPSHOT_URLS.get(hand.strip().lower())
+    camera_url = CAMERA_SNAPSHOT_URLS.get(camera.strip().lower())
     print("CAMERA_URL:", camera_url)
     if camera_url is None:
-        raise HTTPException(status_code=400, detail="hand 只能是 left 或 right")
+        raise HTTPException(status_code=400, detail="camera 只能是 left、right 或 head")
     try:
         response = requests.get(
             camera_url,
@@ -365,13 +369,13 @@ def fetch_camera_snapshot(hand: str = "left") -> Path | None:
 
 
 def fetch_camera_depth(
-    hand: str,
+    camera: str,
     expected_size: tuple[int, int],
 ) -> Image.Image | None:
     """读取相机服务返回的原始 16UC1 深度帧；不可用时静默回退。"""
-    camera_url = CAMERA_DEPTH_SNAPSHOT_URLS.get(hand.strip().lower())
+    camera_url = CAMERA_DEPTH_SNAPSHOT_URLS.get(camera.strip().lower())
     if camera_url is None:
-        raise HTTPException(status_code=400, detail="hand 只能是 left 或 right")
+        raise HTTPException(status_code=400, detail="camera 只能是 left、right 或 head")
     try:
         response = requests.get(
             camera_url,
@@ -546,8 +550,8 @@ def decode_uploaded_depth_image(
 
 
 @router.get("/video/frame")
-def get_video_frame(hand: str = "left") -> FileResponse:
-    image_path = get_latest_rgb(hand)
+def get_video_frame(hand: str = "left", task_type: str = "SORTING") -> FileResponse:
+    image_path = get_latest_rgb(camera_for_task(task_type, hand))
     media_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
     return FileResponse(image_path, media_type=media_type)
 
@@ -633,7 +637,10 @@ def load_hard_case_scope() -> set[tuple[str, str, str]]:
             raise HTTPException(status_code=500, detail="hard case 范围条目缺少字段")
         normalized_level = level.strip().upper()
         normalized_hand = hand.strip().lower()
-        if not re.fullmatch(r"L[1-5]", normalized_level) or normalized_hand not in CAMERA_SNAPSHOT_URLS:
+        if (
+            not re.fullmatch(r"L[1-5]", normalized_level)
+            or normalized_hand not in {"left", "right"}
+        ):
             raise HTTPException(status_code=500, detail="hard case 范围条目的 level 或 hand 无效")
         key = (name.strip(), normalized_level, normalized_hand)
         if key in scope:
@@ -703,6 +710,17 @@ def normalize_task_type(task_type: str) -> str:
             detail=f"task_type 只能是: {', '.join(SUPPORTED_TASK_TYPES)}",
         )
     return normalized
+
+
+def camera_for_task(task_type: str, hand: str) -> str:
+    """Route live locate input to the task's physical camera."""
+    normalized_task_type = normalize_task_type(task_type)
+    if normalized_task_type in {"SHORTAGE", "MISPLACED"}:
+        return "head"
+    normalized_hand = hand.strip().lower()
+    if normalized_hand not in {"left", "right"}:
+        raise HTTPException(status_code=400, detail="hand 只能是 left 或 right")
+    return normalized_hand
 
 
 def prompt_mapping_path(task_type: str) -> Path:
@@ -1983,15 +2001,21 @@ def locate_product_debug(
                 status_code=400,
                 detail="离线深度数据必须与离线 RGB 图片同时提供",
             )
-        image_path = get_latest_rgb(request.hand)
+        live_camera = camera_for_task(task_type, request.hand)
+        depth_image_provider = (
+            None
+            if task_type == "SHORTAGE"
+            else lambda expected_size: fetch_camera_depth(
+                live_camera,
+                expected_size,
+            )
+        )
+        image_path = get_latest_rgb(live_camera)
         try:
             return locate_product_in_image(
                 product,
                 image_path,
-                depth_image_provider=lambda expected_size: fetch_camera_depth(
-                    request.hand,
-                    expected_size,
-                ),
+                depth_image_provider=depth_image_provider,
                 **prompt_overrides,
             )
         except HTTPException as error:
