@@ -233,7 +233,7 @@ router = APIRouter()
 class LocateRequest(BaseModel):
     task_type: str
     product_name: str
-    level: str
+    level: str | None = None
     hand: str
     image_name: str | None = None
     image_base64: str | None = None
@@ -655,10 +655,10 @@ def load_hard_case_scope() -> set[tuple[str, str, str]]:
 def hard_case_group_for_product(
     product_name: str,
     task_type: str,
-    level: str,
+    level: str | None,
     hand: str,
 ) -> tuple[str, HardCaseGroupConfig] | None:
-    if task_type != "SORTING" or (
+    if task_type != "SORTING" or not level or (
         product_name.strip(), level.strip().upper(), hand.strip().lower()
     ) not in load_hard_case_scope():
         return None
@@ -666,6 +666,22 @@ def hard_case_group_for_product(
         if product_name in config.members:
             return group_id, config
     return None
+
+
+def hard_case_level_required(
+    product_name: str,
+    task_type: str,
+    hand: str,
+) -> bool:
+    """Whether this SORTING product/hand has any level-scoped hard case."""
+    if task_type.strip().upper() != "SORTING":
+        return False
+    normalized_name = product_name.strip()
+    normalized_hand = hand.strip().lower()
+    return any(
+        scoped_name == normalized_name and scoped_hand == normalized_hand
+        for scoped_name, _scoped_level, scoped_hand in load_hard_case_scope()
+    )
 
 
 def select_location_for_level(
@@ -1629,7 +1645,7 @@ def apply_hard_case_ordering(
     *,
     product: dict[str, Any],
     task_type: str,
-    level: str,
+    level: str | None,
     hand: str,
     shelf_front_line: tuple[float, float] | None = None,
 ) -> tuple[list[LocatedInstance], HardCaseDebugInfo | None]:
@@ -1729,7 +1745,7 @@ def locate_product_in_image(
     image_path: Path,
     *,
     task_type: str = "SORTING",
-    level: str,
+    level: str | None = None,
     hand: str = "left",
     qwen_prompt_override: str | None = None,
     sam_prompt_override: str | None = None,
@@ -1742,7 +1758,7 @@ def locate_product_in_image(
         raise HTTPException(status_code=404, detail=f"测试图片不存在: {image_path.name}")
     monitor_image_path = store_monitor_image(image_path)
     canonical_name = product["name"].strip()
-    normalized_level = normalize_level(level)
+    normalized_level = normalize_level(level) if level else None
     hard_case = hard_case_group_for_product(
         canonical_name, task_type, normalized_level, hand
     )
@@ -1757,6 +1773,7 @@ def locate_product_in_image(
         qwen_prompt = qwen_prompt or stored_qwen_prompt
         sam_prompt = sam_prompt or stored_sam_prompt
     if hard_case is not None:
+        assert normalized_level is not None
         hard_case_group_id, _ = hard_case
         target_location, target_match = select_location_for_level(
             product, normalized_level
@@ -2046,10 +2063,20 @@ def locate_product_debug(
 ) -> LocateDebugResponse:
     product_name = request.product_name.strip()
     task_type = normalize_task_type(request.task_type)
-    level = normalize_level(request.level)
     if not product_name:
         raise HTTPException(status_code=400, detail="product_name 不能为空")
     product = lookup_sku_by_name(product_name)
+    requested_level = (request.level or "").strip()
+    level = normalize_level(requested_level) if requested_level else None
+    if level is None and hard_case_level_required(
+        product["name"],
+        task_type,
+        request.hand,
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="该 SORTING 特例必须提供 level",
+        )
     prompt_overrides = (
         {
             "task_type": task_type,

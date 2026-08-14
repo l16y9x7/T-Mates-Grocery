@@ -62,6 +62,7 @@ python main.py
 - 传入 `image_base64` 时，接口使用上传图片运行推理；图片可以由调用方从任意路径、URL 或其他来源读取，接口不关心来源。支持纯 base64 或 data URL，最大 20 MB。
 - `image_name` 用于标识上传图片并原样写入响应，只允许不包含路径的 JPG/PNG 文件名。
 - `image_name` 不用于服务器端查找文件；指定它时必须同时提供 `image_base64`。
+- `level` 默认可省略；仅当 `SORTING` 的商品名和 `hand` 命中 `hard_case_config.json` 中的顺序定位特例时必须提供。
 
 处理流程：
 
