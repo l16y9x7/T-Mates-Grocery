@@ -10,7 +10,7 @@ SERVICE_BIND_HOST = os.getenv("SERVICE_BIND_HOST", "0.0.0.0")
 # Keep every non-loopback host in this file.  A deployment can either change
 # these defaults or override them with environment variables.  Full URL
 # overrides below remain supported for backward compatibility.
-CAMERA_SERVICE_HOST = os.getenv("CAMERA_SERVICE_HOST", "192.168.1.226")
+CAMERA_SERVICE_HOST = os.getenv("CAMERA_SERVICE_HOST", "192.168.3.226")
 INFERENCE_SERVICE_HOST = os.getenv("INFERENCE_SERVICE_HOST", "211.137.21.33")
 
 CAMERA_SERVICE_URL = os.getenv(
