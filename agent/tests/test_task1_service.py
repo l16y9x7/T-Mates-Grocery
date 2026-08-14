@@ -1,14 +1,26 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 import pytest
+import yaml
 
 from task1_service.app import create_app
 from task1_service.client import Task1Client
-from task1_service.models import Task1Request, Task1ServiceError, Task1Settings, Task1Timeouts
+from task1_service.models import (
+    ActionResponse,
+    ProductHandOptionsFile,
+    Task1Request,
+    Task1ServiceError,
+    Task1Settings,
+    Task1Timeouts,
+)
 from task1_service.service import Task1Orchestrator
+
+
+CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 
 
 class Task1Mock:
@@ -44,15 +56,13 @@ class Task1Mock:
         if path == "/perception/parse":
             return httpx.Response(200, json={"product_names": list(self.names)})
         if path == "/sku/search_by_name":
-            payload = json.loads(request.content)
-            name = payload["name"]
+            name = request.url.params["name"]
             return httpx.Response(
                 200,
                 json={"sku_id": "SKU", "name": name, "images": [], "locations": [self.names[name]]},
             )
         if path == "/sku/search_by_location":
-            payload = json.loads(request.content)
-            location = payload["location"]
+            location = request.url.params["location"]
             name = next(name for name, slot in self.names.items() if slot == location)
             return httpx.Response(
                 200,
@@ -110,6 +120,49 @@ def payload(request: httpx.Request) -> dict:
 
 
 @pytest.mark.asyncio
+async def test_sku_requests_use_query_parameters_without_get_bodies() -> None:
+    mock = Task1Mock()
+    client = Task1Client(settings(), transport=mock.transport)
+    async with client:
+        await client.search_by_name("可口可乐罐装")
+        await client.search_by_location("H2_F_L1_C04")
+
+    sku_requests = [request for request in mock.requests if request.url.path.startswith("/sku/search_by_")]
+    assert dict(sku_requests[0].url.params) == {"name": "可口可乐罐装"}
+    assert dict(sku_requests[1].url.params) == {"location": "H2_F_L1_C04"}
+    assert all(request.content == b"" for request in sku_requests)
+
+
+def test_production_config_loads_complete_product_hand_options() -> None:
+    options_path = CONFIG_DIR / "product-hand-options.yaml"
+    with options_path.open("r", encoding="utf-8") as options_file:
+        options = ProductHandOptionsFile.model_validate(yaml.safe_load(options_file))
+
+    assert len(options.product_hand_options) == 122
+    assert options.product_hand_options["H1_F_L1_C01"].product_name == "NFC桔汁"
+    assert options.product_hand_options["H2_B_L5_C02"].product_name == "心相印厨房纸巾"
+
+    task_settings = Task1Settings.load(CONFIG_DIR / "task1.production.yaml")
+    assert len(task_settings.product_hand_options) == 122
+    assert task_settings.product_hand_options["H1_F_L1_C01"] == ["LEFT", "RIGHT"]
+    assert task_settings.product_target_ids["H1_F_L1_C01"] == "H1_F_L_INSPECT"
+    assert task_settings.product_target_ids["H1_F_L1_C04"] == "H1_F_R_INSPECT"
+    assert task_settings.services.pose == "http://192.168.3.226:8084"
+
+
+def test_action_response_accepts_pose_execution_metadata() -> None:
+    response = ActionResponse.model_validate(
+        {
+            "status": "SUCCEEDED",
+            "executed": True,
+            "current_pose": {"pose_type": "RECEIPT_VIEW"},
+        }
+    )
+
+    assert response.status == "SUCCEEDED"
+
+
+@pytest.mark.asyncio
 async def test_task1_runs_full_pick_place_flow() -> None:
     mock = Task1Mock()
     client = Task1Client(settings(), transport=mock.transport)
@@ -125,6 +178,68 @@ async def test_task1_runs_full_pick_place_flow() -> None:
     assert [payload(request)["hand"] for request in mock.requests if request.url.path == "/place"] == ["LEFT", "RIGHT"]
     navigation = [payload(request).get("target_id") for request in mock.requests if request.url.path == "/navigation/navigate"]
     assert navigation[-2:] == ["delivery_place", "task_boundary"]
+
+
+@pytest.mark.asyncio
+async def test_task1_navigates_by_inspection_target_and_reuses_same_target() -> None:
+    mock = Task1Mock()
+    mock.names = {
+        "可口可乐罐装": "H2_F_L1_C01",
+        "雪碧罐装": "H2_F_L1_C02",
+    }
+    client = Task1Client(settings(), transport=mock.transport)
+    async with client:
+        result = await Task1Orchestrator(settings(), client).run(Task1Request())
+
+    assert [item.target_id for item in result.target_items] == [
+        "H2_F_L_INSPECT",
+        "H2_F_L_INSPECT",
+    ]
+    navigation = [
+        payload(request)["target_id"]
+        for request in mock.requests
+        if request.url.path == "/navigation/navigate"
+    ]
+    assert navigation == [
+        "receipt_viewpoint",
+        "H2_F_L_INSPECT",
+        "delivery_place",
+        "task_boundary",
+    ]
+    resets = [
+        request
+        for request in mock.requests
+        if request.url.path == "/pose/prepare"
+        and payload(request) == {"pose_type": "START_POSITION"}
+    ]
+    assert len(resets) == len(navigation)
+
+
+@pytest.mark.asyncio
+async def test_task1_resets_pose_immediately_before_every_navigation() -> None:
+    mock = Task1Mock()
+    client = Task1Client(settings(), transport=mock.transport)
+    async with client:
+        await Task1Orchestrator(settings(), client).run(Task1Request())
+
+    navigation_indexes = [
+        index
+        for index, request in enumerate(mock.requests)
+        if request.url.path == "/navigation/navigate"
+    ]
+    reset_requests = [
+        request
+        for request in mock.requests
+        if request.url.path == "/pose/prepare"
+        and payload(request) == {"pose_type": "START_POSITION"}
+    ]
+
+    assert len(reset_requests) == len(navigation_indexes)
+    assert all(
+        mock.requests[index - 1].url.path == "/pose/prepare"
+        and payload(mock.requests[index - 1]) == {"pose_type": "START_POSITION"}
+        for index in navigation_indexes
+    )
 
 
 @pytest.mark.asyncio

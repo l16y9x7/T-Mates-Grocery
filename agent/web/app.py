@@ -236,6 +236,8 @@ def _operation_visual(log_dir: Path | None) -> dict[str, object]:
     # If capture did not finish, expose the RGB returned by the locate service.
     if image_data is None:
         locate_response_path = log_dir / "interfaces" / "perception_pick_locate" / "response.json"
+        if not locate_response_path.is_file():
+            locate_response_path = log_dir / "interfaces" / "perception_place_locate" / "response.json"
         try:
             locate_response = json.loads(locate_response_path.read_text(encoding="utf-8"))
             locate_body = locate_response.get("body", locate_response) if isinstance(locate_response, dict) else {}
@@ -303,12 +305,12 @@ def _interface_events(log_dir: Path | None, emitted: set[str]) -> list[dict[str,
     return events
 
 
-async def _run_pick(task_state: PickTask, request: PickRequest) -> None:
+async def _run_pick_place(task_state: PickTask, request: PickRequest, target_url: str) -> None:
     payload = request.model_dump(mode="json")
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                SERVICES.pick_url,
+                target_url,
                 json=payload,
                 headers={"Idempotency-Key": task_state.operation_key},
                 timeout=DEFAULT_TIMEOUT,
@@ -369,6 +371,7 @@ async def index() -> FileResponse:
 async def config() -> dict[str, str]:
     return {
         "pick_url": SERVICES.pick_url,
+        "place_url": SERVICES.place_url,
         "task1_url": SERVICES.task1_url,
         "navigation_url": SERVICES.navigation_url,
         "pose_url": SERVICES.pose_url,
@@ -503,7 +506,7 @@ async def start_pick(request: PickRequest) -> dict[str, str]:
     task_id = uuid4().hex
     operation_key = f"web-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{task_id[:10]}"
     state = PickTask(task_id=task_id, operation_key=operation_key)
-    state.task = asyncio.create_task(_run_pick(state, request))
+    state.task = asyncio.create_task(_run_pick_place(state, request, SERVICES.pick_url))
     TASKS[task_id] = state
     return {
         "task_id": task_id,
@@ -565,6 +568,36 @@ async def pick_events(task_id: str) -> StreamingResponse:
 
 @app.get("/api/pick/{task_id}/visual")
 async def pick_visual(task_id: str) -> dict[str, object]:
+    state = TASKS.get(task_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    return _operation_visual(_find_log_dir(state.operation_key))
+
+
+@app.post("/api/place/start")
+async def start_place(request: PickRequest) -> dict[str, str]:
+    task_id = uuid4().hex
+    operation_key = f"web-place-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{task_id[:10]}"
+    state = PickTask(task_id=task_id, operation_key=operation_key)
+    state.task = asyncio.create_task(_run_pick_place(state, request, SERVICES.place_url))
+    TASKS[task_id] = state
+    return {
+        "task_id": task_id,
+        "operation_key": operation_key,
+        "events_url": f"/api/place/{task_id}/events",
+    }
+
+
+@app.get("/api/place/{task_id}/events")
+async def place_events(task_id: str) -> StreamingResponse:
+    state = TASKS.get(task_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="任务不存在或已过期")
+    return _events_response(state)
+
+
+@app.get("/api/place/{task_id}/visual")
+async def place_visual(task_id: str) -> dict[str, object]:
     state = TASKS.get(task_id)
     if state is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")

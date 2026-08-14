@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1514" />
     <title>取放流程控制台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260814-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260814-2" />
   </head>
   <body>
     <main class="shell">
@@ -75,9 +75,64 @@
         </section>
       </section>
 
+      <section class="workspace place-workspace">
+        <form id="placeForm" class="control-panel">
+          <div class="panel-heading"><span>放置参数</span><span class="panel-index">03</span></div>
+          <label class="field">
+            <span>任务类型</span>
+            <select id="placeTaskType" name="task_type">
+              <option value="SORTING">SORTING / 分拣</option>
+              <option value="SHORTAGE">SHORTAGE / 缺货</option>
+              <option value="MISPLACED">MISPLACED / 乱放</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>商品名称</span>
+            <input id="placeProductName" name="product_name" value="可口可乐罐装" placeholder="输入完整商品名称" required autocomplete="off" />
+          </label>
+          <fieldset class="field hand-field">
+            <legend>操作手</legend>
+            <div class="segmented">
+              <label><input type="radio" name="hand" value="left" checked /><span>左手</span></label>
+              <label><input type="radio" name="hand" value="right" /><span>右手</span></label>
+            </div>
+          </fieldset>
+          <button id="placeSubmitButton" class="submit-button" type="submit"><span class="button-icon">→</span><span>开始放置</span></button>
+          <p id="placeErrorMessage" class="error-message" role="alert" hidden></p>
+          <div class="task-meta">
+            <span>任务键</span><strong id="placeOperationKey">-</strong>
+          </div>
+        </form>
+
+        <section class="visual-panel" aria-live="polite">
+          <div class="panel-heading"><span>放置实时流程</span><span class="panel-index">04</span></div>
+          <div id="placeEmptyState" class="empty-state">
+            <div class="empty-cross">+</div>
+            <p>等待一次放置任务</p>
+            <span>定位、取图、位姿、释放和校验日志将在此处实时出现</span>
+          </div>
+          <div id="placeTimeline" class="timeline" hidden></div>
+          <section id="placeVisual" class="operation-visual" hidden>
+            <div class="operation-visual-heading"><span>感知结果</span><span id="placeVisualStatus">等待图像</span></div>
+            <div class="operation-visual-grid">
+              <div class="image-stage"><canvas id="placeVisualCanvas" width="640" height="480"></canvas><span class="image-caption">RGB · MASK · BBOX</span></div>
+              <div class="pose-summary">
+                <div class="pose-summary-heading"><span>6D 位姿</span><span id="placePoseStatus">等待位姿估计</span></div>
+                <div id="placePoseValues" class="pose-values"><span class="pose-empty">位姿估计完成后显示</span></div>
+                <div id="placePoseMeta" class="pose-meta"></div>
+              </div>
+            </div>
+          </section>
+          <div id="placeResultCard" class="result-card" hidden>
+            <div><span>最终响应</span><strong id="placeResultStatus">-</strong></div>
+            <pre id="placeResultBody">-</pre>
+          </div>
+        </section>
+      </section>
+
       <section class="task1-workspace">
         <form id="task1Form" class="control-panel">
-          <div class="panel-heading"><span>任务一 · 小票到抓取</span><span class="panel-index">03</span></div>
+          <div class="panel-heading"><span>任务一 · 小票到抓取</span><span class="panel-index">05</span></div>
           <p class="task1-summary">识别小票商品，按货位手能力完成导航、抓取、交付台放置和任务收尾。</p>
           <button id="task1SubmitButton" class="submit-button" type="submit"><span class="button-icon">→</span><span>开始任务一</span></button>
           <p id="task1ErrorMessage" class="error-message" role="alert" hidden></p>
@@ -87,7 +142,7 @@
         </form>
 
         <section class="visual-panel task1-visual-panel" aria-live="polite">
-          <div class="panel-heading"><span>任务一实时流程</span><span class="panel-index">04</span></div>
+          <div class="panel-heading"><span>任务一实时流程</span><span class="panel-index">06</span></div>
           <div id="task1EmptyState" class="empty-state">
             <div class="empty-cross">+</div>
             <p>等待一次任务一测试</p>
@@ -120,7 +175,7 @@
       </section>
 
       <section class="receipt-panel" aria-live="polite">
-        <div class="panel-heading"><span>小票识别</span><span class="panel-index">05</span></div>
+        <div class="panel-heading"><span>小票识别</span><span class="panel-index">07</span></div>
         <div class="receipt-layout">
           <div>
             <p class="receipt-summary">识别当前小票中的商品名称</p>
@@ -138,7 +193,7 @@
       </section>
 
       <section class="robot-panel">
-        <div class="panel-heading"><span>机器人移动控制</span><span class="panel-index">06</span></div>
+        <div class="panel-heading"><span>机器人移动控制</span><span class="panel-index">08</span></div>
         <div class="robot-grid">
           <form id="poseForm" class="robot-form">
             <div class="robot-form-title">位姿准备</div>
@@ -178,9 +233,29 @@
             <div class="robot-form-title">导航移动</div>
             <label class="field">
               <span>目标点 target_id</span>
-              <input id="targetId" name="target_id" value="H1_F_L1_C01" required autocomplete="off" />
+              <select id="navigationTargetPreset" name="target_id_preset" required>
+                <optgroup label="任务点位">
+                  <option value="task_boundary">task_boundary · 任务判定点（与 start 同一点）</option>
+                  <option value="start">start · 起点（与 task_boundary 同一点）</option>
+                  <option value="receipt_viewpoint">receipt_viewpoint · 小票识别点（与 delivery_place 同一点）</option>
+                  <option value="delivery_place">delivery_place · 交付台放货点（与 receipt_viewpoint 同一点）</option>
+                </optgroup>
+                <option value="replenishment_pickup">replenishment_pickup · 补货台取货</option>
+                <optgroup label="货架巡检点">
+                  <option value="H1_F_L_INSPECT">H1_F_L_INSPECT · 1号 shelf_group_a_front_1 · 货架1正面左侧巡检</option>
+                  <option value="H1_F_R_INSPECT">H1_F_R_INSPECT · 2号 shelf_group_a_front_2 · 货架1正面右侧巡检</option>
+                  <option value="H1_B_L_INSPECT">H1_B_L_INSPECT · 3号 shelf_group_a_back_1 · 货架1反面左侧巡检</option>
+                  <option value="H1_B_R_INSPECT">H1_B_R_INSPECT · 4号 shelf_group_a_back_2 · 货架1反面右侧巡检</option>
+                  <option value="H2_F_L_INSPECT">H2_F_L_INSPECT · 5号 shelf_group_b_front_1 · 货架2正面左侧巡检</option>
+                  <option value="H2_F_R_INSPECT">H2_F_R_INSPECT · 6号 shelf_group_b_front_2 · 货架2正面右侧巡检</option>
+                  <option value="H2_B_L_INSPECT">H2_B_L_INSPECT · 7号 shelf_group_b_back_1 · 货架2反面左侧巡检</option>
+                  <option value="H2_B_R_INSPECT">H2_B_R_INSPECT · 8号 shelf_group_b_back_2 · 货架2反面右侧巡检</option>
+                </optgroup>
+                <option value="__custom__">自定义 target_id...</option>
+              </select>
+              <input id="targetId" name="target_id_custom" placeholder="输入自定义 target_id" autocomplete="off" hidden />
             </label>
-            <p class="field-hint">目标点必须是导航地图中已配置的站点，例如 H1_F_L1_C01。</p>
+            <p class="field-hint">选择固定点位，或切换“自定义 target_id”输入导航地图中的其他站点。</p>
             <button class="secondary-button" type="submit"><span class="button-icon">→</span><span>开始导航</span></button>
           </form>
         </div>
@@ -192,6 +267,6 @@
       </section>
       <footer><span>8086 PICK/PLACE ORCHESTRATOR</span><span id="footerUrl">-</span></footer>
     </main>
-    <script src="/static/app.js?v=20260814-1" defer></script>
+    <script src="/static/app.js?v=20260814-2" defer></script>
   </body>
 </html>

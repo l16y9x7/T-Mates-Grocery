@@ -225,7 +225,7 @@ class CapabilityClient:
                 "sku",
                 "GET",
                 "/sku/search_by_name",
-                json={"name": name},
+                params={"name": name},
                 timeout_seconds=self.settings.timeouts.sku_seconds,
             )
             result = SkuSearchResponse.model_validate(response.json())
@@ -418,6 +418,7 @@ class CapabilityClient:
         method: str,
         path: str,
         *,
+        params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout_seconds: float,
@@ -449,7 +450,7 @@ class CapabilityClient:
                 SERVICE_NAMES[service],
                 method,
                 path,
-                self._format_log_value(json),
+                self._format_log_value(params if params is not None else json),
                 retry_text,
             )
             try:
@@ -457,6 +458,7 @@ class CapabilityClient:
                     response = await self._client.request(
                         method,
                         url,
+                        params=params,
                         json=json,
                         headers=headers,
                         timeout=timeout,

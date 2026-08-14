@@ -67,8 +67,8 @@ Idempotency-Key: <task_run_id>:<action_id>
 |服务|默认生产地址|接口|用途|
 |---|---|---|---|
 |商品库|`192.168.130.59:25540`|`GET /sku/health`|健康检查|
-|商品库|同上|`GET /sku/search_by_name`，JSON body `{"name":"..."}`|按商品名查询标准货位|
-|商品库|同上|`GET /sku/search_by_location`，JSON body `{"location":"..."}`|按货位查询商品信息|
+|商品库|同上|`GET /sku/search_by_name?name=...`|按商品名查询标准货位|
+|商品库|同上|`GET /sku/search_by_location?location=...`|按货位查询商品信息|
 |商品库|同上|`GET /sku/images`，JSON body `{"name":"..."}`|查询商品图片（Client 已封装）|
 |导航|`192.168.130.59:8081`|`GET /navigation/health`、`POST /navigation/navigate`|健康检查和移动到命名点位|
 |姿态|`192.168.130.59:8082`|`GET /pose/health`、`POST /pose/prepare`|健康检查和准备 `RECEIPT_VIEW`、`SHELF_VIEW_UPPER`、`SHELF_VIEW_LOWER`、抓取/放置等姿态|

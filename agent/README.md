@@ -86,7 +86,29 @@ curl -X POST http://127.0.0.1:8108/task1/run \
   -d '{}'
 ```
 
-任务一实际环境配置见 `config/task1.production.yaml`。
+任务一实际环境配置见 `config/task1.production.yaml`。完整商品货位手能力位于
+`config/product-hand-options.yaml`；任务一只使用每个货位的 `hands`，其中的
+`product_name` 和 `target_id` 还会供任务二匹配巡检结果。
+
+## 启动任务二独立服务
+
+`task2_service` 依次访问八个货架巡检点，在每个点分别准备上下观察位姿并调用
+`POST /perception/inspect`。发现缺货商品时记录当前巡检点和观察位姿，到补货台抓取后
+恢复该点位和位姿，再调用 8086 的 `/place`。
+
+```bash
+scripts/task2.sh start
+curl http://127.0.0.1:8109/health
+curl -X POST http://127.0.0.1:8109/task2/run \
+  -H 'Content-Type: application/json' \
+  -d '{}'
+```
+
+默认端口为 `8109`；端口被占用时可使用 `TASK2_PORT=8110 scripts/task2.sh start`。
+
+任务二生产配置见 `config/task2.production.yaml`，详细流程和接口见
+[`doc/task2流程与接口说明.md`](doc/task2流程与接口说明.md)。8086 的 `SHORTAGE /place`
+内部实现和真实机器人联调不属于当前任务二编排服务。
 
 ## 使用生产配置
 
@@ -121,6 +143,9 @@ PYTHONPATH=src .venv/bin/pytest -q
 |`src/agent/client.py`|主 Agent 的 HTTP 客户端、超时、重试和幂等键|
 |`src/pick_place_service/`|8086 独立取放服务|
 |`src/task1_service/`|任务一小票识别到抓取独立服务|
+|`src/task2_service/`|任务二货架巡检与补货独立服务|
 |`config/agent.production.yaml`|主 Agent 实际环境服务地址和场地配置|
 |`config/task1.production.yaml`|任务一独立服务地址、点位、手能力映射和超时配置|
+|`config/task2.production.yaml`|任务二独立服务地址、巡检路线和超时配置|
+|`config/product-hand-options.yaml`|任务一、任务二共用的商品、巡检点及左右手能力|
 |`config/pick-place.yaml`|8086 下游服务和相机配置|

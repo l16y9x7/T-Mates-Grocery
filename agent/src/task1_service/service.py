@@ -28,6 +28,24 @@ def shelf_level(slot_id: str) -> str:
     return slot_id.split("_")[2]
 
 
+_INSPECTION_LEFT_MAX = {
+    "H1_F": (3, 6, 5, 3, 3),
+    "H1_B": (3, 3, 2, 2, 1),
+    "H2_F": (3, 2, 4, 6, 5),
+    "H2_B": (3, 4, 5, 2, 1),
+}
+
+
+def default_inspection_target_id(slot_id: str) -> str:
+    """Return the inspection point for legacy in-memory settings without the map."""
+
+    shelf, face, level, column = slot_id.split("_")
+    shelf_face = f"{shelf}_{face}"
+    left_max = _INSPECTION_LEFT_MAX[shelf_face][int(level[1:]) - 1]
+    side = "L" if int(column[1:]) <= left_max else "R"
+    return f"{shelf_face}_{side}_INSPECT"
+
+
 class Task1Orchestrator:
     def __init__(self, settings: Task1Settings, client: Task1Client) -> None:
         self.settings = settings
@@ -37,6 +55,7 @@ class Task1Orchestrator:
         task_run_id = operation_key or uuid4().hex
         logger = _Task1Log(self.settings, task_run_id, request)
         self.client.set_trace_callback(logger.interface_event)
+        navigation_state: dict[str, str | None] = {"target_id": None}
         step = "健康检查"
         try:
             logger.event("operation", "started")
@@ -46,7 +65,12 @@ class Task1Orchestrator:
 
             step = "小票点导航"
             logger.event("小票点导航", "started", target_id=self.settings.receipt_viewpoint)
-            await self.client.navigate(self.settings.receipt_viewpoint, f"{task_run_id}:task1.receipt.navigate")
+            await self._navigate(
+                self.settings.receipt_viewpoint,
+                f"{task_run_id}:task1.receipt.navigate",
+                logger,
+                navigation_state,
+            )
             logger.event("小票点导航", "succeeded", target_id=self.settings.receipt_viewpoint)
 
             step = "小票拍摄位姿"
@@ -75,9 +99,11 @@ class Task1Orchestrator:
                     raise Task1ServiceError(
                         "INVALID_PRODUCT_SLOT", f"invalid product slot: {slot_id}", status_code=422
                     )
+                target_id = self._target_id(slot_id)
                 targets.append(TargetItem(
                     product_name=name,
                     product_slot_id=slot_id,
+                    target_id=target_id,
                     shelf_level=shelf_level(slot_id),
                     hand=Hand.LEFT,
                 ))
@@ -87,6 +113,7 @@ class Task1Orchestrator:
                     product_name=name,
                     sku_id=sku.sku_id,
                     product_slot_id=slot_id,
+                    target_id=target_id,
                     shelf_level=shelf_level(slot_id),
                 )
             if len({target.product_slot_id for target in targets}) != 2:
@@ -105,20 +132,25 @@ class Task1Orchestrator:
 
             if targets[0].hand != targets[1].hand:
                 for index, target in enumerate(targets):
-                    await self._pick_target(target, index, task_run_id, logger)
-                await self._prepare_delivery(task_run_id, logger)
+                    await self._pick_target(target, index, task_run_id, logger, navigation_state)
+                await self._prepare_delivery(task_run_id, logger, navigation_state=navigation_state)
                 for index, target in enumerate(targets):
                     await self._place_target(target, index, task_run_id, logger)
             else:
                 # 单手能力受限时，始终保持该手一次只持有一件商品。
                 for index, target in enumerate(targets):
-                    await self._pick_target(target, index, task_run_id, logger)
-                    await self._prepare_delivery(task_run_id, logger, index)
+                    await self._pick_target(target, index, task_run_id, logger, navigation_state)
+                    await self._prepare_delivery(task_run_id, logger, index, navigation_state)
                     await self._place_target(target, index, task_run_id, logger)
 
             step = "任务判定区导航"
             logger.event("任务判定区导航", "started", target_id=self.settings.task_boundary)
-            await self.client.navigate(self.settings.task_boundary, f"{task_run_id}:task1.finish.navigate")
+            await self._navigate(
+                self.settings.task_boundary,
+                f"{task_run_id}:task1.finish.navigate",
+                logger,
+                navigation_state,
+            )
             logger.event("任务判定区导航", "succeeded", target_id=self.settings.task_boundary)
 
             held_items: dict[Hand, str] = {}
@@ -150,6 +182,9 @@ class Task1Orchestrator:
     def _allowed_hands(self, slot_id: str) -> list[Hand]:
         return self.settings.product_hand_options.get(slot_id, [Hand.LEFT, Hand.RIGHT])
 
+    def _target_id(self, slot_id: str) -> str:
+        return self.settings.product_target_ids.get(slot_id) or default_inspection_target_id(slot_id)
+
     def _assign_hands(self, slots: list[str]) -> tuple[Hand, Hand]:
         options = [self._allowed_hands(slot) for slot in slots]
         candidates = [
@@ -167,10 +202,22 @@ class Task1Orchestrator:
             status_code=422,
         )
 
-    async def _pick_target(self, target: TargetItem, index: int, task_run_id: str, logger: _Task1Log) -> None:
-        logger.event("商品导航", "started", product_name=target.product_name, target_id=target.product_slot_id)
-        await self.client.navigate(target.product_slot_id, f"{task_run_id}:task1.pick.{index}.navigate")
-        logger.event("商品导航", "succeeded", product_name=target.product_name, target_id=target.product_slot_id)
+    async def _pick_target(
+        self,
+        target: TargetItem,
+        index: int,
+        task_run_id: str,
+        logger: _Task1Log,
+        navigation_state: dict[str, str | None],
+    ) -> None:
+        logger.event("商品导航", "started", product_name=target.product_name, target_id=target.target_id)
+        await self._navigate(
+            target.target_id,
+            f"{task_run_id}:task1.pick.{index}.navigate",
+            logger,
+            navigation_state,
+        )
+        logger.event("商品导航", "succeeded", product_name=target.product_name, target_id=target.target_id)
         logger.event("抓取位姿", "started", product_name=target.product_name, pose_type="SHELF_PICK_READY", shelf_level=target.shelf_level)
         await self.client.prepare_pose("SHELF_PICK_READY", f"{task_run_id}:task1.pick.{index}.pose", shelf_level=target.shelf_level)
         logger.event("抓取位姿", "succeeded", product_name=target.product_name, shelf_level=target.shelf_level)
@@ -179,10 +226,23 @@ class Task1Orchestrator:
         target.picked = True
         logger.event("抓取", "succeeded", product_name=target.product_name, hand=target.hand.value)
 
-    async def _prepare_delivery(self, task_run_id: str, logger: _Task1Log, cycle: int | None = None) -> None:
+    async def _prepare_delivery(
+        self,
+        task_run_id: str,
+        logger: _Task1Log,
+        cycle: int | None = None,
+        navigation_state: dict[str, str | None] | None = None,
+    ) -> None:
+        if navigation_state is None:
+            navigation_state = {"target_id": None}
         suffix = "delivery" if cycle is None else f"delivery.{cycle}"
         logger.event("交付台导航", "started", target_id=self.settings.delivery_place)
-        await self.client.navigate(self.settings.delivery_place, f"{task_run_id}:task1.{suffix}.navigate")
+        await self._navigate(
+            self.settings.delivery_place,
+            f"{task_run_id}:task1.{suffix}.navigate",
+            logger,
+            navigation_state,
+        )
         logger.event("交付台导航", "succeeded", target_id=self.settings.delivery_place)
         logger.event("放置位姿", "started", pose_type="DELIVERY_TABLE_PLACE_READY")
         await self.client.prepare_pose("DELIVERY_TABLE_PLACE_READY", f"{task_run_id}:task1.{suffix}.pose")
@@ -193,6 +253,25 @@ class Task1Orchestrator:
         await self.client.place(target.product_name, target.hand, f"{task_run_id}:task1.place.{index}.place")
         target.placed = True
         logger.event("放置", "succeeded", product_name=target.product_name, hand=target.hand.value)
+
+    async def _navigate(
+        self,
+        target_id: str,
+        idempotency_key: str,
+        logger: _Task1Log,
+        navigation_state: dict[str, str | None],
+    ) -> None:
+        """收回机器人姿态后移动；已在目标点时复用当前位置。"""
+
+        if navigation_state["target_id"] == target_id:
+            logger.event("移动前复位", "skipped", target_id=target_id, reason="already_at_target")
+            return
+
+        logger.event("移动前复位", "started", pose_type="START_POSITION", target_id=target_id)
+        await self.client.prepare_pose("START_POSITION", f"{idempotency_key}.reset_pose")
+        logger.event("移动前复位", "succeeded", pose_type="START_POSITION", target_id=target_id)
+        await self.client.navigate(target_id, idempotency_key)
+        navigation_state["target_id"] = target_id
 
 
 class _Task1Log:
@@ -243,7 +322,11 @@ class _Task1Log:
             service=trace.get("service"),
             method=trace.get("method"),
             url=trace.get("url"),
-            request={"headers": trace.get("headers") or {}, "body": trace.get("body")},
+            request={
+                "headers": trace.get("headers") or {},
+                "query": trace.get("query") or {},
+                "body": trace.get("body"),
+            },
             attempt=trace.get("attempt"),
             response={
                 "status_code": status_code,

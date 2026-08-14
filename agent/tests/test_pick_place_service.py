@@ -152,7 +152,7 @@ async def test_pick_runs_subagents_once_and_reuses_idempotency_result() -> None:
 
     assert first.status_code == second.status_code == 200
     assert first.json() == {"status": "SUCCEEDED"}
-    assert fake.calls == [("pick", "locate"), ("pick", "pose"), ("pick", "execute"), ("pick", "check")]
+    assert fake.calls == [("pick", "locate"), ("pick", "pose"), ("pick", "execute")]
 
 
 @pytest.mark.asyncio
@@ -193,6 +193,48 @@ async def test_place_maps_internal_sequence_and_rejects_key_conflict() -> None:
     assert first.status_code == 200
     assert conflict.status_code == 409
     assert fake.calls == [("place", "locate"), ("place", "pose"), ("place", "execute"), ("place", "check")]
+
+
+@pytest.mark.asyncio
+async def test_sorting_place_skips_vision_and_uses_fixed_release_payload() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        requests.append(http_request)
+        return httpx.Response(
+            200,
+            json={
+                "status": "SUCCEEDED",
+                "executed": True,
+                "operation": "RELEASE",
+                "message": "配送桌放置、松开夹爪并返回原手臂位置完成",
+            },
+        )
+
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://manipulation",
+        camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
+        calibration_file="camera.json",
+    )
+    request = PickPlaceRequest(task_type="SORTING", product_name="可口可乐", hand="left", product_type="can")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        orchestrator = PickPlaceOrchestrator(settings, SubagentClient(settings, client), FakeFrames())
+        result = await orchestrator.run(request, "place", "release-left-001")
+
+    assert result.status == "SUCCEEDED"
+    assert len(requests) == 1
+    assert requests[0].url.path == "/manipulation/release"
+    assert requests[0].headers["Idempotency-Key"] == "release-left-001:execute"
+    assert json.loads(requests[0].content) == {
+        "task_type": "SORTING",
+        "hand": "LEFT",
+        "pose": [0, 0, 0, 0, 0, 0],
+        "frame": "camera",
+        "pose_unit": "mm_rad",
+        "rotation_order": "zyx",
+    }
 
 
 @pytest.mark.asyncio

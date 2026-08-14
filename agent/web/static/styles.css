@@ -30,6 +30,7 @@ body::before { content: ""; position: fixed; inset: 0; pointer-events: none; opa
 h1 { font-size: clamp(2.5rem, 6vw, 4.6rem); line-height: 1; letter-spacing: 0; font-weight: 550; margin: 0; max-width: 800px; }
 .lede { color: var(--muted); margin: 21px 0 0; font-size: 15px; }
 .workspace { display: grid; grid-template-columns: minmax(285px, 340px) minmax(0, 1fr); gap: 20px; align-items: stretch; }
+.place-workspace { margin-top: 20px; }
 .task1-workspace { display: grid; grid-template-columns: minmax(285px, 340px) minmax(0, 1fr); gap: 20px; align-items: stretch; margin-top: 20px; }
 .control-panel, .visual-panel { background: var(--panel); border: 1px solid var(--line); }
 .control-panel { padding: 24px; display: flex; flex-direction: column; gap: 21px; }
