@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import numpy as np
 from PIL import Image
 
 import main
@@ -112,10 +113,69 @@ class LocateLogicTest(unittest.TestCase):
 
         self.assertIsNone(depth_image)
 
+    def test_decode_uploaded_raw_depth_uses_rgb_dimensions(self) -> None:
+        values = [0, 625, 710, 845]
+        encoded = base64.b64encode(
+            b"".join(value.to_bytes(2, "little") for value in values)
+        ).decode("ascii")
+
+        depth_image = main.decode_uploaded_depth_image(
+            encoded,
+            "frame_depth.raw",
+            (2, 2),
+        )
+
+        self.assertEqual(depth_image.size, (2, 2))
+        self.assertEqual(list(depth_image.getdata()), values)
+
+    def test_decode_uploaded_raw_depth_rejects_wrong_size(self) -> None:
+        with self.assertRaises(main.HTTPException) as raised:
+            main.decode_uploaded_depth_image(
+                base64.b64encode(b"\x00" * 6).decode("ascii"),
+                "frame_depth.raw",
+                (2, 2),
+            )
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("尺寸不匹配", str(raised.exception.detail))
+
+    def test_decode_uploaded_npy_depth(self) -> None:
+        depth_buffer = io.BytesIO()
+        np.save(
+            depth_buffer,
+            np.array([[0, 625], [710, 845]], dtype=np.uint16),
+            allow_pickle=False,
+        )
+
+        depth_image = main.decode_uploaded_depth_image(
+            base64.b64encode(depth_buffer.getvalue()).decode("ascii"),
+            "frame_depth.npy",
+            (2, 2),
+        )
+
+        self.assertEqual(depth_image.size, (2, 2))
+        self.assertEqual(list(depth_image.getdata()), [0, 625, 710, 845])
+
+    def test_decode_uploaded_npy_depth_rejects_wrong_shape(self) -> None:
+        depth_buffer = io.BytesIO()
+        np.save(
+            depth_buffer,
+            np.zeros((2, 2, 1), dtype=np.uint16),
+            allow_pickle=False,
+        )
+        with self.assertRaises(main.HTTPException) as raised:
+            main.decode_uploaded_depth_image(
+                base64.b64encode(depth_buffer.getvalue()).decode("ascii"),
+                "frame_depth.npy",
+                (2, 2),
+            )
+        self.assertEqual(raised.exception.status_code, 400)
+        self.assertIn("二维数组", str(raised.exception.detail))
+
     def test_formal_request_without_image_returns_400_when_camera_fails(self) -> None:
         request = main.LocateRequest(
             task_type="SORTING",
             product_name="可口可乐",
+            level="L1",
             hand="left",
         )
         with (
@@ -177,6 +237,7 @@ class LocateLogicTest(unittest.TestCase):
                 test_inference.run_test_inference(
                     "SORTING",
                     "NFC桔汁",
+                    "L1",
                     "right",
                     output_directory=Path(temporary_directory) / "results",
                 )
@@ -188,6 +249,7 @@ class LocateLogicTest(unittest.TestCase):
             request_payload = post_mock.call_args.kwargs["json"]
             self.assertEqual(request_payload["task_type"], "SORTING")
             self.assertEqual(request_payload["product_name"], "NFC桔汁")
+            self.assertEqual(request_payload["level"], "L1")
             self.assertEqual(request_payload["hand"], "right")
             self.assertEqual(request_payload["image_name"], image_path.name)
             self.assertEqual(
@@ -512,6 +574,7 @@ class LocateLogicTest(unittest.TestCase):
                     main.LocateRequest(
                         task_type="SORTING",
                         product_name="NFC桔汁",
+                        level="L1",
                         hand="left",
                     )
                 )
@@ -577,6 +640,7 @@ class LocateLogicTest(unittest.TestCase):
                     main.LocateRequest(
                         task_type="SORTING",
                         product_name="NFC桔汁",
+                        level="L1",
                         hand="left",
                         qwen3_prompt="qwen prompt",
                         sam3_prompt="sam prompt",
@@ -624,6 +688,7 @@ class LocateLogicTest(unittest.TestCase):
                     {"sku_id": "SKU_001", "name": "NFC桔汁"},
                     image_path,
                     task_type="SHORTAGE",
+                    level="L1",
                     qwen_prompt_override="qwen prompt",
                     sam_prompt_override="sam prompt",
                     depth_image_provider=depth_provider,
@@ -635,15 +700,75 @@ class LocateLogicTest(unittest.TestCase):
                 all(instance.depth_mm is None for instance in result.instances)
             )
 
+    def test_normal_case_filters_depth_row_before_overlap_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            image_path = temporary_path / "frame_rgb.jpg"
+            Image.new("RGB", (140, 120), "white").save(image_path)
+            mask = png_base64((140, 120))
+            sam_instances = [
+                {
+                    "bbox_xyxy": [10, 20, 60, 100],
+                    "mask_png_base64": mask,
+                    "score": 0.9,
+                },
+                {
+                    "bbox_xyxy": [40, 10, 90, 70],
+                    "mask_png_base64": mask,
+                    "score": 0.95,
+                },
+                {
+                    "bbox_xyxy": [70, 20, 120, 100],
+                    "mask_png_base64": mask,
+                    "score": 0.9,
+                },
+            ]
+            with (
+                patch.object(main, "get_stable_qwen_bboxes", return_value=[[0, 0, 1000, 1000]]),
+                patch.object(main, "call_sam3", return_value=sam_instances),
+                patch.object(
+                    main,
+                    "estimate_instance_depth_mm",
+                    side_effect=[700.0, 800.0, 710.0],
+                ) as depth_mock,
+                patch.object(main, "MONITOR_IMAGE_DIR", temporary_path / "monitor"),
+            ):
+                result = main.locate_product_in_image(
+                    {"sku_id": "SKU_001", "name": "NFC桔汁"},
+                    image_path,
+                    task_type="SORTING",
+                    level="L1",
+                    hand="left",
+                    qwen_prompt_override="qwen prompt",
+                    sam_prompt_override="sam prompt",
+                    depth_image=Image.new("I", (140, 120), 700),
+                )
+
+        self.assertEqual(depth_mock.call_count, 3)
+        self.assertEqual(len(result.raw_sam_instances), 3)
+        self.assertEqual(
+            [instance.depth_mm for instance in result.raw_sam_instances],
+            [700.0, 800.0, 710.0],
+        )
+        self.assertEqual(
+            [instance.bbox for instance in result.instances],
+            [[10.0, 20.0, 60.0, 100.0], [70.0, 20.0, 120.0, 100.0]],
+        )
+
     def test_locate_accepts_uploaded_image(self) -> None:
         image_buffer = io.BytesIO()
         Image.new("RGB", (20, 10), "white").save(image_buffer, format="JPEG")
         request = main.LocateRequest(
             task_type="SORTING",
             product_name="NFC桔汁",
+            level="L1",
             hand="left",
             image_name="mapped_rgb.jpg",
             image_base64=base64.b64encode(image_buffer.getvalue()).decode("ascii"),
+            depth_image_name="mapped_depth.raw",
+            depth_image_base64=base64.b64encode(
+                b"".join((700).to_bytes(2, "little") for _ in range(20 * 10))
+            ).decode("ascii"),
         )
         expected = main.LocateDebugResponse(
             sku_id="SKU_001",
@@ -672,6 +797,9 @@ class LocateLogicTest(unittest.TestCase):
         self.assertEqual(result, expected)
         uploaded_path = locate_mock.call_args.args[1]
         self.assertEqual(uploaded_path.name, "mapped_rgb.jpg")
+        uploaded_depth = locate_mock.call_args.kwargs["depth_image"]
+        self.assertEqual(uploaded_depth.size, (20, 10))
+        self.assertEqual(set(uploaded_depth.getdata()), {700})
 
     def test_debug_response_keeps_uploaded_image_when_inference_fails(self) -> None:
         image_buffer = io.BytesIO()
@@ -679,6 +807,7 @@ class LocateLogicTest(unittest.TestCase):
         request = main.LocateRequest(
             task_type="SORTING",
             product_name="雪碧罐装",
+            level="L1",
             hand="left",
             image_name="sprite.jpg",
             image_base64=base64.b64encode(image_buffer.getvalue()).decode("ascii"),
@@ -931,6 +1060,395 @@ class LocateLogicTest(unittest.TestCase):
         selected = main.select_pick_instance([expected, right], [640, 480])
 
         self.assertIs(selected, expected)
+    def test_hard_case_selects_requested_location_level(self) -> None:
+        location, match = main.select_location_for_level(
+            {
+                "locations": ["H2_F_L5_C02", "H2_F_L4_C02"],
+            },
+            "L5",
+        )
+        self.assertEqual(location, "H2_F_L5_C02")
+        self.assertEqual(match.group("level"), "5")
+
+    def test_non_configured_hand_is_ordinary_case(self) -> None:
+        instance = main.LocatedInstance(bbox=[1, 2, 3, 4], mask=png_base64((10, 10)))
+        filtered, debug = main.apply_hard_case_ordering(
+            [instance],
+            product={
+                "name": "脉动芒果口味",
+                "locations": ["H2_F_L4_C02", "H2_F_L5_C02"],
+            },
+            task_type="SORTING",
+            level="L4",
+            hand="right",
+        )
+        self.assertEqual(filtered, [instance])
+        self.assertIsNone(debug)
+
+    def test_hard_case_maps_left_order_and_drops_rear_bottle(self) -> None:
+        mask = png_base64((120, 100))
+        names = ["脉动观梅止渴饮", "脉动芒果口味", "脉动菠萝口味", "脉动猫薄荷瓶"]
+        instances = []
+        for index in range(4):
+            instances.append(
+                main.LocatedInstance(
+                    bbox=[index * 25 + 2, 20, index * 25 + 20, 90],
+                    mask=mask,
+                    score=0.9,
+                    source_qwen_index=index,
+                )
+            )
+        instances.append(
+            main.LocatedInstance(
+                bbox=[28, 5, 42, 55],
+                mask=mask_base64_with_pixel_count((120, 100), 2000),
+                score=0.8,
+                source_qwen_index=1,
+            )
+        )
+        with patch.object(
+            main,
+            "lookup_sku_row",
+            return_value=[{"name": name} for name in names],
+        ):
+            filtered, debug = main.apply_hard_case_ordering(
+                instances,
+                product={
+                    "name": "脉动芒果口味",
+                    "locations": ["H2_F_L5_C02", "H2_F_L4_C02"],
+                },
+                task_type="SORTING",
+                level="L4",
+                hand="left",
+            )
+        self.assertIsNotNone(debug)
+        self.assertEqual(debug.target_location, "H2_F_L4_C02")
+        self.assertEqual([group.mapped_product_name for group in debug.groups], names)
+        self.assertEqual(len(filtered), 4)
+        selected = [item for item in filtered if item.is_selected]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0].mapped_product_name, "脉动芒果口味")
+
+    def test_red_shelf_front_line_keeps_perspective_edge_product(self) -> None:
+        image = Image.new("RGB", (240, 140), "#202830")
+        pixels = image.load()
+        for x in range(image.width):
+            shelf_y = round(112 - 0.08 * x)
+            for y in range(shelf_y - 2, shelf_y + 3):
+                pixels[x, y] = (220, 30, 20)
+        shelf_line = main.detect_red_shelf_front_line(image)
+        self.assertIsNotNone(shelf_line)
+
+        mask = png_base64((240, 140))
+        front_left = main.LocatedInstance(
+            bbox=[10, 25, 65, 109], mask=mask,
+        )
+        front_right_truncated = main.LocatedInstance(
+            bbox=[180, 38, 239, 98], mask=mask,
+        )
+        rear = main.LocatedInstance(
+            bbox=[90, 20, 145, 66], mask=mask,
+        )
+        filtered = main.keep_front_depth_row(
+            [front_left, front_right_truncated, rear], shelf_line,
+        )
+        self.assertEqual(filtered, [front_left, front_right_truncated])
+
+    def test_hard_case_filters_rear_bridge_before_overlap_deduplication(self) -> None:
+        mask = png_base64((140, 120))
+        front_left = main.LocatedInstance(
+            bbox=[10, 20, 60, 100], mask=mask, score=0.9,
+        )
+        rear_bridge = main.LocatedInstance(
+            bbox=[40, 10, 90, 70], mask=mask, score=0.95,
+        )
+        front_right = main.LocatedInstance(
+            bbox=[70, 20, 120, 100], mask=mask, score=0.9,
+        )
+        groups = main.split_instances_into_display_groups(
+            [front_left, rear_bridge, front_right],
+            shelf_front_line=(0.0, 105.0),
+        )
+        self.assertEqual(groups, [[front_left], [front_right]])
+
+    def test_left_camera_maps_partial_visible_prefix(self) -> None:
+        mask = png_base64((100, 100))
+        names = ["脉动观梅止渴饮", "脉动芒果口味", "脉动菠萝口味", "脉动猫薄荷瓶"]
+        instances = [
+            main.LocatedInstance(
+                bbox=[index * 30 + 2, 10, index * 30 + 25, 90],
+                mask=mask,
+                source_qwen_index=index,
+            )
+            for index in range(3)
+        ]
+        with patch.object(
+            main,
+            "lookup_sku_row",
+            return_value=[{"name": name} for name in names],
+        ):
+            filtered, debug = main.apply_hard_case_ordering(
+                instances,
+                product={
+                    "name": "脉动菠萝口味",
+                    "locations": ["H2_F_L4_C03"],
+                },
+                task_type="SORTING",
+                level="L4",
+                hand="left",
+            )
+        self.assertEqual(
+            [group.mapped_product_name for group in debug.groups],
+            names[:3],
+        )
+        self.assertEqual(len(filtered), 3)
+        self.assertEqual(
+            [item.mapped_product_name for item in filtered if item.is_selected],
+            ["脉动菠萝口味"],
+        )
+
+    def test_right_camera_maps_partial_visible_suffix(self) -> None:
+        mask = png_base64((100, 100))
+        names = ["镇江香醋", "蒸鱼豉油", "薄盐生抽"]
+        instances = [
+            main.LocatedInstance(
+                bbox=[index * 35 + 2, 10, index * 35 + 28, 90],
+                mask=mask,
+                source_qwen_index=index,
+            )
+            for index in range(2)
+        ]
+        with patch.object(
+            main,
+            "lookup_sku_row",
+            return_value=[{"name": name} for name in names],
+        ):
+            _, debug = main.apply_hard_case_ordering(
+                instances,
+                product={"name": "蒸鱼豉油", "locations": ["H1_B_L5_C05"]},
+                task_type="SORTING",
+                level="L5",
+                hand="right",
+            )
+        self.assertEqual(
+            [group.mapped_product_name for group in debug.groups],
+            ["薄盐生抽", "蒸鱼豉油"],
+        )
+
+    def test_partial_visible_columns_reject_target_outside_view(self) -> None:
+        mask = png_base64((100, 100))
+        names = ["脉动观梅止渴饮", "脉动芒果口味", "脉动菠萝口味", "脉动猫薄荷瓶"]
+        instances = [
+            main.LocatedInstance(
+                bbox=[2, 10, 25, 90],
+                mask=mask,
+                source_qwen_index=0,
+            )
+        ]
+        with (
+            patch.object(
+                main,
+                "lookup_sku_row",
+                return_value=[{"name": name} for name in names],
+            ),
+            self.assertRaises(main.HTTPException) as raised,
+        ):
+            main.apply_hard_case_ordering(
+                instances,
+                product={
+                    "name": "脉动菠萝口味",
+                    "locations": ["H2_F_L4_C03"],
+                },
+                task_type="SORTING",
+                level="L4",
+                hand="left",
+            )
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_non_hard_case_keeps_original_instances(self) -> None:
+        instance = main.LocatedInstance(
+            bbox=[1, 2, 3, 4],
+            mask=png_base64((10, 10)),
+        )
+        filtered, debug = main.apply_hard_case_ordering(
+            [instance],
+            product={"name": "可口可乐罐装", "locations": ["H2_F_L1_C01"]},
+            task_type="SORTING",
+            level="L1",
+            hand="left",
+        )
+        self.assertEqual(filtered, [instance])
+        self.assertIsNone(debug)
+
+    def test_hard_case_maps_right_camera_from_right_edge(self) -> None:
+        mask = png_base64((100, 100))
+        names = ["镇江香醋", "蒸鱼豉油", "薄盐生抽"]
+        instances = [
+            main.LocatedInstance(
+                bbox=[index * 30 + 2, 10, index * 30 + 24, 90],
+                mask=mask,
+                source_qwen_index=index,
+            )
+            for index in range(3)
+        ]
+        with patch.object(
+            main,
+            "lookup_sku_row",
+            return_value=[{"name": name} for name in names],
+        ):
+            filtered, debug = main.apply_hard_case_ordering(
+                instances,
+                product={
+                    "name": "蒸鱼豉油",
+                    "locations": ["H1_B_L5_C05"],
+                },
+                task_type="SORTING",
+                level="L5",
+                hand="right",
+            )
+        self.assertEqual(debug.order_direction, "right_to_left")
+        self.assertEqual(
+            [group.mapped_product_name for group in debug.groups],
+            list(reversed(names)),
+        )
+        selected = [item for item in filtered if item.is_selected]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0].mapped_product_name, "蒸鱼豉油")
+
+    def test_alien_zero_sugar_uses_right_camera_override(self) -> None:
+        mask = png_base64((100, 100))
+        names = ["外星人电解质水青柠口味0糖", "外星人电解质水青柠口味"]
+        instances = [
+            main.LocatedInstance(
+                bbox=[index * 35 + 2, 10, index * 35 + 28, 90],
+                mask=mask,
+                source_qwen_index=index,
+            )
+            for index in range(2)
+        ]
+        with patch.object(
+            main,
+            "lookup_sku_row",
+            return_value=[{"name": name} for name in names],
+        ):
+            filtered, debug = main.apply_hard_case_ordering(
+                instances,
+                product={
+                    "name": "外星人电解质水青柠口味0糖",
+                    "locations": ["H2_F_L4_C05"],
+                },
+                task_type="SORTING",
+                level="L4",
+                hand="right",
+            )
+        self.assertEqual(debug.preferred_hand, "right")
+        self.assertEqual(debug.order_direction, "right_to_left")
+        self.assertEqual(debug.target_location, "H2_F_L4_C05")
+        selected = [item for item in filtered if item.is_selected]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0].mapped_product_name, names[0])
+
+    def test_maiydong_catnip_is_not_in_hard_case_scope(self) -> None:
+        hard_case = main.hard_case_group_for_product(
+            "脉动猫薄荷瓶",
+            "SORTING",
+            "L4",
+            "right",
+        )
+        self.assertIsNone(hard_case)
+
+    def test_bbq_products_use_left_camera(self) -> None:
+        group_id, config = main.hard_case_group_for_product(
+            "草原红太阳烧烤料香辣味",
+            "SORTING",
+            "L1",
+            "left",
+        )
+        self.assertEqual(group_id, "bbq_seasoning")
+        self.assertEqual(config.hand_for_product("草原红太阳烧烤料香辣味"), "left")
+        sauce_group_id, sauce_config = main.hard_case_group_for_product(
+            "草原红太阳烧烤酱香辣",
+            "SORTING",
+            "L1",
+            "left",
+        )
+        self.assertEqual(sauce_group_id, "bbq_sauce_spicy")
+        self.assertEqual(sauce_config.hand_for_product("草原红太阳烧烤酱香辣"), "left")
+        original_hard_case = main.hard_case_group_for_product(
+            "草原红太阳烧烤酱原味",
+            "SORTING",
+            "L1",
+            "left",
+        )
+        self.assertIsNone(original_hard_case)
+
+    def test_hard_case_response_uses_selected_instead_of_image_center(self) -> None:
+        mask = png_base64((100, 100))
+        selected = main.LocatedInstance(
+            bbox=[1, 10, 10, 30],
+            mask=mask,
+            is_selected=True,
+        )
+        center = main.LocatedInstance(bbox=[45, 45, 55, 55], mask=mask)
+        debug = main.LocateDebugResponse(
+            sku_id="SKU_085",
+            product_name="脉动芒果口味",
+            image_name="frame.jpg",
+            image_path="/tmp/frame.jpg",
+            image_base64="aW1hZ2U=",
+            image_media_type="image/jpeg",
+            image_size=[100, 100],
+            instances=[selected, center],
+            hard_case=main.HardCaseDebugInfo(
+                group_id="maiydong",
+                preferred_hand="left",
+                actual_hand="left",
+                order_direction="left_to_right",
+                target_location="H2_F_L4_C02",
+                target_level=4,
+                target_column=2,
+                standard_order=["脉动观梅止渴饮", "脉动芒果口味"],
+                selected_group_index=2,
+            ),
+        )
+        response = main.make_locate_response(debug)
+        self.assertEqual(response.mask, selected.mask)
+        self.assertEqual(response.bbox, main.normalize_bbox_to_1_1000(selected.bbox, [100, 100]))
+
+    def test_debug_passes_postprocess_error_capture_to_pipeline(self) -> None:
+        request = main.LocateRequest(
+            task_type="SORTING",
+            product_name="脉动芒果口味",
+            level="L4",
+            hand="left",
+        )
+        expected = main.LocateDebugResponse(
+            sku_id="SKU_085",
+            product_name="脉动芒果口味",
+            image_name="frame.jpg",
+            image_path="/tmp/frame.jpg",
+            image_base64="aW1hZ2U=",
+            image_media_type="image/jpeg",
+            image_size=[100, 100],
+            error="第一排候选不足",
+            error_status_code=422,
+        )
+        with (
+            patch.object(
+                main,
+                "lookup_sku_by_name",
+                return_value={
+                    "sku_id": "SKU_085",
+                    "name": "脉动芒果口味",
+                    "locations": ["H2_F_L4_C02"],
+                },
+            ),
+            patch.object(main, "get_latest_rgb", return_value=Path("/tmp/frame.jpg")),
+            patch.object(main, "locate_product_in_image", return_value=expected) as locate_mock,
+        ):
+            result = main.locate_product_debug(request, capture_inference_errors=True)
+        self.assertEqual(result.error_status_code, 422)
+        self.assertTrue(locate_mock.call_args.kwargs["capture_postprocess_errors"])
 
 
 if __name__ == "__main__":

@@ -71,7 +71,7 @@ MISPLACED 在网页中提供“审核阶段”切换：
 
 Locate Debug 首页不读取 `perception/test_data` 下的本地图片，也不在 test_web 内分别调用 Qwen3 和 SAM3。
 
-选择 SKU，设置 `task_type` 和 `hand` 后，点击“运行 Locate Debug 完整推理”。test_web 后端会代理调用：
+选择 SKU，设置 `task_type`、`level` 和 `hand` 后，点击“运行 Locate Debug 完整推理”。test_web 后端会代理调用：
 
 ```text
 POST http://192.168.130.59:8083/perception/pick/locate/debug
@@ -83,11 +83,37 @@ POST http://192.168.130.59:8083/perception/pick/locate/debug
 {
   "task_type": "SORTING",
   "product_name": "可口可乐",
+  "level": "L1",
   "hand": "left"
 }
 ```
 
 Locate 服务自行调用相机快照接口。Debug 响应中的 `image_base64` 作为页面原图：左侧绘制共识后的 Qwen bbox，右侧叠加最终 SAM3 mask、bbox 和 score。
+
+首页“输入图片”是可选项：选择本地 JPG/PNG 后，网页会在同一个请求中发送
+`image_name + image_base64`，完整 Locate 流程使用该原始离线图片；点击“清除图片，
+使用相机”后恢复腕部相机。未选择文件时请求字段保持原样，不发送任何本地图片。
+
+离线普通 case 还可以同时上传深度数据。支持与 RGB 同尺寸的二维数值型 `.npy` 数组、
+16 位单通道 PNG/TIFF，或者无文件头的 16UC1 `.raw`/`.bin`；RAW 默认按 little-endian 解析，也可在网页切换为
+big-endian。只上传 RGB 时保留无深度回退；上传深度数据但没有对应 RGB、尺寸不一致或
+深度格式或尺寸不正确时，接口返回 HTTP 400。NPY 自带数据类型和字节序，不使用网页的 RAW 字节序选项。
+
+SORTING 是否进入 hard case，按 `perception/hard_case_config.json` 中的
+`商品名 + level + hand` 精确组合判断；未命中的组合按普通 case 运行。
+右侧最终 SAM3 画布只显示红色货架前沿对应的第一排实例，标签中的
+`G序号 + 商品名` 是按标准 location 顺序得到的映射，绿色“目标”框是正式接口最终
+返回的实例。左侧 Debug 元数据中的 `hard_case` 可核对请求层对应的 location、排序方向、
+标准顺序与每个可见陈列组 bbox。网页不要求显示完整品牌组：左手从标准顺序左端开始
+对应，右手从标准顺序右端开始对应；目标不在当前可见列时页面会显示 Locate Debug
+错误。
+
+`/qwen-debug` 仍保留独立的 Qwen bbox 和单 crop SAM3 测试，并在页面顶部新增“完整
+Locate Debug（普通 case + hard case）”。该区域使用载入图片的原始分辨率，选择标准
+商品名、level 和 hand 后调用 `/api/locate-debug`，不使用页面里手工编辑的独立 Prompt，因而
+执行的是当前代码保存的 Prompt、Qwen 三次共识、SAM 后处理和 hard-case location 顺序。
+首页和 `/qwen-debug` 都会额外显示正式 Locate 最终实例的原图 bbox 与带边距 crop。
+hard case 使用 `is_selected`，普通 case 与正式接口一致选择最靠近图像中心的实例。
 
 可通过 `LOCATE_DEBUG_URL` 环境变量覆盖 Debug 接口地址。
 

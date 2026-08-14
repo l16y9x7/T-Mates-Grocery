@@ -2,16 +2,25 @@ const promptInput = document.querySelector("#prompt");
 const samPromptInput = document.querySelector("#samPrompt");
 const pasteZone = document.querySelector("#pasteZone");
 const fileInput = document.querySelector("#fileInput");
+const depthFileInput = document.querySelector("#depthFileInput");
+const depthByteOrder = document.querySelector("#depthByteOrder");
 const coordinateMode = document.querySelector("#coordinateMode");
 const detectionSelect = document.querySelector("#detectionSelect");
 const qwenCanvas = document.querySelector("#qwenCanvas");
 const samCanvas = document.querySelector("#samCanvas");
+const fullLocateCanvas = document.querySelector("#fullLocateCanvas");
+const finalLocateBboxCanvas = document.querySelector("#finalLocateBboxCanvas");
+const finalLocateCropCanvas = document.querySelector("#finalLocateCropCanvas");
 const colors = ["#2dd4bf", "#fb7185", "#60a5fa", "#fbbf24", "#c084fc"];
 const cropPaddingRatio = 0.1;
 const targetImageWidth = 1280;
 const targetImageHeight = 720;
 
 let imageDataUrl = "";
+let originalImageDataUrl = "";
+let originalImageName = "offline_test.jpg";
+let depthImageDataUrl = "";
+let depthImageName = "";
 let sourceImage = null;
 let latestDetections = [];
 let currentCropBox = null;
@@ -59,6 +68,11 @@ async function setImage(file) {
       const originalImage = new Image();
       originalImage.src = reader.result;
       await originalImage.decode();
+      originalImageDataUrl = String(reader.result || "");
+      const suppliedName = String(file.name || "").trim();
+      originalImageName = /\.(jpe?g|png)$/i.test(suppliedName)
+        ? suppliedName
+        : `offline_test.${file.type === "image/png" ? "png" : "jpg"}`;
       const originalWidth = originalImage.naturalWidth;
       const originalHeight = originalImage.naturalHeight;
 
@@ -82,12 +96,39 @@ async function setImage(file) {
       document.querySelector("#detections").textContent = "[]";
       drawQwenDetections();
       resetSam();
+      document.querySelector("#fullLocateEmpty").hidden = false;
+      document.querySelector("#fullLocateResult").textContent = "{}";
+      setStatus("#fullLocateStatus", "图片已就绪，请选择商品", "success");
     } catch (error) {
       document.querySelector("#imageStatus").textContent = `图片读取失败：${error.message}`;
     }
   };
   reader.onerror = () => {
     document.querySelector("#imageStatus").textContent = "图片读取失败";
+  };
+  reader.readAsDataURL(file);
+}
+
+function setDepthFile(file) {
+  if (!file) return;
+  if (!/\.(npy|raw|bin|png|tif|tiff)$/i.test(file.name || "")) {
+    depthFileInput.value = "";
+    document.querySelector("#depthStatus").textContent = "只支持 NPY、16 位 PNG/TIFF 或 RAW/BIN";
+    depthImageDataUrl = "";
+    depthImageName = "";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    depthImageDataUrl = String(reader.result || "");
+    depthImageName = file.name;
+    document.querySelector("#depthStatus").textContent =
+      `${file.name} · ${(file.size / 1024).toFixed(1)} KB`;
+  };
+  reader.onerror = () => {
+    depthImageDataUrl = "";
+    depthImageName = "";
+    document.querySelector("#depthStatus").textContent = "深度数据读取失败";
   };
   reader.readAsDataURL(file);
 }
@@ -188,12 +229,12 @@ function maskImage(base64) {
   });
 }
 
-async function drawMask(base64, color) {
+async function drawMaskOnCanvas(canvas, base64, color) {
   if (!base64) return;
   const mask = await maskImage(base64);
   const layer = document.createElement("canvas");
-  layer.width = samCanvas.width;
-  layer.height = samCanvas.height;
+  layer.width = canvas.width;
+  layer.height = canvas.height;
   const context = layer.getContext("2d", { willReadFrequently: true });
   context.drawImage(mask, 0, 0, layer.width, layer.height);
   const pixels = context.getImageData(0, 0, layer.width, layer.height);
@@ -206,7 +247,162 @@ async function drawMask(base64, color) {
     pixels.data[index + 3] = foreground > 127 ? 92 : 0;
   }
   context.putImageData(pixels, 0, 0);
-  samCanvas.getContext("2d").drawImage(layer, 0, 0);
+  canvas.getContext("2d").drawImage(layer, 0, 0);
+}
+
+async function drawMask(base64, color) {
+  await drawMaskOnCanvas(samCanvas, base64, color);
+}
+
+async function loadLocateSkus() {
+  const result = await api("/api/skus?task_type=SORTING");
+  const options = document.querySelector("#locateSkuOptions");
+  options.replaceChildren();
+  (result.skus || []).forEach(({ name }) => {
+    const option = document.createElement("option");
+    option.value = name;
+    options.append(option);
+  });
+}
+
+async function runFullLocate() {
+  if (!originalImageDataUrl) {
+    return setStatus("#fullLocateStatus", "请先粘贴或上传图片", "error");
+  }
+  const productName = document.querySelector("#locateSku").value.trim();
+  if (!productName) {
+    return setStatus("#fullLocateStatus", "请输入目标商品名称", "error");
+  }
+  const button = document.querySelector("#runFullLocate");
+  button.disabled = true;
+  setStatus("#fullLocateStatus", "运行完整 Locate Debug…", "running");
+  try {
+    const result = await api("/api/locate-debug", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        task_type: "SORTING",
+        product_name: productName,
+        level: document.querySelector("#locateLevel").value,
+        hand: document.querySelector("#locateHand").value,
+        image_name: originalImageName,
+        image_base64: originalImageDataUrl,
+        ...(depthImageDataUrl
+          ? {
+              depth_image_name: depthImageName,
+              depth_image_base64: depthImageDataUrl,
+              depth_is_bigendian: depthByteOrder.value === "big",
+            }
+          : {}),
+      }),
+    });
+    const image = new Image();
+    image.src = `data:${result.image_media_type || "image/jpeg"};base64,${result.image_base64}`;
+    await image.decode();
+    fullLocateCanvas.width = image.naturalWidth;
+    fullLocateCanvas.height = image.naturalHeight;
+    fullLocateCanvas.getContext("2d").drawImage(image, 0, 0);
+    const instances = result.instances || [];
+    for (let index = 0; index < instances.length; index += 1) {
+      await drawMaskOnCanvas(
+        fullLocateCanvas,
+        instances[index].mask,
+        instances[index].is_selected ? "#22c55e" : colors[index % colors.length],
+      );
+    }
+    const context = fullLocateCanvas.getContext("2d");
+    instances.forEach((instance, index) => {
+      const mapped = instance.mapped_product_name || `#${index + 1}`;
+      const group = instance.hard_case_group_index ? `G${instance.hard_case_group_index} ` : "";
+      const selected = instance.is_selected ? "目标 " : "";
+      drawBox(
+        context,
+        instance.bbox,
+        `${selected}${group}${mapped}`,
+        instance.is_selected ? "#22c55e" : colors[index % colors.length],
+      );
+    });
+    document.querySelector("#fullLocateEmpty").hidden = true;
+    const imageCenterX = image.naturalWidth / 2;
+    const imageCenterY = image.naturalHeight / 2;
+    const selectedInstance = result.selected_instance || (
+      result.hard_case
+        ? instances.find((instance) => instance.is_selected)
+        : instances.reduce((best, instance) => {
+          if (!best) return instance;
+          const distance = (candidate) => {
+            const centerX = (candidate.bbox[0] + candidate.bbox[2]) / 2;
+            const centerY = (candidate.bbox[1] + candidate.bbox[3]) / 2;
+            return (centerX - imageCenterX) ** 2 + (centerY - imageCenterY) ** 2;
+          };
+          return distance(instance) < distance(best) ? instance : best;
+        }, null)
+    );
+    if (selectedInstance) {
+      finalLocateBboxCanvas.width = image.naturalWidth;
+      finalLocateBboxCanvas.height = image.naturalHeight;
+      const bboxContext = finalLocateBboxCanvas.getContext("2d");
+      bboxContext.drawImage(image, 0, 0);
+      drawBox(bboxContext, selectedInstance.bbox, `最终目标 ${productName}`, "#22c55e");
+      document.querySelector("#finalLocateBboxEmpty").hidden = true;
+
+      const [x1, y1, x2, y2] = selectedInstance.bbox;
+      const paddingX = Math.max(8, (x2 - x1) * 0.08);
+      const paddingY = Math.max(8, (y2 - y1) * 0.08);
+      const cropX = Math.max(0, Math.floor(x1 - paddingX));
+      const cropY = Math.max(0, Math.floor(y1 - paddingY));
+      const cropRight = Math.min(image.naturalWidth, Math.ceil(x2 + paddingX));
+      const cropBottom = Math.min(image.naturalHeight, Math.ceil(y2 + paddingY));
+      finalLocateCropCanvas.width = Math.max(1, cropRight - cropX);
+      finalLocateCropCanvas.height = Math.max(1, cropBottom - cropY);
+      const cropContext = finalLocateCropCanvas.getContext("2d");
+      cropContext.drawImage(
+        image,
+        cropX,
+        cropY,
+        cropRight - cropX,
+        cropBottom - cropY,
+        0,
+        0,
+        cropRight - cropX,
+        cropBottom - cropY,
+      );
+      drawBox(
+        cropContext,
+        [x1 - cropX, y1 - cropY, x2 - cropX, y2 - cropY],
+        productName,
+        "#22c55e",
+      );
+      document.querySelector("#finalLocateCropEmpty").hidden = true;
+    }
+    document.querySelector("#fullLocateResult").textContent = JSON.stringify(
+      {
+        ...result,
+        image_base64: `<base64 ${result.image_base64.length} chars>`,
+        raw_sam_instances: (result.raw_sam_instances || []).map((instance) => ({
+          ...instance,
+          mask: `<base64 ${instance.mask.length} chars>`,
+        })),
+        instances: instances.map((instance) => ({
+          ...instance,
+          mask: `<base64 ${instance.mask.length} chars>`,
+        })),
+      },
+      null,
+      2,
+    );
+    setStatus(
+      "#fullLocateStatus",
+      result.error
+        ? `HTTP ${result.error_status_code || 500}: ${result.error}`
+        : `完成：${instances.length} 个最终实例`,
+      result.error ? "error" : "success",
+    );
+  } catch (error) {
+    setStatus("#fullLocateStatus", error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function runQwen() {
@@ -300,6 +496,7 @@ function handlePaste(event) {
 pasteZone.addEventListener("paste", handlePaste);
 document.addEventListener("paste", handlePaste);
 fileInput.addEventListener("change", () => setImage(fileInput.files[0]));
+depthFileInput.addEventListener("change", () => setDepthFile(depthFileInput.files[0]));
 pasteZone.addEventListener("click", () => {
   pasteZone.focus();
   const selection = window.getSelection();
@@ -312,3 +509,5 @@ coordinateMode.addEventListener("change", () => {
 detectionSelect.addEventListener("change", drawSelectedCrop);
 document.querySelector("#runQwen").addEventListener("click", runQwen);
 document.querySelector("#runSam").addEventListener("click", runSam);
+document.querySelector("#runFullLocate").addEventListener("click", runFullLocate);
+loadLocateSkus().catch((error) => setStatus("#fullLocateStatus", error.message, "error"));

@@ -26,6 +26,16 @@
             </select>
           </label>
           <label class="image-picker">
+            <span>level</span>
+            <select id="requestLevel">
+              <option value="L1">L1</option>
+              <option value="L2">L2</option>
+              <option value="L3">L3</option>
+              <option value="L4" selected>L4</option>
+              <option value="L5">L5</option>
+            </select>
+          </label>
+          <label class="image-picker">
             <span>hand</span>
             <select id="requestHand">
               <option value="left">left</option>
@@ -34,6 +44,29 @@
           </label>
         </div>
       </header>
+
+      <section class="offline-image-controls">
+        <div>
+          <strong>离线 RGB 图片</strong>
+          <small>上传 RGB 后使用离线流程；不上传时继续请求腕部相机及其深度帧。</small>
+        </div>
+        <input id="locateImageInput" type="file" accept="image/jpeg,image/png" />
+        <button id="clearLocateImage" type="button" disabled>清除离线数据，使用相机</button>
+        <span id="locateImageStatus" class="status">当前使用腕部相机</span>
+        <div>
+          <strong>离线深度数据</strong>
+          <small>可选：二维 NPY、16 位 PNG/TIFF，或与 RGB 同尺寸的 16UC1 RAW/BIN。</small>
+        </div>
+        <input id="locateDepthInput" type="file" accept=".npy,.raw,.bin,.png,.tif,.tiff,image/png,image/tiff" />
+        <label class="image-picker">
+          <span>RAW 字节序</span>
+          <select id="locateDepthByteOrder">
+            <option value="little">little-endian</option>
+            <option value="big">big-endian</option>
+          </select>
+        </label>
+        <span id="locateDepthStatus" class="status">未上传深度数据，将使用无深度回退</span>
+      </section>
 
       <section class="workspace">
         <article class="panel qwen-panel">
@@ -173,11 +206,27 @@
           </div>
 
           <div class="result-title canvas-title">
-            <span>SAM3 bbox / mask（过滤后，红框为最终 PICK）</span>
+            <span>SAM3 bbox / mask（过滤后；hard case 标注 SKU，红框为最终 PICK）</span>
           </div>
           <div class="canvas-frame">
             <canvas id="samCanvas"></canvas>
             <div id="samEmpty" class="canvas-empty">运行 Locate Debug 获取原图与最终 SAM3 实例</div>
+          </div>
+
+          <div class="result-title canvas-title">
+            <span>完整 Locate 最终目标 bbox</span>
+          </div>
+          <div class="canvas-frame">
+            <canvas id="finalLocateBboxCanvas"></canvas>
+            <div id="finalLocateBboxEmpty" class="canvas-empty">等待最终定位结果</div>
+          </div>
+
+          <div class="result-title canvas-title">
+            <span>完整 Locate 最终目标 crop</span>
+          </div>
+          <div class="canvas-frame">
+            <canvas id="finalLocateCropCanvas"></canvas>
+            <div id="finalLocateCropEmpty" class="canvas-empty">等待最终定位结果</div>
           </div>
 
           <div class="result-block">
@@ -191,6 +240,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=20260814-pick-selection"></script>
+    <script src="/static/app.js?v=20260814-npy-depth"></script>
   </body>
 </html>

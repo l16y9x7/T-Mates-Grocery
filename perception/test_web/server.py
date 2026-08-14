@@ -32,6 +32,8 @@ STATIC_DIR = ROOT / "static"
 RGB_DIR = DATA_ROOT / "2026-08-04"
 SKU_CATALOG_PATH = PERCEPTION_ROOT / "sku" / "products.json"
 PROMPT_PAIR_MAPPING_PATH = LOCATE_ROOT / "qwen_sam_prompt_mapping.json"
+HARD_CASE_PROMPT_MAPPING_PATH = LOCATE_ROOT / "qwen_sam_prompt_mapping_hard_case.json"
+HARD_CASE_SCOPE_PATH = PERCEPTION_ROOT / "hard_case_config.json"
 SUPPORTED_TASK_TYPES = ("SORTING", "SHORTAGE", "MISPLACED")
 PROMPT_PAIR_MAPPING_PATHS = {
     "SORTING": PROMPT_PAIR_MAPPING_PATH,
@@ -112,6 +114,8 @@ class SaveQwenPromptRequest(BaseModel):
     task_type: str
     sku_name: str
     prompt: str
+    level: str | None = None
+    hand: str | None = None
 
 
 class SavePromptPairRequest(BaseModel):
@@ -119,12 +123,20 @@ class SavePromptPairRequest(BaseModel):
     sku_name: str
     qwen3_prompt: str
     sam3_prompt: str
+    level: str | None = None
+    hand: str | None = None
 
 
 class LocateDebugProxyRequest(BaseModel):
     task_type: str
     product_name: str
+    level: str
     hand: str
+    image_name: str | None = None
+    image_base64: str | None = None
+    depth_image_name: str | None = None
+    depth_image_base64: str | None = None
+    depth_is_bigendian: bool = False
     qwen3_prompt: str | None = None
     sam3_prompt: str | None = None
 
@@ -557,12 +569,21 @@ def list_images() -> dict:
 
 
 @app.get("/api/skus")
-def list_skus(task_type: str = "SORTING") -> dict:
+def list_skus(
+    task_type: str = "SORTING",
+    level: str | None = None,
+    hand: str | None = None,
+) -> dict:
     normalized_task_type = normalize_task_type(task_type)
-    prompt_mapping = load_prompt_pair_mapping(normalized_task_type)
+    ordinary_mapping = load_prompt_pair_mapping(normalized_task_type)
+    hard_mapping = load_prompt_pair_mapping(normalized_task_type, hard_case=True)
     skus = []
     for sku in load_skus():
-        prompt_pair = prompt_mapping.get(sku["name"])
+        prompt_pair = (
+            hard_mapping.get(sku["name"])
+            if is_hard_case_request(sku["name"], normalized_task_type, level, hand)
+            else ordinary_mapping.get(sku["name"])
+        )
         skus.append(
             {
                 "name": sku["name"],
@@ -591,7 +612,10 @@ def save_qwen_prompt(request: SaveQwenPromptRequest) -> dict:
     if sku_name not in valid_names:
         raise HTTPException(status_code=400, detail=f"商品库中不存在 SKU：{sku_name}")
 
-    mapping = load_prompt_pair_mapping(task_type)
+    hard_case = is_hard_case_request(
+        sku_name, task_type, request.level, request.hand
+    )
+    mapping = load_prompt_pair_mapping(task_type, hard_case=hard_case)
     current_pair = mapping.get(sku_name)
     if current_pair is None or not current_pair["sam3_prompt"].strip():
         raise HTTPException(
@@ -604,7 +628,11 @@ def save_qwen_prompt(request: SaveQwenPromptRequest) -> dict:
         "qwen3_prompt": prompt,
         "sam3_prompt": current_pair["sam3_prompt"],
     }
-    write_json_mapping(prompt_mapping_path(task_type), mapping, f"{task_type} 配对 Prompt")
+    write_json_mapping(
+        prompt_mapping_path(task_type, hard_case=hard_case),
+        mapping,
+        f"{task_type} 配对 Prompt",
+    )
     return {
         "task_type": task_type,
         "sku_name": sku_name,
@@ -632,13 +660,20 @@ def save_prompt_pair(request: SavePromptPairRequest) -> dict:
     if sku_name not in valid_names:
         raise HTTPException(status_code=400, detail=f"商品库中不存在 SKU：{sku_name}")
 
-    mapping = load_prompt_pair_mapping(task_type)
+    hard_case = is_hard_case_request(
+        sku_name, task_type, request.level, request.hand
+    )
+    mapping = load_prompt_pair_mapping(task_type, hard_case=hard_case)
     overwritten = sku_name in mapping
     mapping[sku_name] = {
         "qwen3_prompt": qwen3_prompt,
         "sam3_prompt": sam3_prompt,
     }
-    write_json_mapping(prompt_mapping_path(task_type), mapping, f"{task_type} 配对 Prompt")
+    write_json_mapping(
+        prompt_mapping_path(task_type, hard_case=hard_case),
+        mapping,
+        f"{task_type} 配对 Prompt",
+    )
     return {
         "task_type": task_type,
         "sku_name": sku_name,
@@ -653,10 +688,41 @@ def run_locate_debug(request: LocateDebugProxyRequest) -> dict:
     payload = {
         "task_type": request.task_type.strip(),
         "product_name": request.product_name.strip(),
+        "level": request.level.strip().upper(),
         "hand": request.hand.strip(),
     }
     if not all(payload.values()):
-        raise HTTPException(status_code=400, detail="task_type、product_name、hand 都不能为空")
+        raise HTTPException(
+            status_code=400,
+            detail="task_type、product_name、level、hand 都不能为空",
+        )
+    has_image_name = request.image_name is not None
+    has_image_base64 = request.image_base64 is not None
+    if has_image_name != has_image_base64:
+        raise HTTPException(
+            status_code=400,
+            detail="image_name 和 image_base64 必须同时提供或同时省略",
+        )
+    if has_image_name and has_image_base64:
+        payload["image_name"] = request.image_name.strip()
+        payload["image_base64"] = request.image_base64
+        if not payload["image_name"] or not payload["image_base64"]:
+            raise HTTPException(status_code=400, detail="离线图片名称和内容不能为空")
+    has_depth_name = request.depth_image_name is not None
+    has_depth_base64 = request.depth_image_base64 is not None
+    if has_depth_name != has_depth_base64:
+        raise HTTPException(
+            status_code=400,
+            detail="depth_image_name 和 depth_image_base64 必须同时提供或同时省略",
+        )
+    if has_depth_name and not has_image_name:
+        raise HTTPException(status_code=400, detail="离线深度数据必须与离线 RGB 图片同时提供")
+    if has_depth_name and has_depth_base64:
+        payload["depth_image_name"] = request.depth_image_name.strip()
+        payload["depth_image_base64"] = request.depth_image_base64
+        payload["depth_is_bigendian"] = request.depth_is_bigendian
+        if not payload["depth_image_name"] or not payload["depth_image_base64"]:
+            raise HTTPException(status_code=400, detail="离线深度数据名称和内容不能为空")
     if request.qwen3_prompt is not None:
         payload["qwen3_prompt"] = request.qwen3_prompt
     if request.sam3_prompt is not None:
@@ -1411,15 +1477,43 @@ def normalize_task_type(task_type: str) -> str:
     return normalized
 
 
-def prompt_mapping_path(task_type: str) -> Path:
+def is_hard_case_request(
+    sku_name: str,
+    task_type: str,
+    level: str | None,
+    hand: str | None,
+) -> bool:
+    if task_type != "SORTING" or level is None or hand is None:
+        return False
+    try:
+        scope = json.loads(HARD_CASE_SCOPE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=500, detail=f"读取 hard case 范围失败: {error}") from error
+    key = (sku_name.strip(), level.strip().upper(), hand.strip().lower())
+    return any(
+        isinstance(item, dict)
+        and (
+            str(item.get("product_name", "")).strip(),
+            str(item.get("level", "")).strip().upper(),
+            str(item.get("hand", "")).strip().lower(),
+        ) == key
+        for item in scope
+    )
+
+
+def prompt_mapping_path(task_type: str, *, hard_case: bool = False) -> Path:
     normalized = normalize_task_type(task_type)
+    if normalized == "SORTING" and hard_case:
+        return HARD_CASE_PROMPT_MAPPING_PATH
     if normalized == "SORTING":
         return PROMPT_PAIR_MAPPING_PATH
     return PROMPT_PAIR_MAPPING_PATHS[normalized]
 
 
-def load_prompt_pair_mapping(task_type: str = "SORTING") -> dict[str, dict[str, str]]:
-    mapping_path = prompt_mapping_path(task_type)
+def load_prompt_pair_mapping(
+    task_type: str = "SORTING", *, hard_case: bool = False
+) -> dict[str, dict[str, str]]:
+    mapping_path = prompt_mapping_path(task_type, hard_case=hard_case)
     if not mapping_path.exists():
         return {}
     try:

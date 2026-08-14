@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Qwen3 / SAM3 Crop 直接测试</title>
-    <link rel="stylesheet" href="/static/qwen_debug.css?v=4" />
+    <link rel="stylesheet" href="/static/qwen_debug.css?v=5" />
   </head>
   <body>
     <main>
@@ -28,6 +28,72 @@
           <input id="fileInput" class="file-input" type="file" accept="image/*" />
           <small id="imageStatus">尚未载入图片</small>
         </div>
+        <div class="image-input">
+          <span>对应深度数据（完整 Locate 可选）</span>
+          <input id="depthFileInput" class="file-input" type="file" accept=".npy,.raw,.bin,.png,.tif,.tiff,image/png,image/tiff" />
+          <label>RAW 字节序
+            <select id="depthByteOrder">
+              <option value="little">little-endian</option>
+              <option value="big">big-endian</option>
+            </select>
+          </label>
+          <small id="depthStatus">未载入深度数据</small>
+        </div>
+      </section>
+
+      <section class="full-locate-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="engine">CURRENT SORTING PIPELINE</p>
+            <h2>完整 Locate Debug（普通 case + hard case）</h2>
+          </div>
+        </div>
+        <p class="hint">使用上方原始离线图片，不做 1280 × 720 缩放；执行当前代码中的 Qwen 三次共识、SAM、红色货架前沿第一排过滤、location 顺序和 hard-case 映射。</p>
+        <div class="locate-controls">
+          <label>目标商品
+            <input id="locateSku" list="locateSkuOptions" autocomplete="off" placeholder="输入标准商品名称" />
+            <datalist id="locateSkuOptions"></datalist>
+          </label>
+          <label>level
+            <select id="locateLevel">
+              <option value="L1">L1</option>
+              <option value="L2">L2</option>
+              <option value="L3">L3</option>
+              <option value="L4" selected>L4</option>
+              <option value="L5">L5</option>
+            </select>
+          </label>
+          <label>hand
+            <select id="locateHand">
+              <option value="left">left</option>
+              <option value="right">right</option>
+            </select>
+          </label>
+          <button id="runFullLocate" class="run locate-run" type="button">运行完整 Sorting Locate</button>
+        </div>
+        <span id="fullLocateStatus" class="status">请先载入图片并选择商品</span>
+        <div class="canvas-wrap full-locate-canvas-wrap">
+          <canvas id="fullLocateCanvas"></canvas>
+          <span id="fullLocateEmpty">等待完整 Locate Debug</span>
+        </div>
+        <div class="final-result-grid">
+          <div>
+            <h3>最终目标 bbox</h3>
+            <div class="canvas-wrap final-result-wrap">
+              <canvas id="finalLocateBboxCanvas"></canvas>
+              <span id="finalLocateBboxEmpty">等待最终定位结果</span>
+            </div>
+          </div>
+          <div>
+            <h3>最终目标 crop</h3>
+            <div class="canvas-wrap final-result-wrap">
+              <canvas id="finalLocateCropCanvas"></canvas>
+              <span id="finalLocateCropEmpty">等待最终定位结果</span>
+            </div>
+          </div>
+        </div>
+        <h3>完整 Locate Debug 响应摘要</h3>
+        <pre id="fullLocateResult">{}</pre>
       </section>
 
       <section class="workspace">
@@ -104,6 +170,6 @@
         </article>
       </section>
     </main>
-    <script src="/static/qwen_debug.js?v=4"></script>
+    <script src="/static/qwen_debug.js?v=8-npy-depth"></script>
   </body>
 </html>

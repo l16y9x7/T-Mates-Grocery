@@ -1,0 +1,58 @@
+{
+  "草原红太阳烧烤料原味": {
+    "qwen3_prompt": "找到图片中货架上同一层的所有草原红太阳烧烤料罐。烧烤料是带黑色瓶盖、内部装颗粒调料的透明罐，不要框右侧带红色瓶嘴的烧烤酱包装。用一个完整bbox框住全部烧烤料罐，只输出一个bbox。返回格式：{\"name\": \"草原红太阳烧烤料罐区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost transparent barbecue seasoning jar with black lid"
+  },
+  "草原红太阳烧烤料香辣味": {
+    "qwen3_prompt": "找到图片中货架上同一层的所有草原红太阳烧烤料罐。烧烤料是带黑色瓶盖、内部装颗粒调料的透明罐，不要框右侧带红色瓶嘴的烧烤酱包装。用一个完整bbox框住全部烧烤料罐，只输出一个bbox。返回格式：{\"name\": \"草原红太阳烧烤料罐区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost transparent barbecue seasoning jar with black lid"
+  },
+  "草原红太阳烧烤酱香辣": {
+    "qwen3_prompt": "找到图片中货架上的红色烧烤酱袋子堆，输出满足条件的所有红色烧烤酱袋子堆的bbox，每一堆分开。返回格式：{\"name\": \"红色烧烤酱袋子堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost red barbecue sauce pouch"
+  },
+  "外星人电解质水椰子口味": {
+    "qwen3_prompt": "找到图片中货架上同一层的所有外星人电解质水，用一个完整bbox框住该层全部外星人电解质水，不要区分口味，只输出一个bbox。返回格式：{\"name\": \"外星人电解质水区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost Alienergy bottle"
+  },
+  "外星人电解质水青柠口味": {
+    "qwen3_prompt": "找到图片中货架上同一层的所有外星人电解质水，用一个完整bbox框住该层全部外星人电解质水，不要区分口味，只输出一个bbox。返回格式：{\"name\": \"外星人电解质水区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost Alienergy bottle"
+  },
+  "外星人电解质水白桃口味0糖": {
+    "qwen3_prompt": "找到图片中货架上同一层的所有外星人电解质水，用一个完整bbox框住该层全部外星人电解质水，不要区分口味，只输出一个bbox。返回格式：{\"name\": \"外星人电解质水区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost Alienergy bottle"
+  },
+  "外星人电解质水西柚口味": {
+    "qwen3_prompt": "找到图片中货架上同一层的所有外星人电解质水，用一个完整bbox框住该层全部外星人电解质水，不要区分口味，只输出一个bbox。返回格式：{\"name\": \"外星人电解质水区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost Alienergy bottle"
+  },
+  "外星人电解质水青柠口味0糖": {
+    "qwen3_prompt": "找到图片中货架上同一层的所有外星人电解质水，用一个完整bbox框住该层全部外星人电解质水，不要区分口味，只输出一个bbox。返回格式：{\"name\": \"外星人电解质水区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost Alienergy bottle"
+  },
+  "脉动观梅止渴饮": {
+    "qwen3_prompt": "找到图片中货架上同一层的所有脉动水瓶，用一个完整bbox框住该层全部脉动水瓶，不要区分口味，只输出一个bbox。返回格式：{\"name\": \"脉动水瓶区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost bottle"
+  },
+  "脉动芒果口味": {
+    "qwen3_prompt": "找到图片中货架上同一层的所有脉动水瓶，用一个完整bbox框住该层全部脉动水瓶，不要区分口味，只输出一个bbox。返回格式：{\"name\": \"脉动水瓶区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost bottle"
+  },
+  "脉动菠萝口味": {
+    "qwen3_prompt": "找到图片中货架上同一层的所有脉动水瓶，用一个完整bbox框住该层全部脉动水瓶，不要区分口味，只输出一个bbox。返回格式：{\"name\": \"脉动水瓶区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost bottle"
+  },
+  "镇江香醋": {
+    "qwen3_prompt": "找到图片中货架上同一层的镇江香醋、蒸鱼豉油和薄盐生抽，用一个完整bbox框住该层全部同组调味品，只输出一个bbox。返回格式：{\"name\": \"调味品瓶区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost condiment bottle"
+  },
+  "蒸鱼豉油": {
+    "qwen3_prompt": "找到图片中货架上同一层的镇江香醋、蒸鱼豉油和薄盐生抽，用一个完整bbox框住该层全部同组调味品，只输出一个bbox。返回格式：{\"name\": \"调味品瓶区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost condiment bottle"
+  },
+  "薄盐生抽": {
+    "qwen3_prompt": "找到图片中货架上同一层的镇江香醋、蒸鱼豉油和薄盐生抽，用一个完整bbox框住该层全部同组调味品，只输出一个bbox。返回格式：{\"name\": \"调味品瓶区域\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost condiment bottle"
+  }
+}

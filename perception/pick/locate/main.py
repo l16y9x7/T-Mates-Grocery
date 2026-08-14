@@ -13,10 +13,12 @@ import sys
 import tempfile
 from collections import defaultdict
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import requests
+import numpy as np
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from PIL import Image, UnidentifiedImageError
@@ -48,6 +50,8 @@ else:
 
 
 PROMPT_MAPPING_PATH = ROOT / "qwen_sam_prompt_mapping.json"
+HARD_CASE_PROMPT_MAPPING_PATH = ROOT / "qwen_sam_prompt_mapping_hard_case.json"
+HARD_CASE_SCOPE_PATH = ROOT.parents[1] / "hard_case_config.json"
 SUPPORTED_TASK_TYPES = ("SORTING", "SHORTAGE", "MISPLACED")
 PROMPT_MAPPING_PATHS = {
     "SORTING": PROMPT_MAPPING_PATH,
@@ -119,6 +123,70 @@ PICK_MIN_VALID_DEPTH_PIXELS = int(
 CAMERA_DEPTH_UNIT_MM = float(os.getenv("CAMERA_DEPTH_UNIT_MM", "1.0"))
 REQUEST_TIMEOUT_SECONDS = 120
 
+LOCATION_PATTERN = re.compile(
+    r"^H(?P<shelf>[12])_(?P<face>[FB])_L(?P<level>[1-5])_C(?P<column>\d{2})$"
+)
+
+
+@dataclass(frozen=True)
+class HardCaseGroupConfig:
+    members: tuple[str, ...]
+    preferred_hand: str
+    hand_overrides: tuple[tuple[str, str], ...] = ()
+
+    def hand_for_product(self, product_name: str) -> str:
+        return dict(self.hand_overrides).get(product_name, self.preferred_hand)
+
+
+# This allow-list is deliberately narrow. Non-SORTING tasks and every SKU not
+# listed here continue through the original prompt and center-selection path.
+HARD_CASE_GROUPS: dict[str, HardCaseGroupConfig] = {
+    "maiydong": HardCaseGroupConfig(
+        members=(
+            "脉动观梅止渴饮",
+            "脉动芒果口味",
+            "脉动菠萝口味",
+            "脉动猫薄荷瓶",
+        ),
+        preferred_hand="left",
+        hand_overrides=(("脉动猫薄荷瓶", "right"),),
+    ),
+    "alien_energy": HardCaseGroupConfig(
+        members=(
+            "外星人电解质水椰子口味",
+            "外星人电解质水青柠口味",
+            "外星人电解质水白桃口味0糖",
+            "外星人电解质水西柚口味",
+            "外星人电解质水青柠口味0糖",
+        ),
+        preferred_hand="left",
+        hand_overrides=(("外星人电解质水青柠口味0糖", "right"),),
+    ),
+    "bbq_seasoning": HardCaseGroupConfig(
+        members=(
+            "草原红太阳烧烤料原味",
+            "草原红太阳烧烤料香辣味",
+        ),
+        preferred_hand="left",
+    ),
+    "bbq_sauce_spicy": HardCaseGroupConfig(
+        members=("草原红太阳烧烤酱香辣",),
+        preferred_hand="left",
+    ),
+    "bbq_sauce_original": HardCaseGroupConfig(
+        members=("草原红太阳烧烤酱原味",),
+        preferred_hand="left",
+    ),
+    "soy_vinegar_fish_soy": HardCaseGroupConfig(
+        members=(
+            "镇江香醋",
+            "蒸鱼豉油",
+            "薄盐生抽",
+        ),
+        preferred_hand="right",
+    ),
+}
+
 app = FastAPI(title="Sorting Pick Locate", version="2.0.0")
 router = APIRouter()
 
@@ -126,9 +194,13 @@ router = APIRouter()
 class LocateRequest(BaseModel):
     task_type: str
     product_name: str
+    level: str
     hand: str
     image_name: str | None = None
     image_base64: str | None = None
+    depth_image_name: str | None = None
+    depth_image_base64: str | None = None
+    depth_is_bigendian: bool = False
     qwen3_prompt: str | None = None
     sam3_prompt: str | None = None
 
@@ -138,6 +210,31 @@ class LocatedInstance(BaseModel):
     mask: str
     score: float | None = None
     depth_mm: float | None = None
+    source_qwen_index: int | None = None
+    hard_case_group_index: int | None = None
+    mapped_product_name: str | None = None
+    is_selected: bool = False
+
+
+class HardCaseGroupResult(BaseModel):
+    index: int
+    mapped_product_name: str
+    bbox: list[float]
+    instance_count: int
+
+
+class HardCaseDebugInfo(BaseModel):
+    group_id: str
+    preferred_hand: str
+    actual_hand: str
+    order_direction: str
+    target_location: str
+    target_level: int
+    target_column: int
+    standard_order: list[str]
+    front_row_only: bool = True
+    groups: list[HardCaseGroupResult] = Field(default_factory=list)
+    selected_group_index: int
 
 
 class QwenBBoxRecord(BaseModel):
@@ -169,6 +266,7 @@ class LocateDebugResponse(BaseModel):
     instances: list[LocatedInstance] = Field(default_factory=list)
     selected_instance: LocatedInstance | None = None
     selected_instance_index: int | None = None
+    hard_case: HardCaseDebugInfo | None = None
     error: str | None = None
     error_status_code: int | None = None
 
@@ -324,6 +422,96 @@ def uploaded_image_name(image_name: str | None) -> str:
     return normalized_name
 
 
+def decode_uploaded_depth_image(
+    depth_image_base64: str,
+    depth_image_name: str,
+    expected_size: tuple[int, int],
+    *,
+    is_bigendian: bool = False,
+) -> Image.Image:
+    """Decode an uploaded 16-bit depth PNG/TIFF or headerless 16UC1 frame."""
+    encoded = depth_image_base64.split(",", 1)[-1]
+    try:
+        depth_bytes = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="depth_image_base64 格式错误") from error
+    if not depth_bytes:
+        raise HTTPException(status_code=400, detail="上传深度数据不能为空")
+    if len(depth_bytes) > 40 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="上传深度数据不能超过 40 MB")
+
+    normalized_name = depth_image_name.strip()
+    if not normalized_name or Path(normalized_name).name != normalized_name:
+        raise HTTPException(status_code=400, detail="depth_image_name 不是合法文件名")
+    suffix = Path(normalized_name).suffix.lower()
+    if suffix == ".npy":
+        try:
+            depth_array = np.load(io.BytesIO(depth_bytes), allow_pickle=False)
+        except (OSError, ValueError, TypeError) as error:
+            raise HTTPException(status_code=400, detail=f"读取 NPY 深度数据失败: {error}") from error
+        expected_shape = (expected_size[1], expected_size[0])
+        if not isinstance(depth_array, np.ndarray) or depth_array.ndim != 2:
+            raise HTTPException(status_code=400, detail="NPY 深度数据必须是二维数组")
+        if depth_array.shape != expected_shape:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "NPY 深度数据尺寸必须与 RGB 图片一致: "
+                    f"rgb={expected_size}, depth_shape={depth_array.shape}"
+                ),
+            )
+        if depth_array.nbytes > 40 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="NPY 深度数组不能超过 40 MB")
+        if np.issubdtype(depth_array.dtype, np.integer):
+            if np.any(depth_array < 0) or np.any(depth_array > np.iinfo(np.int32).max):
+                raise HTTPException(status_code=400, detail="NPY 整数深度值超出有效范围")
+            return Image.fromarray(depth_array.astype(np.int32, copy=False))
+        if np.issubdtype(depth_array.dtype, np.floating):
+            return Image.fromarray(depth_array.astype(np.float32, copy=False))
+        raise HTTPException(status_code=400, detail="NPY 深度数组必须是整数或浮点数类型")
+
+    if suffix in {".raw", ".bin"}:
+        width, height = expected_size
+        expected_bytes = width * height * 2
+        if width <= 0 or height <= 0 or len(depth_bytes) != expected_bytes:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "16UC1 RAW 深度数据尺寸不匹配: "
+                    f"expected={expected_bytes} bytes ({width}x{height}), "
+                    f"actual={len(depth_bytes)} bytes"
+                ),
+            )
+        raw_mode = "I;16B" if is_bigendian else "I;16L"
+        try:
+            return Image.frombytes(raw_mode, expected_size, depth_bytes)
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=f"解析 RAW 深度数据失败: {error}") from error
+
+    if suffix not in {".png", ".tif", ".tiff"}:
+        raise HTTPException(
+            status_code=400,
+            detail="深度数据只支持 NPY、16 位 PNG/TIFF 或 16UC1 RAW/BIN",
+        )
+    try:
+        with Image.open(io.BytesIO(depth_bytes)) as source_depth:
+            if source_depth.size != expected_size:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "深度图尺寸必须与 RGB 图片一致: "
+                        f"rgb={expected_size}, depth={source_depth.size}"
+                    ),
+                )
+            if source_depth.mode != "I" and not source_depth.mode.startswith("I;16"):
+                raise HTTPException(status_code=400, detail="深度图必须是 16 位单通道图片")
+            return source_depth.convert("I")
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=f"读取深度图失败: {error}") from error
+
+
 @router.get("/video/frame")
 def get_video_frame(hand: str = "left") -> FileResponse:
     image_path = get_latest_rgb(hand)
@@ -360,6 +548,120 @@ def lookup_sku_by_name(name: str) -> dict[str, Any]:
     return product
 
 
+def lookup_sku_row(location_id: str) -> list[dict[str, Any]]:
+    """Return the standard row containing location_id, ordered left to right."""
+    try:
+        response = requests.request(
+            "GET",
+            f"{SKU_API_URL}/sku/get_candidate_SKU",
+            json={"location_id": location_id, "pose_type": ""},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        rows = response.json()
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail=f"SKU 行查询请求失败: {error}") from error
+    except ValueError as error:
+        raise HTTPException(status_code=502, detail="SKU 行查询响应不是有效 JSON") from error
+    if (
+        not isinstance(rows, list)
+        or len(rows) != 1
+        or not isinstance(rows[0], list)
+        or not all(isinstance(product, dict) for product in rows[0])
+    ):
+        raise HTTPException(status_code=502, detail="SKU 行查询响应格式错误")
+    return rows[0]
+
+
+def normalize_level(level: str) -> str:
+    normalized = level.strip().upper()
+    if not re.fullmatch(r"L[1-5]", normalized):
+        raise HTTPException(status_code=400, detail="level 必须是 L1 到 L5")
+    return normalized
+
+
+def load_hard_case_scope() -> set[tuple[str, str, str]]:
+    try:
+        payload = json.loads(HARD_CASE_SCOPE_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=500, detail="hard case 范围配置不存在") from error
+    except (OSError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=500, detail=f"读取 hard case 范围配置失败: {error}") from error
+    if not isinstance(payload, list):
+        raise HTTPException(status_code=500, detail="hard case 范围配置必须是数组")
+    scope: set[tuple[str, str, str]] = set()
+    for item in payload:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=500, detail="hard case 范围条目格式错误")
+        name = item.get("product_name")
+        level = item.get("level")
+        hand = item.get("hand")
+        if not all(isinstance(value, str) and value.strip() for value in (name, level, hand)):
+            raise HTTPException(status_code=500, detail="hard case 范围条目缺少字段")
+        normalized_level = level.strip().upper()
+        normalized_hand = hand.strip().lower()
+        if not re.fullmatch(r"L[1-5]", normalized_level) or normalized_hand not in CAMERA_SNAPSHOT_URLS:
+            raise HTTPException(status_code=500, detail="hard case 范围条目的 level 或 hand 无效")
+        key = (name.strip(), normalized_level, normalized_hand)
+        if key in scope:
+            raise HTTPException(status_code=500, detail=f"hard case 范围存在重复条目: {key}")
+        scope.add(key)
+    return scope
+
+
+def hard_case_group_for_product(
+    product_name: str,
+    task_type: str,
+    level: str,
+    hand: str,
+) -> tuple[str, HardCaseGroupConfig] | None:
+    if task_type != "SORTING" or (
+        product_name.strip(), level.strip().upper(), hand.strip().lower()
+    ) not in load_hard_case_scope():
+        return None
+    for group_id, config in HARD_CASE_GROUPS.items():
+        if product_name in config.members:
+            return group_id, config
+    return None
+
+
+def select_location_for_level(
+    product: dict[str, Any], level: str
+) -> tuple[str, re.Match[str]]:
+    locations = product.get("locations")
+    if not isinstance(locations, list) or not locations:
+        raise HTTPException(status_code=502, detail="hard case SKU 缺少 locations")
+    normalized_level = normalize_level(level)
+    parsed: list[tuple[str, re.Match[str]]] = []
+    for value in locations:
+        if not isinstance(value, str):
+            continue
+        match = LOCATION_PATTERN.fullmatch(value.strip().upper())
+        if match is not None and f"L{match.group('level')}" == normalized_level:
+            parsed.append((value.strip().upper(), match))
+    if not parsed:
+        raise HTTPException(status_code=404, detail=f"hard case SKU 在 {normalized_level} 没有 location")
+    if len(parsed) != 1:
+        raise HTTPException(status_code=502, detail=f"hard case SKU 在 {normalized_level} 存在多个 location")
+    return parsed[0]
+
+
+def hard_case_standard_order(
+    target_location: str,
+    config: HardCaseGroupConfig,
+) -> list[str]:
+    row = lookup_sku_row(target_location)
+    order = [
+        product["name"]
+        for product in row
+        if isinstance(product.get("name"), str)
+        and product["name"] in config.members
+    ]
+    if not order:
+        raise HTTPException(status_code=502, detail="目标层没有 hard case 品牌成员")
+    return order
+
+
 def normalize_task_type(task_type: str) -> str:
     normalized = task_type.strip().upper()
     if normalized not in PROMPT_MAPPING_PATHS:
@@ -377,9 +679,15 @@ def prompt_mapping_path(task_type: str) -> Path:
     return PROMPT_MAPPING_PATHS[normalized]
 
 
-def load_prompt_pair(name: str, task_type: str = "SORTING") -> tuple[str, str]:
+def load_prompt_pair(
+    name: str, task_type: str = "SORTING", *, hard_case: bool = False
+) -> tuple[str, str]:
     normalized_task_type = normalize_task_type(task_type)
-    mapping_path = prompt_mapping_path(normalized_task_type)
+    mapping_path = (
+        HARD_CASE_PROMPT_MAPPING_PATH
+        if hard_case and normalized_task_type == "SORTING"
+        else prompt_mapping_path(normalized_task_type)
+    )
     try:
         mapping = json.loads(mapping_path.read_text(encoding="utf-8"))
     except FileNotFoundError as error:
@@ -686,6 +994,7 @@ def map_sam_instance_to_original(
     instance: dict[str, Any],
     crop_box: tuple[int, int, int, int],
     original_size: tuple[int, int],
+    source_qwen_index: int | None = None,
 ) -> LocatedInstance:
     bbox = instance.get("bbox_xyxy")
     mask = instance.get("mask_png_base64")
@@ -712,6 +1021,7 @@ def map_sam_instance_to_original(
         bbox=original_bbox,
         mask=map_mask_to_original(mask, crop_box, original_size),
         score=score,
+        source_qwen_index=source_qwen_index,
     )
 
 
@@ -869,6 +1179,21 @@ def keep_frontmost_in_overlap_chains(
     return [instance for _, instance in sorted(selected, key=lambda item: item[0])]
 
 
+def keep_frontmost_in_source_groups(
+    instances: list[LocatedInstance],
+) -> list[LocatedInstance]:
+    """Apply overlap-chain filtering independently inside each Qwen display crop."""
+    by_source: dict[int | None, list[LocatedInstance]] = defaultdict(list)
+    for instance in instances:
+        by_source[instance.source_qwen_index].append(instance)
+    filtered = [
+        item
+        for source_instances in by_source.values()
+        for item in keep_frontmost_in_overlap_chains(source_instances)
+    ]
+    return sorted(filtered, key=lambda item: (item.source_qwen_index or 0, item.bbox[0]))
+
+
 def drop_smallest_mask_area_outlier(
     instances: list[LocatedInstance],
 ) -> list[LocatedInstance]:
@@ -899,31 +1224,307 @@ def drop_smallest_mask_area_outlier(
     return instances
 
 
+def instance_center_x(instance: LocatedInstance) -> float:
+    return (instance.bbox[0] + instance.bbox[2]) / 2
+
+
+def union_instance_bboxes(instances: list[LocatedInstance]) -> list[float]:
+    return [
+        min(instance.bbox[0] for instance in instances),
+        min(instance.bbox[1] for instance in instances),
+        max(instance.bbox[2] for instance in instances),
+        max(instance.bbox[3] for instance in instances),
+    ]
+
+
+def split_instances_into_display_groups(
+    instances: list[LocatedInstance],
+    shelf_front_line: tuple[float, float] | None = None,
+) -> list[list[LocatedInstance]]:
+    """Return the visible product columns from left to right.
+
+    Hard-case Qwen prompts request one bbox per display column, so source crops
+    are the primary column boundary. If Qwen returned one combined crop, each
+    SAM frontmost instance is conservatively treated as one visible column.
+    """
+    if not instances:
+        raise HTTPException(status_code=422, detail="没有可用于排序的第一排实例")
+
+    by_source: dict[int, list[LocatedInstance]] = defaultdict(list)
+    for instance in instances:
+        if instance.source_qwen_index is not None:
+            by_source[instance.source_qwen_index].append(instance)
+    nonempty_source_groups = [group for group in by_source.values() if group]
+    if len(nonempty_source_groups) > 1:
+        return sorted(
+            nonempty_source_groups,
+            key=lambda group: sum(instance_center_x(item) for item in group) / len(group),
+        )
+
+    front_row = keep_front_depth_row(instances, shelf_front_line)
+    # With one broad hard-case Qwen crop, rear-row and partial masks can bridge
+    # otherwise independent front products into one overlap chain. Determine
+    # depth first, then remove duplicate SAM masks only among front-row items.
+    ordered = sorted(
+        keep_frontmost_in_overlap_chains(front_row),
+        key=instance_center_x,
+    )
+    return [[instance] for instance in ordered]
+
+
+def detect_red_shelf_front_line(
+    image: Image.Image,
+) -> tuple[float, float] | None:
+    """Detect the red shelf-edge strip as ``y = slope * x + intercept``.
+
+    A small Hough-like search is used instead of assuming a horizontal shelf:
+    wrist-camera perspective commonly makes the red strip slope across the image.
+    The winning line must be supported across a meaningful horizontal span, which
+    prevents isolated red packaging from becoming the shelf reference.
+    """
+    rgb = image.convert("RGB")
+    width, height = rgb.size
+    if width < 20 or height < 20:
+        return None
+    step = max(1, min(width, height) // 360)
+    x_bucket_size = max(12, width // 48)
+    intercept_bin_size = max(5, height // 140)
+    candidates: list[tuple[float, float]] = []
+    pixels = rgb.load()
+    for y in range(int(height * 0.55), height, step):
+        for x in range(0, width, step):
+            red, green, blue = pixels[x, y]
+            if red >= 90 and red - green >= 35 and red - blue >= 25:
+                candidates.append((float(x), float(y)))
+    if not candidates:
+        return None
+
+    best: tuple[int, float, int] | None = None
+    for slope_index in range(-10, 11):
+        slope = slope_index * 0.025
+        bins: dict[int, set[int]] = defaultdict(set)
+        for x, y in candidates:
+            intercept_bin = round((y - slope * x) / intercept_bin_size)
+            bins[intercept_bin].add(int(x) // x_bucket_size)
+        for intercept_bin, x_buckets in bins.items():
+            candidate = (len(x_buckets), slope, intercept_bin)
+            if best is None or candidate[0] > best[0]:
+                best = candidate
+    minimum_support = max(6, int(width / x_bucket_size * 0.18))
+    if best is None or best[0] < minimum_support:
+        return None
+    _, slope, intercept_bin = best
+    approximate_intercept = intercept_bin * intercept_bin_size
+    residuals = sorted(
+        y - slope * x
+        for x, y in candidates
+        if abs((y - slope * x) - approximate_intercept) <= intercept_bin_size
+    )
+    if not residuals:
+        return None
+    return slope, residuals[len(residuals) // 2]
+
+
+def keep_front_depth_row(
+    instances: list[LocatedInstance],
+    shelf_front_line: tuple[float, float] | None = None,
+) -> list[LocatedInstance]:
+    """Keep instances whose lower edge reaches the detected shelf front."""
+    if len(instances) <= 1:
+        return instances
+    heights = [max(0.0, item.bbox[3] - item.bbox[1]) for item in instances]
+    if shelf_front_line is not None:
+        slope, intercept = shelf_front_line
+        front = []
+        for item, height in zip(instances, heights):
+            shelf_y = slope * instance_center_x(item) + intercept
+            # The mask/bbox may end slightly above the visible red edge or extend
+            # through it. Perspective and image-edge clipping therefore scale the
+            # tolerance with each individual object, not the largest object.
+            upper_tolerance = max(12.0, height * 0.25)
+            lower_tolerance = max(12.0, height * 0.35)
+            if shelf_y - upper_tolerance <= item.bbox[3] <= shelf_y + lower_tolerance:
+                front.append(item)
+        if front:
+            return front
+
+    # Conservative fallback for shelves where no red strip is detectable. Size
+    # and mask area are deliberately not hard rejection criteria because an edge
+    # SKU can be truncated or smaller under perspective.
+    max_bottom = max(item.bbox[3] for item in instances)
+    max_height = max(heights)
+    bottom_tolerance = max(8.0, max_height * 0.25)
+    front = [
+        item
+        for item in instances
+        if item.bbox[3] >= max_bottom - bottom_tolerance
+    ]
+    return front or [max(instances, key=lambda item: item.bbox[3])]
+
+
+def apply_hard_case_ordering(
+    instances: list[LocatedInstance],
+    *,
+    product: dict[str, Any],
+    task_type: str,
+    level: str,
+    hand: str,
+    shelf_front_line: tuple[float, float] | None = None,
+) -> tuple[list[LocatedInstance], HardCaseDebugInfo | None]:
+    hard_case = hard_case_group_for_product(
+        product["name"].strip(), task_type, level, hand
+    )
+    if hard_case is None:
+        return instances, None
+    group_id, config = hard_case
+    actual_hand = hand.strip().lower()
+    preferred_hand = actual_hand
+
+    target_location, target_match = select_location_for_level(product, level)
+    standard_order = hard_case_standard_order(target_location, config)
+    target_name = product["name"].strip()
+    if target_name not in standard_order:
+        raise HTTPException(status_code=502, detail="目标 SKU 不在指定层品牌顺序中")
+
+    display_groups = split_instances_into_display_groups(instances, shelf_front_line)
+    visible_count = len(display_groups)
+    if visible_count > len(standard_order):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"检测列数超过标准品牌列数: "
+                f"visible={visible_count}, standard={len(standard_order)}"
+            ),
+        )
+    if actual_hand == "left":
+        directional_groups = display_groups
+        directional_order = standard_order[:visible_count]
+    else:
+        directional_groups = list(reversed(display_groups))
+        directional_order = list(reversed(standard_order[-visible_count:]))
+
+    if target_name not in directional_order:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"目标 SKU 不在当前相机可见列范围内: {target_name}; "
+                f"visible_order={directional_order}"
+            ),
+        )
+
+    annotated_instances: list[LocatedInstance] = []
+    debug_groups: list[HardCaseGroupResult] = []
+    selected_group_index = -1
+    selected_instance: LocatedInstance | None = None
+    for group_index, (group, mapped_name) in enumerate(
+        zip(directional_groups, directional_order),
+        start=1,
+    ):
+        front_instances = keep_front_depth_row(group, shelf_front_line)
+        if not front_instances:
+            raise HTTPException(status_code=422, detail=f"{mapped_name} 没有第一排实例")
+        if mapped_name == target_name:
+            selected_group_index = group_index
+            selected_instance = select_frontmost_instance(front_instances)
+        updated_group: list[LocatedInstance] = []
+        for instance in front_instances:
+            updated = instance.model_copy(
+                update={
+                    "hard_case_group_index": group_index,
+                    "mapped_product_name": mapped_name,
+                    "is_selected": instance is selected_instance,
+                }
+            )
+            updated_group.append(updated)
+            annotated_instances.append(updated)
+        debug_groups.append(
+            HardCaseGroupResult(
+                index=group_index,
+                mapped_product_name=mapped_name,
+                bbox=union_instance_bboxes(updated_group),
+                instance_count=len(updated_group),
+            )
+        )
+
+    if selected_group_index < 0 or selected_instance is None:
+        raise HTTPException(status_code=422, detail="无法在第一排陈列组中定位目标 SKU")
+    return annotated_instances, HardCaseDebugInfo(
+        group_id=group_id,
+        preferred_hand=preferred_hand,
+        actual_hand=actual_hand,
+        order_direction="left_to_right" if actual_hand == "left" else "right_to_left",
+        target_location=target_location,
+        target_level=int(target_match.group("level")),
+        target_column=int(target_match.group("column")),
+        standard_order=standard_order,
+        groups=debug_groups,
+        selected_group_index=selected_group_index,
+    )
+
+
 def locate_product_in_image(
     product: dict[str, Any],
     image_path: Path,
     *,
     task_type: str = "SORTING",
+    level: str,
+    hand: str = "left",
     qwen_prompt_override: str | None = None,
     sam_prompt_override: str | None = None,
     depth_image: Image.Image | None = None,
     depth_image_provider: Callable[[tuple[int, int]], Image.Image | None] | None = None,
+    capture_postprocess_errors: bool = False,
 ) -> LocateDebugResponse:
     """使用已查询的 SKU 信息，在指定 RGB 图片上运行完整定位流程。"""
     if not image_path.is_file():
         raise HTTPException(status_code=404, detail=f"测试图片不存在: {image_path.name}")
     monitor_image_path = store_monitor_image(image_path)
     canonical_name = product["name"].strip()
+    normalized_level = normalize_level(level)
+    hard_case = hard_case_group_for_product(
+        canonical_name, task_type, normalized_level, hand
+    )
     qwen_prompt = (qwen_prompt_override or "").strip()
     sam_prompt = (sam_prompt_override or "").strip()
     if not qwen_prompt or not sam_prompt:
         stored_qwen_prompt, stored_sam_prompt = load_prompt_pair(
             canonical_name,
             task_type,
+            hard_case=hard_case is not None,
         )
         qwen_prompt = qwen_prompt or stored_qwen_prompt
         sam_prompt = sam_prompt or stored_sam_prompt
+    if hard_case is not None:
+        hard_case_group_id, _ = hard_case
+        target_location, target_match = select_location_for_level(
+            product, normalized_level
+        )
+        if hard_case_group_id == "bbq_sauce_spicy":
+            bbox_instruction = "每个红色烧烤酱袋子堆分别输出 bbox。"
+        elif hard_case_group_id == "bbq_sauce_original":
+            bbox_instruction = "每个绿色烧烤酱袋子堆分别输出 bbox。"
+        else:
+            bbox_instruction = "把该层所有同组商品合并在一个完整 bbox 中，只输出这一个 bbox。"
+        qwen_prompt = (
+            f"{qwen_prompt}\n"
+            f"该 hard case 商品本次只处理标准库位置 {target_location} "
+            f"对应的 L{target_match.group('level')} 层；如果该 SKU 有多个位置，"
+            "这里使用调用方指定的层。不要输出同品牌在其他货架层的商品；"
+            f"{bbox_instruction}"
+        )
     qwen_bboxes = get_stable_qwen_bboxes(qwen_prompt, image_path)
+    if hard_case is not None and len(qwen_bboxes) > 1:
+        # Hard cases use Qwen only to obtain one broad brand-row crop. Product
+        # columns/flavours are determined from SAM instances afterwards.
+        qwen_bboxes = QwenConsensusBBoxes(
+            [[
+                min(box[0] for box in qwen_bboxes),
+                min(box[1] for box in qwen_bboxes),
+                max(box[2] for box in qwen_bboxes),
+                max(box[3] for box in qwen_bboxes),
+            ]],
+            getattr(qwen_bboxes, "samples", []),
+        )
 
     try:
         with Image.open(image_path) as source_image:
@@ -943,7 +1544,7 @@ def locate_product_in_image(
     ]
     qwen_bbox_records: list[QwenBBoxRecord] = []
     located_instances: list[LocatedInstance] = []
-    for qwen_bbox in qwen_bboxes:
+    for qwen_index, qwen_bbox in enumerate(qwen_bboxes):
         try:
             crop_box = qwen_bbox_to_crop(qwen_bbox, original_image.size)
         except ValueError:
@@ -959,17 +1560,20 @@ def locate_product_in_image(
         for instance in call_sam3(sam_prompt, crop_image):
             if isinstance(instance, dict):
                 located_instances.append(
-                    map_sam_instance_to_original(instance, crop_box, original_image.size)
+                    map_sam_instance_to_original(
+                        instance,
+                        crop_box,
+                        original_image.size,
+                        source_qwen_index=qwen_index,
+                    )
                 )
 
     if not located_instances:
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
 
     raw_sam_instances = list(located_instances)
-    located_instances = keep_frontmost_in_overlap_chains(located_instances)
-    located_instances = drop_smallest_mask_area_outlier(located_instances)
     depth_enabled_for_task = task_type.strip().upper() != "SHORTAGE"
-    if depth_enabled_for_task and len(located_instances) > 1:
+    if hard_case is None and depth_enabled_for_task and len(located_instances) > 1:
         if depth_image is None and depth_image_provider is not None:
             depth_image = depth_image_provider(original_image.size)
         if depth_image is not None and depth_image.size == original_image.size:
@@ -981,10 +1585,68 @@ def locate_product_in_image(
                 )
                 for instance in located_instances
             ]
-    selected_instance = select_pick_instance(
-        located_instances,
-        list(original_image.size),
+            raw_sam_instances = list(located_instances)
+            # Depth must remove the rear row before overlap-chain de-duplication;
+            # otherwise a rear/partial mask can bridge several front products and
+            # make the entire component collapse to the wrong instance.
+            located_instances = keep_front_row_pick_candidates(located_instances)
+    if hard_case is None:
+        located_instances = keep_frontmost_in_overlap_chains(located_instances)
+        # Preserve the original global outlier rule for normal SKUs. A hard-case
+        # row can contain a legitimately smaller perspective-edge display group,
+        # so its rear-row filtering is performed inside each mapped group below.
+        located_instances = drop_smallest_mask_area_outlier(located_instances)
+    else:
+        # Hard cases now use one broad Qwen crop. Preserve all SAM instances here;
+        # first-row filtering must run before overlap de-duplication so rear/partial
+        # masks cannot transitively merge separate front-row product columns.
+        located_instances = list(located_instances)
+    shelf_front_line = (
+        detect_red_shelf_front_line(original_image)
+        if hard_case is not None
+        else None
     )
+    hard_case_debug: HardCaseDebugInfo | None = None
+    postprocess_error: HTTPException | None = None
+    try:
+        located_instances, hard_case_debug = apply_hard_case_ordering(
+            located_instances,
+            product=product,
+            task_type=task_type,
+            level=normalized_level,
+            hand=hand,
+            shelf_front_line=shelf_front_line,
+        )
+    except HTTPException as error:
+        if not capture_postprocess_errors:
+            raise
+        postprocess_error = error
+
+    if hard_case is not None and depth_enabled_for_task and len(located_instances) > 1:
+        if depth_image is None and depth_image_provider is not None:
+            depth_image = depth_image_provider(original_image.size)
+        if depth_image is not None and depth_image.size == original_image.size:
+            located_instances = [
+                instance.model_copy(
+                    update={
+                        "depth_mm": estimate_instance_depth_mm(instance, depth_image)
+                    }
+                )
+                for instance in located_instances
+            ]
+
+    if hard_case_debug is not None:
+        hard_case_selected = [
+            instance for instance in located_instances if instance.is_selected
+        ]
+        if len(hard_case_selected) != 1:
+            raise HTTPException(status_code=500, detail="hard case 目标实例标记无效")
+        selected_instance = hard_case_selected[0]
+    else:
+        selected_instance = select_pick_instance(
+            located_instances,
+            list(original_image.size),
+        )
     selected_instance_index = next(
         index
         for index, instance in enumerate(located_instances, start=1)
@@ -1007,6 +1669,17 @@ def locate_product_in_image(
         instances=located_instances,
         selected_instance=selected_instance,
         selected_instance_index=selected_instance_index,
+        hard_case=hard_case_debug,
+        error=(
+            str(postprocess_error.detail)
+            if postprocess_error is not None
+            else None
+        ),
+        error_status_code=(
+            postprocess_error.status_code
+            if postprocess_error is not None
+            else None
+        ),
     )
 
 
@@ -1052,6 +1725,7 @@ def locate_product_debug(
 ) -> LocateDebugResponse:
     product_name = request.product_name.strip()
     task_type = normalize_task_type(request.task_type)
+    level = normalize_level(request.level)
     if not product_name:
         raise HTTPException(status_code=400, detail="product_name 不能为空")
     product = lookup_sku_by_name(product_name)
@@ -1064,11 +1738,26 @@ def locate_product_debug(
         if allow_prompt_overrides
         else {"task_type": task_type}
     )
+    prompt_overrides["hand"] = request.hand
+    prompt_overrides["level"] = level
+    prompt_overrides["capture_postprocess_errors"] = capture_inference_errors
+    has_depth_name = request.depth_image_name is not None
+    has_depth_base64 = request.depth_image_base64 is not None
+    if has_depth_name != has_depth_base64:
+        raise HTTPException(
+            status_code=400,
+            detail="depth_image_name 和 depth_image_base64 必须同时提供或同时省略",
+        )
     if request.image_base64 is None:
         if request.image_name is not None:
             raise HTTPException(
                 status_code=400,
                 detail="指定 image_name 时必须同时提供 image_base64",
+            )
+        if has_depth_name:
+            raise HTTPException(
+                status_code=400,
+                detail="离线深度数据必须与离线 RGB 图片同时提供",
             )
         image_path = get_latest_rgb(request.hand)
         try:
@@ -1097,8 +1786,26 @@ def locate_product_debug(
     with tempfile.TemporaryDirectory(prefix="locate-upload-") as temporary_directory:
         image_path = Path(temporary_directory) / image_name
         image_path.write_bytes(image_bytes)
+        depth_image: Image.Image | None = None
+        if has_depth_name and has_depth_base64:
+            try:
+                with Image.open(image_path) as source_image:
+                    expected_size = source_image.size
+            except (UnidentifiedImageError, OSError) as error:
+                raise HTTPException(status_code=400, detail=f"读取上传 RGB 图片失败: {error}") from error
+            depth_image = decode_uploaded_depth_image(
+                request.depth_image_base64 or "",
+                request.depth_image_name or "",
+                expected_size,
+                is_bigendian=request.depth_is_bigendian,
+            )
         try:
-            return locate_product_in_image(product, image_path, **prompt_overrides)
+            return locate_product_in_image(
+                product,
+                image_path,
+                depth_image=depth_image,
+                **prompt_overrides,
+            )
         except HTTPException as error:
             if not capture_inference_errors:
                 raise
@@ -1301,13 +2008,21 @@ def select_pick_instance(
 
 
 def make_locate_response(debug_response: LocateDebugResponse) -> LocateResponse:
-    selected_instance = (
-        debug_response.selected_instance
-        or select_pick_instance(
-            debug_response.instances,
-            debug_response.image_size,
+    hard_case_selected = [
+        instance for instance in debug_response.instances if instance.is_selected
+    ]
+    if debug_response.hard_case is not None:
+        if len(hard_case_selected) != 1:
+            raise HTTPException(status_code=500, detail="hard case 目标实例标记无效")
+        selected_instance = hard_case_selected[0]
+    else:
+        selected_instance = (
+            debug_response.selected_instance
+            or select_pick_instance(
+                debug_response.instances,
+                debug_response.image_size,
+            )
         )
-    )
     return LocateResponse(
         product_name=debug_response.product_name,
         bbox=normalize_bbox_to_1_1000(
