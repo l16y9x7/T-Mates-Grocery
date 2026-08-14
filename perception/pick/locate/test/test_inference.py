@@ -222,14 +222,18 @@ def save_qwen_visualization(
 def run_test_inference(
     task_type: str,
     product_name: str,
+    level: str,
     hand: str,
     output_directory: Path = DEFAULT_RESULT_DIRECTORY,
 ) -> dict[str, dict[str, Any]]:
     normalized_task_type = task_type.strip()
     normalized_product_name = product_name.strip()
+    normalized_level = level.strip().upper()
     normalized_hand = hand.strip()
-    if not normalized_task_type or not normalized_product_name or not normalized_hand:
-        raise RuntimeError("task_type、product_name、hand 都不能为空")
+    if not all(
+        (normalized_task_type, normalized_product_name, normalized_level, normalized_hand)
+    ):
+        raise RuntimeError("task_type、product_name、level、hand 都不能为空")
 
     product = lookup_sku_by_name(normalized_product_name)
     image_paths = find_test_images(product["sku_id"])
@@ -241,6 +245,7 @@ def run_test_inference(
                 json={
                     "task_type": normalized_task_type,
                     "product_name": product["name"],
+                    "level": normalized_level,
                     "hand": normalized_hand,
                     "image_name": image_path.name,
                     "image_base64": base64.b64encode(image_path.read_bytes()).decode(
@@ -297,6 +302,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("task_type", help="正式请求的 task_type 字段，例如 SORTING")
     parser.add_argument("product_name", help="完整商品名称，例如 蒙牛纯牛奶")
+    parser.add_argument("level", help="正式请求的 level 字段，例如 L4")
     parser.add_argument("hand", help="正式请求的 hand 字段，例如 left 或 right")
     parser.add_argument(
         "--output",
@@ -318,6 +324,7 @@ def main_cli() -> None:
         results = run_test_inference(
             args.task_type,
             args.product_name,
+            args.level,
             args.hand,
             output_directory=args.output_dir,
         )

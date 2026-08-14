@@ -20,6 +20,7 @@ class ServerSettings(BaseModel):
 
 class ServiceSettings(BaseModel):
     pick_url: str
+    place_url: str
     task1_url: str
     locate_url: str
     perception_url: str

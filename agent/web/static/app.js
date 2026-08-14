@@ -7,6 +7,15 @@ const resultCard = document.querySelector("#resultCard");
 const resultStatus = document.querySelector("#resultStatus");
 const resultBody = document.querySelector("#resultBody");
 const operationKey = document.querySelector("#operationKey");
+const placeForm = document.querySelector("#placeForm");
+const placeSubmitButton = document.querySelector("#placeSubmitButton");
+const placeErrorMessage = document.querySelector("#placeErrorMessage");
+const placeEmptyState = document.querySelector("#placeEmptyState");
+const placeTimeline = document.querySelector("#placeTimeline");
+const placeResultCard = document.querySelector("#placeResultCard");
+const placeResultStatus = document.querySelector("#placeResultStatus");
+const placeResultBody = document.querySelector("#placeResultBody");
+const placeOperationKey = document.querySelector("#placeOperationKey");
 const connectionText = document.querySelector("#connectionText");
 const pulse = document.querySelector("#pulse");
 const poseForm = document.querySelector("#poseForm");
@@ -16,6 +25,8 @@ const shelfLevelPreset = document.querySelector("#shelfLevelPreset");
 const shelfLevelCustom = document.querySelector("#shelfLevelCustom");
 const shelfLevelLabel = document.querySelector("#shelfLevelLabel");
 const navigationForm = document.querySelector("#navigationForm");
+const navigationTargetPreset = document.querySelector("#navigationTargetPreset");
+const targetId = document.querySelector("#targetId");
 const healthButton = document.querySelector("#healthButton");
 const robotStatus = document.querySelector("#robotStatus");
 const robotOutput = document.querySelector("#robotOutput");
@@ -42,6 +53,12 @@ const pickVisualStatus = document.querySelector("#pickVisualStatus");
 const pickPoseStatus = document.querySelector("#pickPoseStatus");
 const pickPoseValues = document.querySelector("#pickPoseValues");
 const pickPoseMeta = document.querySelector("#pickPoseMeta");
+const placeVisual = document.querySelector("#placeVisual");
+const placeVisualCanvas = document.querySelector("#placeVisualCanvas");
+const placeVisualStatus = document.querySelector("#placeVisualStatus");
+const placePoseStatus = document.querySelector("#placePoseStatus");
+const placePoseValues = document.querySelector("#placePoseValues");
+const placePoseMeta = document.querySelector("#placePoseMeta");
 const task1Visual = document.querySelector("#task1Visual");
 const task1VisualCanvas = document.querySelector("#task1VisualCanvas");
 const task1VisualStatus = document.querySelector("#task1VisualStatus");
@@ -49,11 +66,10 @@ const task1PoseStatus = document.querySelector("#task1PoseStatus");
 const task1PoseValues = document.querySelector("#task1PoseValues");
 const task1PoseMeta = document.querySelector("#task1PoseMeta");
 let eventSource = null;
+let placeEventSource = null;
 let task1EventSource = null;
-let visualPoller = null;
-let task1VisualPoller = null;
-let refreshVisual = null;
-let refreshTask1Visual = null;
+const visualPollers = { pick: null, place: null, task1: null };
+const visualRefreshers = { pick: null, place: null, task1: null };
 
 const CUSTOM_VALUE = "__custom__";
 const POSES_REQUIRING_SHELF_LEVEL = new Set([
@@ -109,11 +125,25 @@ function updatePoseTypeCustomField() {
   updateShelfLevelField();
 }
 
+function selectedNavigationTarget() {
+  return navigationTargetPreset.value === CUSTOM_VALUE
+    ? targetId.value.trim()
+    : navigationTargetPreset.value;
+}
+
+function updateNavigationTargetCustomField() {
+  const usesCustomTarget = navigationTargetPreset.value === CUSTOM_VALUE;
+  targetId.hidden = !usesCustomTarget;
+  targetId.required = usesCustomTarget;
+}
+
 poseTypePreset.addEventListener("change", updatePoseTypeCustomField);
 poseTypeCustom.addEventListener("input", updateShelfLevelField);
 shelfLevelPreset.addEventListener("change", updateShelfLevelCustomField);
 updatePoseTypeCustomField();
 updateShelfLevelField();
+navigationTargetPreset.addEventListener("change", updateNavigationTargetCustomField);
+updateNavigationTargetCustomField();
 
 function setError(message = "") {
   errorMessage.textContent = message;
@@ -128,7 +158,7 @@ function setBusy(busy) {
 }
 
 function resetView() {
-  stopVisualPolling();
+  stopVisualPolling("pick");
   emptyState.hidden = true;
   timeline.hidden = false;
   timeline.replaceChildren();
@@ -137,6 +167,30 @@ function resetView() {
   resetVisualPanel(pickVisualCanvas, pickVisualStatus, pickPoseStatus, pickPoseValues, pickPoseMeta);
   operationKey.textContent = "-";
   setError();
+}
+
+function setPlaceError(message = "") {
+  placeErrorMessage.textContent = message;
+  placeErrorMessage.hidden = !message;
+}
+
+function setPlaceBusy(busy) {
+  placeSubmitButton.disabled = busy;
+  placeSubmitButton.querySelector("span:last-child").textContent = busy ? "执行中" : "开始放置";
+  connectionText.textContent = busy ? "放置流程连接中" : "接口待命";
+  pulse.classList.toggle("ready", !busy);
+}
+
+function resetPlaceView() {
+  stopVisualPolling("place");
+  placeEmptyState.hidden = true;
+  placeTimeline.hidden = false;
+  placeTimeline.replaceChildren();
+  placeResultCard.hidden = true;
+  placeVisual.hidden = true;
+  resetVisualPanel(placeVisualCanvas, placeVisualStatus, placePoseStatus, placePoseValues, placePoseMeta);
+  placeOperationKey.textContent = "-";
+  setPlaceError();
 }
 
 function resetVisualPanel(canvas, status, poseStatus, poseValues, poseMeta) {
@@ -238,7 +292,7 @@ function drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, im
   renderPose(visual, poseStatus, poseValues, poseMeta);
 }
 
-function beginVisualPolling(taskId, endpoint, panel, canvas, status, poseStatus, poseValues, poseMeta, isTask1 = false) {
+function beginVisualPolling(taskId, endpoint, panel, canvas, status, poseStatus, poseValues, poseMeta, kind = "pick") {
   const imageCache = {};
   const poll = async () => {
     try {
@@ -250,28 +304,17 @@ function beginVisualPolling(taskId, endpoint, panel, canvas, status, poseStatus,
     } catch (_) { /* SSE remains the source of flow status if polling is unavailable. */ }
   };
   poll();
-  const timer = window.setInterval(poll, 700);
-  if (isTask1) {
-    task1VisualPoller = timer;
-    refreshTask1Visual = poll;
-  } else {
-    visualPoller = timer;
-    refreshVisual = poll;
-  }
+  visualPollers[kind] = window.setInterval(poll, 700);
+  visualRefreshers[kind] = poll;
 }
 
-async function stopVisualPolling(isTask1 = false, refresh = false) {
-  const timer = isTask1 ? task1VisualPoller : visualPoller;
+async function stopVisualPolling(kind = "pick", refresh = false) {
+  const timer = visualPollers[kind];
   if (timer) window.clearInterval(timer);
-  const finalRefresh = isTask1 ? refreshTask1Visual : refreshVisual;
+  const finalRefresh = visualRefreshers[kind];
   if (refresh && finalRefresh) await finalRefresh();
-  if (isTask1) {
-    task1VisualPoller = null;
-    refreshTask1Visual = null;
-  } else {
-    visualPoller = null;
-    refreshVisual = null;
-  }
+  visualPollers[kind] = null;
+  visualRefreshers[kind] = null;
 }
 
 function eventLabel(event) {
@@ -382,7 +425,7 @@ function setTask1Error(message = "") {
 }
 
 function resetTask1View() {
-  stopVisualPolling(true);
+  stopVisualPolling("task1");
   task1EmptyState.hidden = true;
   task1Timeline.hidden = false;
   task1Timeline.replaceChildren();
@@ -434,6 +477,19 @@ function showResult(result) {
   if (!result.ok) setError(typeof body === "string" ? body : body?.message || "取放请求失败");
 }
 
+function showPlaceResult(result) {
+  const body = result.body ?? result;
+  placeResultCard.hidden = false;
+  placeResultStatus.textContent = result.ok
+    ? `HTTP ${result.status_code} · 请求完成`
+    : `HTTP ${result.status_code || 502} · 请求失败`;
+  placeResultStatus.className = result.ok ? "success" : "failure";
+  placeResultBody.textContent = typeof body === "string" ? body : JSON.stringify(body, null, 2);
+  connectionText.textContent = result.ok ? "放置完成" : "放置失败";
+  pulse.classList.toggle("ready", result.ok);
+  if (!result.ok) setPlaceError(typeof body === "string" ? body : body?.message || "放置请求失败");
+}
+
 async function startPick(payload) {
   const response = await fetch("/api/pick/start", {
     method: "POST",
@@ -442,6 +498,17 @@ async function startPick(payload) {
   });
   const body = await response.json();
   if (!response.ok) throw new Error(body.detail || body.message || "无法启动取放任务");
+  return body;
+}
+
+async function startPlace(payload) {
+  const response = await fetch("/api/place/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.detail || body.message || "无法启动放置任务");
   return body;
 }
 
@@ -565,7 +632,7 @@ form.addEventListener("submit", async (event) => {
     eventSource.addEventListener("result", async (message) => {
       try { showResult(JSON.parse(message.data)); } catch (_) { setError("任务结果格式无效"); }
       setBusy(false);
-      await stopVisualPolling(false, true);
+      await stopVisualPolling("pick", true);
       eventSource.close();
       eventSource = null;
     });
@@ -585,6 +652,58 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+placeForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (placeEventSource) placeEventSource.close();
+  resetPlaceView();
+  setPlaceBusy(true);
+  const data = new FormData(placeForm);
+  const payload = {
+    task_type: data.get("task_type"),
+    product_name: data.get("product_name"),
+    hand: data.get("hand"),
+  };
+  try {
+    const task = await startPlace(payload);
+    placeOperationKey.textContent = task.operation_key;
+    beginVisualPolling(
+      task.task_id,
+      "/api/place",
+      placeVisual,
+      placeVisualCanvas,
+      placeVisualStatus,
+      placePoseStatus,
+      placePoseValues,
+      placePoseMeta,
+      "place",
+    );
+    placeEventSource = new EventSource(task.events_url);
+    placeEventSource.addEventListener("flow", (message) => {
+      try { addFlowEvent(JSON.parse(message.data), placeTimeline); } catch (_) { /* ignore malformed event */ }
+    });
+    placeEventSource.addEventListener("result", async (message) => {
+      try { showPlaceResult(JSON.parse(message.data)); } catch (_) { setPlaceError("放置任务结果格式无效"); }
+      setPlaceBusy(false);
+      await stopVisualPolling("place", true);
+      placeEventSource.close();
+      placeEventSource = null;
+    });
+    placeEventSource.onerror = () => {
+      if (placeEventSource?.readyState === EventSource.CLOSED) return;
+      setPlaceError("放置实时日志连接中断，请查看服务器日志");
+      connectionText.textContent = "放置日志连接中断";
+      pulse.classList.remove("ready");
+    };
+  } catch (error) {
+    setPlaceBusy(false);
+    placeEmptyState.hidden = false;
+    placeTimeline.hidden = true;
+    setPlaceError(error.message || "无法启动放置任务");
+    connectionText.textContent = "放置启动失败";
+    pulse.classList.remove("ready");
+  }
+});
+
 task1Form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (task1EventSource) task1EventSource.close();
@@ -593,7 +712,7 @@ task1Form.addEventListener("submit", async (event) => {
   try {
     const task = await startTask1({});
     task1OperationKey.textContent = task.operation_key;
-    beginVisualPolling(task.task_id, "/api/task1", task1Visual, task1VisualCanvas, task1VisualStatus, task1PoseStatus, task1PoseValues, task1PoseMeta, true);
+    beginVisualPolling(task.task_id, "/api/task1", task1Visual, task1VisualCanvas, task1VisualStatus, task1PoseStatus, task1PoseValues, task1PoseMeta, "task1");
     task1EventSource = new EventSource(task.events_url);
     task1EventSource.addEventListener("flow", (message) => {
       try {
@@ -605,7 +724,7 @@ task1Form.addEventListener("submit", async (event) => {
     task1EventSource.addEventListener("result", async (message) => {
       try { showTask1Result(JSON.parse(message.data)); } catch (_) { setTask1Error("任务一结果格式无效"); }
       setTask1Busy(false);
-      await stopVisualPolling(true, true);
+      await stopVisualPolling("task1", true);
       task1EventSource.close();
       task1EventSource = null;
     });
@@ -639,10 +758,10 @@ poseForm.addEventListener("submit", async (event) => {
 
 navigationForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const targetId = document.querySelector("#targetId").value.trim();
-  if (!targetId) return;
+  const target = selectedNavigationTarget();
+  if (!target) return;
   try {
-    await callRobot("/api/robot/navigate", { target_id: targetId }, "navigation");
+    await callRobot("/api/robot/navigate", { target_id: target }, "navigation");
   } catch (error) {
     robotStatus.textContent = "导航失败";
     robotStatus.className = "robot-status failure";
@@ -671,5 +790,7 @@ healthButton.addEventListener("click", async () => {
 
 fetch("/api/config")
   .then((response) => response.json())
-  .then((config) => { document.querySelector("#footerUrl").textContent = config.pick_url; })
+  .then((config) => {
+    document.querySelector("#footerUrl").textContent = `${config.pick_url} · ${config.place_url}`;
+  })
   .catch(() => { document.querySelector("#footerUrl").textContent = "配置不可用"; });

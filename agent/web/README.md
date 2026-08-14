@@ -107,10 +107,10 @@ Content-Type: application/json
 机器人移动控制默认调用以下真实服务：
 
 ```text
-位姿准备：      http://192.168.1.226:8084/pose/prepare
-位姿健康检查：  http://192.168.1.226:8084/pose/health
-导航移动：      http://192.168.1.226:8081/navigation/navigate
-导航健康检查：  http://192.168.1.226:8081/navigation/health
+位姿准备：      http://192.168.3.226:8084/pose/prepare
+位姿健康检查：  http://192.168.3.226:8084/pose/health
+导航移动：      http://192.168.3.226:8081/navigation/navigate
+导航健康检查：  http://192.168.3.226:8081/navigation/health
 ```
 
 如需使用其他机器人地址，请直接修改 `web/config.yaml` 中的 `services.navigation_url` 和 `services.pose_url`。
@@ -133,7 +133,8 @@ Content-Type: application/json
 - `START_POSITION`：回到机器人初始位姿
 - `SHELF_PICK_READY`：前往货架预抓取位姿，可选择 `L1/L2/L3`
 - `SHELF_VIEW_UPPER`、`SHELF_VIEW_LOWER`：货架上下层扫描位姿
-- 导航到指定 `target_id`，例如 `H1_F_L1_C01`
+- 在“导航移动”中选择固定点位：任务判定点 `task_boundary`、起点 `start`（同一点），小票识别点 `receipt_viewpoint`、交付台 `delivery_place`（同一点），补货台 `replenishment_pickup`，或 8 个货架巡检点 `H1_F_L_INSPECT` 至 `H2_B_R_INSPECT`
+- 切换到“自定义 target_id”后可输入导航地图中的其他站点
 
 每次控制请求都自动生成并发送 `Idempotency-Key`，页面会显示下游请求 JSON、HTTP 状态和响应正文。导航请求字段是 `target_id`，不是带空格的 `target id`。
 
@@ -151,5 +152,17 @@ log/<时间>-<幂等键>/
 GET /api/pick/<task_id>/events
 Accept: text/event-stream
 ```
+
+放置流程使用与抓取相同的实时日志和视觉展示：
+
+```http
+POST /api/place/start
+GET /api/place/<task_id>/events
+GET /api/place/<task_id>/visual
+```
+
+`POST /api/place/start` 接收 `task_type`、`product_name` 和 `hand`，代理调用
+8086 的 `/place`。页面会依次显示放置定位、相机取图、放置位姿、释放执行和视觉校验的
+流程事件，以及每个已落盘下游接口的完整请求和响应。
 
 旧的 `POST /api/locate` 定位代理接口仍保留，以兼容已有调用方。

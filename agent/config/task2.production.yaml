@@ -3,20 +3,26 @@ services:
   perception: http://127.0.0.1:8083
   pose: http://192.168.3.226:8084
   pick_place: http://127.0.0.1:8086
-  sku: http://127.0.0.1:25540
 
-receipt_viewpoint: receipt_viewpoint
-delivery_place: delivery_place
+inspection_points:
+  - H1_F_L_INSPECT
+  - H1_F_R_INSPECT
+  - H1_B_L_INSPECT
+  - H1_B_R_INSPECT
+  - H2_F_L_INSPECT
+  - H2_F_R_INSPECT
+  - H2_B_L_INSPECT
+  - H2_B_R_INSPECT
+
+replenishment_pickup: replenishment_pickup
 task_boundary: task_boundary
-log_dir: log
-
 product_hand_options_file: product-hand-options.yaml
+log_dir: log
 
 timeouts:
   connect_seconds: 3
   health_seconds: 5
-  receipt_seconds: 120
-  sku_seconds: 10
+  inspection_seconds: 180
   navigation_seconds: 600
   pose_seconds: 300
   pick_seconds: 600

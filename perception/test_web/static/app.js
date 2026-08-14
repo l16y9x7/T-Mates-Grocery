@@ -2,6 +2,7 @@ const imageSelect = document.querySelector("#imageSelect");
 const requestTaskType =
   document.querySelector("#requestTaskType") || document.querySelector("#requestName");
 const requestHand = document.querySelector("#requestHand");
+const requestLevel = document.querySelector("#requestLevel");
 const qwenPrompt = document.querySelector("#qwenPrompt");
 const qwenSku = document.querySelector("#qwenSku");
 const samPrompt = document.querySelector("#samPrompt");
@@ -9,7 +10,13 @@ const rawQwenCanvas = document.querySelector("#rawQwenCanvas");
 const qwenCanvas = document.querySelector("#qwenCanvas");
 const rawSamCanvas = document.querySelector("#rawSamCanvas");
 const samCanvas = document.querySelector("#samCanvas");
+const finalLocateBboxCanvas = document.querySelector("#finalLocateBboxCanvas");
+const finalLocateCropCanvas = document.querySelector("#finalLocateCropCanvas");
 const cropDetectionSelect = document.querySelector("#cropDetectionSelect");
+const locateImageInput = document.querySelector("#locateImageInput");
+const locateDepthInput = document.querySelector("#locateDepthInput");
+const locateDepthByteOrder = document.querySelector("#locateDepthByteOrder");
+const clearLocateImage = document.querySelector("#clearLocateImage");
 
 const colors = ["#2dd4bf", "#f59e0b", "#60a5fa", "#f472b6", "#a78bfa", "#fb7185"];
 const qwenSampleColors = ["#a78bfa", "#2dd4bf", "#f59e0b"];
@@ -20,6 +27,79 @@ const promptPairsBySku = new Map();
 let loadedPromptSku = "";
 let latestImageBase64 = "";
 let latestImageMediaType = "image/jpeg";
+let offlineImageName = "";
+let offlineImageBase64 = "";
+let offlineDepthName = "";
+let offlineDepthBase64 = "";
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("离线文件读取失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function selectOfflineDepth() {
+  const file = locateDepthInput.files?.[0];
+  if (!file) return;
+  if (!/\.(npy|raw|bin|png|tif|tiff)$/i.test(file.name)) {
+    locateDepthInput.value = "";
+    setStatus("#locateDepthStatus", "只支持 NPY、16 位 PNG/TIFF 或 RAW/BIN", "error");
+    return;
+  }
+  try {
+    offlineDepthName = file.name;
+    offlineDepthBase64 = await readFileAsDataUrl(file);
+    clearLocateImage.disabled = false;
+    setStatus(
+      "#locateDepthStatus",
+      `深度数据：${file.name} · ${(file.size / 1024).toFixed(1)} KB`,
+      offlineImageBase64 ? "success" : "running",
+    );
+  } catch (error) {
+    offlineDepthName = "";
+    offlineDepthBase64 = "";
+    setStatus("#locateDepthStatus", error.message, "error");
+  }
+}
+
+async function selectOfflineImage() {
+  const file = locateImageInput.files?.[0];
+  if (!file) return;
+  if (!/^image\/(jpeg|png)$/.test(file.type)) {
+    locateImageInput.value = "";
+    setStatus("#locateImageStatus", "只支持 JPG/PNG", "error");
+    return;
+  }
+  try {
+    offlineImageName = file.name;
+    offlineImageBase64 = await readFileAsDataUrl(file);
+    clearLocateImage.disabled = false;
+    setStatus(
+      "#locateImageStatus",
+      `离线图片：${file.name} · ${(file.size / 1024).toFixed(1)} KB`,
+      "success",
+    );
+  } catch (error) {
+    offlineImageName = "";
+    offlineImageBase64 = "";
+    setStatus("#locateImageStatus", error.message, "error");
+  }
+}
+
+function clearOfflineImage() {
+  offlineImageName = "";
+  offlineImageBase64 = "";
+  offlineDepthName = "";
+  offlineDepthBase64 = "";
+  locateImageInput.value = "";
+  locateDepthInput.value = "";
+  clearLocateImage.disabled = true;
+  setStatus("#locateImageStatus", "当前使用腕部相机", "");
+  setStatus("#locateDepthStatus", "未上传深度数据，将使用无深度回退", "");
+}
 
 async function api(url, options = {}) {
   const response = await fetch(url, options);
@@ -48,7 +128,12 @@ async function loadImages() {
 
 async function loadSkus() {
   const taskType = requestTaskType?.value || "SORTING";
-  const data = await api(`/api/skus?task_type=${encodeURIComponent(taskType)}`);
+  const params = new URLSearchParams({
+    task_type: taskType,
+    level: requestLevel.value,
+    hand: requestHand.value,
+  });
+  const data = await api(`/api/skus?${params}`);
   const options = document.querySelector("#qwenSkuOptions");
   options.replaceChildren();
   promptPairsBySku.clear();
@@ -336,6 +421,8 @@ async function saveQwenPrompt() {
         task_type: requestTaskType.value,
         sku_name: qwenSku.value,
         prompt: qwenPrompt.value,
+        level: requestLevel.value,
+        hand: requestHand.value,
       }),
     });
     promptPairsBySku.set(result.sku_name, {
@@ -373,6 +460,8 @@ async function saveSamPromptPair() {
         sku_name: qwenSku.value,
         qwen3_prompt: qwenPrompt.value,
         sam3_prompt: samPrompt.value,
+        level: requestLevel.value,
+        hand: requestHand.value,
       }),
     });
     promptPairsBySku.set(result.sku_name, {
@@ -403,16 +492,30 @@ async function runQwen() {
     if (!requestTaskType) {
       throw new Error("页面版本不一致，请按 Ctrl+F5 强制刷新");
     }
+    const requestPayload = {
+      task_type: requestTaskType.value,
+      product_name: qwenSku.value,
+      level: requestLevel.value,
+      hand: requestHand.value,
+      qwen3_prompt: qwenPrompt.value,
+      sam3_prompt: samPrompt.value,
+    };
+    if (offlineImageBase64) {
+      requestPayload.image_name = offlineImageName;
+      requestPayload.image_base64 = offlineImageBase64;
+    }
+    if (offlineDepthBase64) {
+      if (!offlineImageBase64) {
+        throw new Error("上传离线深度数据时必须同时上传对应 RGB 图片");
+      }
+      requestPayload.depth_image_name = offlineDepthName;
+      requestPayload.depth_image_base64 = offlineDepthBase64;
+      requestPayload.depth_is_bigendian = locateDepthByteOrder.value === "big";
+    }
     const result = await api("/api/locate-debug", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        task_type: requestTaskType.value,
-        product_name: qwenSku.value,
-        hand: requestHand.value,
-        qwen3_prompt: qwenPrompt.value,
-        sam3_prompt: samPrompt.value,
-      }),
+      body: JSON.stringify(requestPayload),
     });
     latestImageBase64 = result.image_base64;
     latestImageMediaType = result.image_media_type || "image/jpeg";
@@ -427,6 +530,9 @@ async function runQwen() {
         ? {
             bbox: instance.bbox,
             score: instance.score,
+            depth_mm: instance.depth_mm,
+            mapped_product_name: instance.mapped_product_name,
+            is_selected: instance.is_selected,
             mask: `<base64 ${instance.mask.length} chars>`,
           }
         : null;
@@ -465,6 +571,7 @@ async function runQwen() {
         image_size: result.image_size,
         qwen3_prompt_used: result.qwen3_prompt_used,
         sam3_prompt_used: result.sam3_prompt_used,
+        hard_case: result.hard_case || null,
       },
       null,
       2,
@@ -508,7 +615,17 @@ async function runQwen() {
     const samContext = samCanvas.getContext("2d");
     instances.forEach((instance, index) => {
       const score = Number(instance.score || 0).toFixed(3);
-      drawBox(samContext, instance.bbox, `#${index + 1} ${score}`, colors[index % colors.length]);
+      const mappedName = instance.mapped_product_name || "";
+      const groupLabel = instance.hard_case_group_index
+        ? `G${instance.hard_case_group_index} `
+        : "";
+      const selectedLabel = instance.is_selected ? "目标 " : "";
+      drawBox(
+        samContext,
+        instance.bbox,
+        `${selectedLabel}${groupLabel}${mappedName || `#${index + 1}`} ${score}`,
+        instance.is_selected ? "#22c55e" : colors[index % colors.length],
+      );
     });
     if (selectedInstance) {
       drawBox(
@@ -524,13 +641,56 @@ async function runQwen() {
       {
         selected_instance_index: selectedInstanceIndex || null,
         selected_instance: selectedInstance
-          ? { bbox: selectedInstance.bbox, score: selectedInstance.score }
+          ? {
+              bbox: selectedInstance.bbox,
+              score: selectedInstance.score,
+              depth_mm: selectedInstance.depth_mm,
+              mapped_product_name: selectedInstance.mapped_product_name,
+              is_selected: selectedInstance.is_selected,
+            }
           : null,
-        candidates: instances.map(({ bbox, score }) => ({ bbox, score })),
+        candidates: instances.map(
+          ({ bbox, score, depth_mm, hard_case_group_index, mapped_product_name, is_selected }) => ({
+            bbox,
+            score,
+            depth_mm,
+            hard_case_group_index,
+            mapped_product_name,
+            is_selected,
+          }),
+        ),
       },
       null,
       2,
     );
+    const image = await drawBase(finalLocateBboxCanvas);
+    if (selectedInstance) {
+      const bboxContext = finalLocateBboxCanvas.getContext("2d");
+      drawBox(bboxContext, selectedInstance.bbox, `最终目标 ${result.product_name}`, "#22c55e");
+      document.querySelector("#finalLocateBboxEmpty").hidden = true;
+
+      const [x1, y1, x2, y2] = selectedInstance.bbox;
+      const paddingX = Math.max(8, (x2 - x1) * 0.08);
+      const paddingY = Math.max(8, (y2 - y1) * 0.08);
+      const cropX = Math.max(0, Math.floor(x1 - paddingX));
+      const cropY = Math.max(0, Math.floor(y1 - paddingY));
+      const cropRight = Math.min(image.naturalWidth, Math.ceil(x2 + paddingX));
+      const cropBottom = Math.min(image.naturalHeight, Math.ceil(y2 + paddingY));
+      finalLocateCropCanvas.width = Math.max(1, cropRight - cropX);
+      finalLocateCropCanvas.height = Math.max(1, cropBottom - cropY);
+      const cropContext = finalLocateCropCanvas.getContext("2d");
+      cropContext.drawImage(
+        image, cropX, cropY, cropRight - cropX, cropBottom - cropY,
+        0, 0, cropRight - cropX, cropBottom - cropY,
+      );
+      drawBox(
+        cropContext,
+        [x1 - cropX, y1 - cropY, x2 - cropX, y2 - cropY],
+        result.product_name,
+        "#22c55e",
+      );
+      document.querySelector("#finalLocateCropEmpty").hidden = true;
+    }
     if (result.error) {
       const errorMessage = `HTTP ${result.error_status_code || 500}: ${result.error}`;
       setStatus("#qwenStatus", errorMessage, "error");
@@ -539,9 +699,11 @@ async function runQwen() {
       setStatus("#qwenStatus", `${qwenBboxes.length} 个共识 bbox`, "success");
       setStatus(
         "#samStatus",
-        selectedInstance
-          ? `${instances.length} 个候选 · 最终 PICK #${selectedInstanceIndex}`
-          : `${instances.length} 个候选 · 未返回最终 PICK`,
+        result.hard_case
+          ? `${instances.length} 个第一排实例 · ${result.hard_case.group_id} · 最终 PICK #${selectedInstanceIndex}`
+          : selectedInstance
+            ? `${instances.length} 个候选 · 最终 PICK #${selectedInstanceIndex}`
+            : `${instances.length} 个候选 · 未返回最终 PICK`,
         selectedInstance ? "success" : "error",
       );
     }
@@ -642,6 +804,9 @@ document.querySelector("#runQwen").addEventListener("click", runQwen);
 document.querySelector("#saveQwenPrompt").addEventListener("click", saveQwenPrompt);
 document.querySelector("#saveSamPrompt").addEventListener("click", saveSamPromptPair);
 document.querySelector("#runSam").addEventListener("click", runSam);
+locateImageInput.addEventListener("change", selectOfflineImage);
+locateDepthInput.addEventListener("change", selectOfflineDepth);
+clearLocateImage.addEventListener("click", clearOfflineImage);
 requestTaskType?.addEventListener("change", () => {
   loadSkus()
     .then(() => loadPromptPairForSelectedSku())
@@ -649,6 +814,13 @@ requestTaskType?.addEventListener("change", () => {
       setStatus("#savePromptStatus", error.message, "error");
       setStatus("#saveSamPromptStatus", error.message, "error");
     });
+});
+[requestLevel, requestHand].forEach((control) => {
+  control.addEventListener("change", () => {
+    loadSkus()
+      .then(() => loadPromptPairForSelectedSku())
+      .catch((error) => setStatus("#savePromptStatus", error.message, "error"));
+  });
 });
 qwenSku.addEventListener("input", () => {
   syncSamPairedSku();

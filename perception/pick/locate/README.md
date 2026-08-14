@@ -72,7 +72,30 @@ python main.py
 5. 将 Qwen `[0,1000]` 归一化 bbox 转为原图像素坐标，向外扩张 10% 后裁图。
 6. 在每个去重后的 Qwen crop 上调用 SAM3。
 7. 将 SAM3 bbox 和 mask 映射回原始 RGB 图片。
-8. 对映射后的 SAM3 bbox 构建重叠链，每条链只保留按 mask 面积与密度判断最靠前的一个实例。
+8. 普通 case 在存在有效深度且有多个 SAM 实例时，先计算每个 mask 内的深度中位数，并保留距最近实例 30 mm 内的第一排；没有有效深度时保持原候选。
+9. 对第一排候选构建重叠链，每条链只保留按 mask 面积与密度判断最靠前的一个实例，然后执行最终 PICK。
+
+### SORTING hard case 顺序定位
+
+以下同品牌易混淆商品只在 `SORTING` 下启用顺序定位：脉动、外星人电解质水、
+草原红太阳烧烤料/烧烤酱、镇江香醋/蒸鱼豉油/薄盐生抽。其他 SKU 以及
+`SHORTAGE`、`MISPLACED` 保持上述原流程不变。
+
+是否进入 hard case 由 `perception/hard_case_config.json` 中的
+`商品名 + level + hand` 精确组合决定。请求传入的 `level` 用于从 SKU `locations`
+中定位对应层并查询从左到右的标准 SKU 顺序，不再自动选择最高层。未命中的组合按
+普通 case 运行。左手相机从标准顺序左端开始对应，右手相机从右端开始对应。
+
+SAM3 实例优先按 Qwen 陈列堆来源组成陈列列；Qwen 只返回一个合并区域时，使用过滤后的
+第一排 SAM 实例作为可见列。系统优先检测原图中的红色货架前沿，按每个 bbox 底边到
+透视前沿线的距离保留第一排；检测不到红线时才回退到瓶底高度规则，框高和 mask 面积
+不作为硬淘汰条件。hard case 会先筛第一排，再对第一排中的重叠 SAM mask 去重，避免
+后排或局部 mask 把相邻商品传递性合并。Debug 响应的 `hard_case` 给出目标 location、顺序和
+陈列组映射；最终 `instances` 带有 `mapped_product_name`、
+`hard_case_group_index`、`is_selected`。正式接口只返回 `is_selected=true` 的目标实例。
+不要求当前图片检测到标准库中的全部品牌列：左手检测结果对应标准顺序最左侧的可见
+前缀，右手检测结果对应标准顺序最右侧的可见后缀。只有目标 SKU 不在当前可见列范围
+内时才拒识。
 
 成功响应：
 
@@ -131,10 +154,10 @@ python -m unittest -v test_main.py
 
 #### 正式接口测试
 
-`request_formal_api.py` 的命令行只接收 `task_type`、`product_name`、`hand` 三个必填输入：
+`request_formal_api.py` 的命令行接收 `task_type`、`product_name`、`level`、`hand` 四个必填输入：
 
 ```powershell
-python test_formal_api.py SORTING "可口可乐" left
+python test_formal_api.py SORTING "可口可乐" L1 left
 ```
 
 脚本会用 `product_name` 请求 SKU API，再通过 `image_name_mapping.json` 和 SKU ID 自动找到 `2026-08-04` 下的所有对应本地图片。随后由脚本内部补充 `image_name` 和 `image_base64`，逐张调用正式 `/perception/pick/locate`，并校验响应只包含 `product_name`、`bbox`、`mask`、`image_path`，bbox 坐标均在 `[1,1000]` 内。
@@ -142,12 +165,12 @@ python test_formal_api.py SORTING "可口可乐" left
 可选保存测试结果：
 
 ```powershell
-python test_formal_api.py SORTING "可口可乐" left --output formal_result.json
+python test_formal_api.py SORTING "可口可乐" L1 left --output formal_result.json
 ```
 
 #### Debug 推理与结果图
 
-`test_inference.py` 使用与正式接口相同的三个必填输入 `task_type`、`product_name`、`hand`，并按以下顺序查找测试图片：
+`test_inference.py` 使用与正式接口相同的四个必填输入 `task_type`、`product_name`、`level`、`hand`，并按以下顺序查找测试图片：
 
 ```text
 product_name
@@ -156,11 +179,15 @@ product_name
     → perception/test_data/2026-08-04/image_name_mapping.json
     → 对应的 *_rgb.jpg
     → 读取并编码对应 RGB 图片
-    → POST /perception/pick/locate/debug（product_name + hand + image_base64）
+    → POST /perception/pick/locate/debug（product_name + level + hand + image_base64）
     → Qwen3/SAM3 完整推理
 ```
 
 `image_name_mapping.json` 和 `2026-08-04` 目录只属于测试脚本；Locate API 本身不依赖这两个路径。测试脚本也是独立的 HTTP 客户端，不导入或调用本地 `main.py`。
+
+Debug API 的离线图片请求可额外提供 `depth_image_name`、`depth_image_base64` 和可选的
+`depth_is_bigendian`。深度文件支持二维数值型 NPY、16 位单通道 PNG/TIFF 或无头 16UC1 RAW/BIN，且
+尺寸必须与 RGB 一致。未提供离线深度数据时，上传 RGB 的流程继续使用无深度回退。
 
 默认请求 `127.0.0.1` 上的两个服务：
 

@@ -13,6 +13,17 @@ import server
 
 
 class PromptMappingTest(unittest.TestCase):
+    def test_locate_pages_expose_offline_full_pipeline_controls(self) -> None:
+        index_html = (server.STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        app_js = (server.STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        qwen_html = (server.STATIC_DIR / "qwen_debug.html").read_text(encoding="utf-8")
+        qwen_js = (server.STATIC_DIR / "qwen_debug.js").read_text(encoding="utf-8")
+        self.assertIn('id="locateImageInput"', index_html)
+        self.assertIn("requestPayload.image_base64", app_js)
+        self.assertIn('id="runFullLocate"', qwen_html)
+        self.assertIn('image_name: originalImageName', qwen_js)
+        self.assertIn('image_base64: originalImageDataUrl', qwen_js)
+
     def test_moved_web_paths_are_anchored_to_perception_root(self) -> None:
         expected_root = Path(__file__).resolve().parent
 
@@ -474,6 +485,7 @@ CANDIDATE 2: 旧商品B;
                 server.LocateDebugProxyRequest(
                     task_type="SORTING",
                     product_name="可口可乐",
+                    level="L1",
                     hand="left",
                 )
             )
@@ -484,10 +496,73 @@ CANDIDATE 2: 旧商品B;
             json={
                 "task_type": "SORTING",
                 "product_name": "可口可乐",
+                "level": "L1",
                 "hand": "left",
             },
             timeout=600,
         )
+
+    def test_locate_debug_proxy_forwards_offline_image(self) -> None:
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {
+            "image_base64": "aW1hZ2U=",
+            "qwen_bboxes": [],
+            "instances": [],
+        }
+        with patch.object(server.requests, "post", return_value=response) as post_mock:
+            server.run_locate_debug(
+                server.LocateDebugProxyRequest(
+                    task_type="SORTING",
+                    product_name="脉动菠萝口味",
+                    level="L4",
+                    hand="left",
+                    image_name="hard_case.jpg",
+                    image_base64="data:image/jpeg;base64,aW1hZ2U=",
+                    depth_image_name="hard_case_depth.raw",
+                    depth_image_base64="data:application/octet-stream;base64,ZGVwdGg=",
+                )
+            )
+        self.assertEqual(
+            post_mock.call_args.kwargs["json"],
+            {
+                "task_type": "SORTING",
+                "product_name": "脉动菠萝口味",
+                "level": "L4",
+                "hand": "left",
+                "image_name": "hard_case.jpg",
+                "image_base64": "data:image/jpeg;base64,aW1hZ2U=",
+                "depth_image_name": "hard_case_depth.raw",
+                "depth_image_base64": "data:application/octet-stream;base64,ZGVwdGg=",
+                "depth_is_bigendian": False,
+            },
+        )
+
+    def test_locate_debug_proxy_rejects_half_offline_image(self) -> None:
+        with self.assertRaises(HTTPException) as raised:
+            server.run_locate_debug(
+                server.LocateDebugProxyRequest(
+                    task_type="SORTING",
+                    product_name="脉动菠萝口味",
+                    level="L4",
+                    hand="left",
+                    image_name="hard_case.jpg",
+                )
+            )
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_locate_debug_proxy_rejects_depth_without_rgb(self) -> None:
+        with self.assertRaises(HTTPException) as raised:
+            server.run_locate_debug(
+                server.LocateDebugProxyRequest(
+                    task_type="SORTING",
+                    product_name="可口可乐",
+                    level="L1",
+                    hand="left",
+                    depth_image_name="depth.raw",
+                    depth_image_base64="ZGVwdGg=",
+                )
+            )
+        self.assertEqual(raised.exception.status_code, 400)
 
     def test_qwen_save_updates_canonical_pair_and_preserves_sam_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

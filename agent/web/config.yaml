@@ -6,6 +6,7 @@ server:
 # Downstream service endpoints used by the web proxy.
 services:
   pick_url: http://127.0.0.1:8086/pick
+  place_url: http://127.0.0.1:8086/place
   task1_url: http://127.0.0.1:8108/task1/run
   locate_url: http://127.0.0.1:8083/perception/pick/locate
   perception_url: http://127.0.0.1:8083
