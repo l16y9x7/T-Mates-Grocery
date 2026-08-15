@@ -220,7 +220,7 @@
     "sam3_prompt": "frontmost yellow bottle"
   },
   "小鹿妈妈牙线": {
-    "qwen3_prompt": "找到图片中货架上的小鹿妈妈牙线盒，输出满足条件的所有小鹿妈妈牙线盒的bbox。返回格式：{\"name\": \"小鹿妈妈牙线盒\", \"bbox\": [x1, y1, x2, y2]}",
+      "qwen3_prompt": "找到图片中货架上的“小鹿妈妈”，不是纸巾包，输出满足条件的所有“小鹿妈妈”的bbox。返回格式：{\"name\": \"小鹿妈妈盒子\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost container"
   },
   "尖叫": {
@@ -384,7 +384,7 @@
     "sam3_prompt": "frontmost sauce package"
   },
   "草原红太阳烧烤酱香辣": {
-    "qwen3_prompt": "找到图片中货架上的红色烧烤酱袋子，注意不是绿色的，输出包含所有红色烧烤酱袋子的一个大bbox。返回格式：{\"name\": \"红色烧烤酱袋子堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的红色烧烤酱袋子，千万不要绿色的，输出包含所有红色烧烤酱袋子的一个大bbox。返回格式：{\"name\": \"红色烧烤酱袋子堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost red sauce package"
   },
   "蒙牛纯牛奶": {
