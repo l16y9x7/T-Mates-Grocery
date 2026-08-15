@@ -208,7 +208,7 @@
     "sam3_prompt": "frontmost container with neck"
   },
   "宝矿力水特": {
-    "qwen3_prompt": "找到图片中货架上的完整的蓝色不透明宝矿力水特水瓶堆，不是百岁山，输出完整的bbox。返回格式：{\"name\": \"蓝色不透明宝矿力水特水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上这一层的完整的蓝色不透明宝矿力水特水瓶堆，不是百岁山，输出完整的bbox。返回格式：{\"name\": \"蓝色不透明宝矿力水特水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost bottle"
   },
   "小苏打": {
@@ -381,10 +381,10 @@
   },
   "草原红太阳烧烤酱原味": {
     "qwen3_prompt": "找到图片中货架上的绿色烧烤酱袋子堆，输出满足条件的所有绿色烧烤酱袋子堆的bbox，每一堆分开。返回格式：{\"name\": \"绿色烧烤酱袋子堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost green sauce package"
+    "sam3_prompt": "frontmost sauce package"
   },
   "草原红太阳烧烤酱香辣": {
-    "qwen3_prompt": "找到图片中货架上的红色烧烤酱袋子堆，注意不是绿色的，输出满足条件的所有红色烧烤酱袋子堆的bbox，每一堆分开。返回格式：{\"name\": \"红色烧烤酱袋子堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的红色烧烤酱袋子，注意不是绿色的，输出包含所有红色烧烤酱袋子的一个大bbox。返回格式：{\"name\": \"红色烧烤酱袋子堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost red sauce package"
   },
   "蒙牛纯牛奶": {
