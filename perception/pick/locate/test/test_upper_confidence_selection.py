@@ -13,13 +13,42 @@ from pick.locate import main as locate_main
 from pick.locate.main import (
     LocatedInstance,
     UPPER_CONFIDENCE_PICK_PRODUCTS,
+    keep_mask_area_quality_candidates,
     select_upper_high_confidence_instance,
     uses_upper_confidence_pick,
 )
 
 
-def instance(bbox: list[float], score: float | None) -> LocatedInstance:
-    return LocatedInstance(bbox=bbox, mask="unused-by-selection", score=score)
+def encoded_mask(foreground_pixels: int = 1000) -> str:
+    size = (1000, 1000)
+    foreground_pixels = max(0, min(size[0] * size[1], foreground_pixels))
+    mask_image = Image.new("L", size, 0)
+    mask_image.putdata(
+        [255] * foreground_pixels
+        + [0] * (size[0] * size[1] - foreground_pixels)
+    )
+    buffer = io.BytesIO()
+    mask_image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def instance(
+    bbox: list[float],
+    score: float | None,
+    *,
+    mask_area: int | None = None,
+) -> LocatedInstance:
+    if mask_area is None:
+        bbox_area = max(0.0, bbox[2] - bbox[0]) * max(
+            0.0,
+            bbox[3] - bbox[1],
+        )
+        mask_area = round(bbox_area * 0.70)
+    return LocatedInstance(
+        bbox=bbox,
+        mask=encoded_mask(mask_area),
+        score=score,
+    )
 
 
 class UpperConfidenceSelectionTest(unittest.TestCase):
@@ -40,6 +69,125 @@ class UpperConfidenceSelectionTest(unittest.TestCase):
         )
 
         self.assertIs(selected, upper)
+
+    def test_baking_soda_vertical_tie_prefers_larger_mask(self) -> None:
+        complete = instance(
+            [318.36071395874023, 170.7701644897461, 481.28822326660156, 385.0790812174479],
+            0.9216125011444092,
+            mask_area=6000,
+        )
+        narrow = instance(
+            [318.74684143066406, 193.69881657759348, 378.3339538574219, 358.03969319661456],
+            0.8971089124679565,
+            mask_area=1500,
+        )
+
+        selected = select_upper_high_confidence_instance(
+            [complete, narrow],
+            score_margin=0.10,
+            vertical_tie_tolerance_ratio=0.10,
+        )
+
+        self.assertIs(selected, complete)
+
+    def test_record_959612_front_baking_soda_reaches_mask_area_tie_break(self) -> None:
+        rear = instance(
+            [131.14462280273438, 168.8652801513672, 227.62725830078125, 353.14127604166663],
+            0.7582884430885315,
+            mask_area=12000,
+        )
+        front = instance(
+            [61.87446594238281, 187.81331888834634, 197.0447235107422, 375.2466634114583],
+            0.8034917116165161,
+            mask_area=20000,
+        )
+
+        selected = select_upper_high_confidence_instance([rear, front])
+
+        self.assertIs(selected, front)
+
+    def test_mask_area_wins_over_bbox_area_inside_vertical_tie(self) -> None:
+        larger_bbox = instance(
+            [0.0, 0.0, 200.0, 200.0],
+            0.90,
+            mask_area=1000,
+        )
+        larger_mask = instance(
+            [20.0, 20.0, 140.0, 180.0],
+            0.89,
+            mask_area=4000,
+        )
+
+        selected = select_upper_high_confidence_instance(
+            [larger_bbox, larger_mask],
+            vertical_tie_tolerance_ratio=0.10,
+        )
+
+        self.assertIs(selected, larger_mask)
+
+    def test_sparse_small_fragment_is_filtered_before_vertical_selection(self) -> None:
+        complete = instance(
+            [100.0, 100.0, 300.0, 400.0],
+            0.90,
+            mask_area=36000,
+        )
+        largest_bbox = instance(
+            [80.0, 120.0, 320.0, 420.0],
+            0.89,
+            mask_area=30000,
+        )
+        upper_fragment = instance(
+            [120.0, 40.0, 220.0, 240.0],
+            0.91,
+            mask_area=2000,
+        )
+
+        selected = select_upper_high_confidence_instance(
+            [complete, largest_bbox, upper_fragment]
+        )
+
+        self.assertIs(selected, complete)
+
+    def test_dense_upper_candidate_is_not_filtered_only_for_smaller_bbox(self) -> None:
+        lower_largest = instance(
+            [100.0, 160.0, 300.0, 460.0],
+            0.90,
+            mask_area=42000,
+        )
+        upper_complete = instance(
+            [120.0, 60.0, 280.0, 240.0],
+            0.88,
+            mask_area=18000,
+        )
+
+        selected = select_upper_high_confidence_instance(
+            [lower_largest, upper_complete]
+        )
+
+        self.assertIs(selected, upper_complete)
+
+    def test_largest_mask_and_largest_bbox_are_both_protected(self) -> None:
+        largest_bbox = instance(
+            [0.0, 0.0, 300.0, 300.0],
+            0.80,
+            mask_area=1000,
+        )
+        largest_mask = instance(
+            [20.0, 20.0, 220.0, 220.0],
+            0.81,
+            mask_area=30000,
+        )
+        fragment = instance(
+            [40.0, 40.0, 190.0, 190.0],
+            0.99,
+            mask_area=1000,
+        )
+
+        filtered = keep_mask_area_quality_candidates(
+            [largest_bbox, largest_mask, fragment]
+        )
+
+        self.assertEqual(filtered, [largest_bbox, largest_mask])
 
     def test_upper_candidate_wins_inside_best_score_margin(self) -> None:
         lower_best = instance([0, 200, 100, 300], 0.90)

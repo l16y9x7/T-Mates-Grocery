@@ -216,7 +216,8 @@ Debug API 的离线图片请求可额外提供 `depth_image_name`、`depth_image
 `test_data/2026-08-13/sorting_pick_locate_batch.json`，通过当前 8083 Debug API 对映射中的每个
 record/商品组合运行 `SORTING` 检测。脚本从 `robot_state.json` 读取左右腕，上传同目录的
 `rgb.jpg` 和 `depth_mm.npy`，并把标注图保存为 record 目录下的 `{product_name}.jpg`。
-同名 JSON 保存精简响应；全局进度保存在 `sorting_pick_locate_batch_results.json`。
+同名 JSON 保存精简响应；全局进度保存在 `sorting_pick_locate_batch_results.json`。默认并发数为
+4，可通过 `--workers` 或环境变量 `LOCATE_BATCH_WORKERS` 调整；汇总文件始终由主线程串行更新。
 
 ```powershell
 # 只校验 52 个 record、商品名、层级、手腕和输入文件
@@ -227,6 +228,9 @@ python pick\locate\test\batch_record_inference.py
 
 # 从头覆盖全部结果
 python pick\locate\test\batch_record_inference.py --overwrite
+
+# 使用 2 并发运行（默认是 4）
+python pick\locate\test\batch_record_inference.py --workers 2
 ```
 
 连续 3 个系统连接错误时脚本会自动中止，避免在推理服务不可达时批量生成无效结果。

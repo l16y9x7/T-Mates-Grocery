@@ -7,6 +7,7 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,7 @@ DEFAULT_MAPPING_PATH = (
 )
 DEFAULT_API_URL = os.getenv("LOCATE_API_URL", "http://127.0.0.1:8083").rstrip("/")
 DEFAULT_TIMEOUT_SECONDS = float(os.getenv("LOCATE_REQUEST_TIMEOUT_SECONDS", "600"))
+DEFAULT_WORKERS = int(os.getenv("LOCATE_BATCH_WORKERS", "4"))
 INVALID_WINDOWS_FILENAME_CHARS = set('<>:"/\\|?*')
 LOCATION_LEVEL_PATTERN = re.compile(r"_L([1-5])_")
 
@@ -366,6 +368,156 @@ def request_locate(
     return response.status_code, payload
 
 
+def run_batch_job(
+    *,
+    job_number: int,
+    total: int,
+    entry: dict[str, Any],
+    product_name: str,
+    sku_id: Any,
+    rgb_base64: str,
+    depth_base64: str,
+    api_url: str,
+    timeout_seconds: float,
+    retries: int,
+    overwrite: bool,
+) -> dict[str, Any]:
+    """Run one independent record/product inference and persist its item files."""
+    output_image_path = entry["record_directory"] / f"{product_name}.jpg"
+    output_json_path = entry["record_directory"] / f"{product_name}.json"
+    if not overwrite and output_image_path.is_file() and output_json_path.is_file():
+        try:
+            existing_result = load_json(output_json_path)
+        except RuntimeError:
+            existing_result = None
+        if (
+            isinstance(existing_result, dict)
+            and existing_result.get("status") == "success"
+        ):
+            return {
+                "record": entry["record"],
+                "product_name": product_name,
+                "skipped": True,
+                "success": True,
+                "summary": {
+                    key: value
+                    for key, value in existing_result.items()
+                    if key != "response"
+                },
+                "is_system_error": False,
+                "combined_error": "",
+                "elapsed_seconds": 0.0,
+            }
+
+    request_payload = {
+        "task_type": "SORTING",
+        "product_name": product_name,
+        "level": entry["level"],
+        "hand": entry["hand"],
+        "image_name": "rgb.jpg",
+        "image_base64": rgb_base64,
+        "depth_image_name": "depth_mm.npy",
+        "depth_image_base64": depth_base64,
+    }
+    started = time.perf_counter()
+    response_payload: dict[str, Any] = {}
+    http_status = 0
+    request_error: str | None = None
+    attempts = 0
+    for attempt in range(max(0, retries) + 1):
+        attempts = attempt + 1
+        try:
+            http_status, response_payload = request_locate(
+                api_url,
+                request_payload,
+                timeout_seconds=timeout_seconds,
+            )
+            request_error = None
+        except (requests.RequestException, RuntimeError) as error:
+            request_error = str(error)
+            response_payload = {}
+        inference_error = response_payload.get("error")
+        selected = response_payload.get("selected_instance")
+        if (
+            request_error is None
+            and 200 <= http_status < 300
+            and not inference_error
+            and isinstance(selected, dict)
+        ):
+            break
+        if attempt < max(0, retries):
+            print(
+                f"[{job_number}/{total}] RETRY {entry['record']} {product_name} "
+                f"attempt={attempts}",
+                flush=True,
+            )
+
+    elapsed = round(time.perf_counter() - started, 3)
+    selected = response_payload.get("selected_instance")
+    inference_error = response_payload.get("error")
+    success = (
+        request_error is None
+        and 200 <= http_status < 300
+        and not inference_error
+        and isinstance(selected, dict)
+    )
+    status = "success" if success else "error"
+    draw_result(
+        entry["rgb_path"],
+        response_payload,
+        output_image_path,
+        status=status,
+    )
+    compact = compact_response(response_payload)
+    selected_bbox = selected.get("bbox") if isinstance(selected, dict) else None
+    item_result = {
+        "record": entry["record"],
+        "product_name": product_name,
+        "sku_id": sku_id,
+        "level": entry["level"],
+        "hand": entry["hand"],
+        "status": status,
+        "http_status": http_status,
+        "attempts": attempts,
+        "elapsed_seconds": elapsed,
+        "error": request_error or inference_error,
+        "error_status_code": response_payload.get("error_status_code"),
+        "selected_bbox_pixel": selected_bbox,
+        "selected_bbox_normalized": normalized_bbox(
+            selected_bbox,
+            response_payload.get("image_size"),
+        ),
+        "selected_depth_mm": (
+            selected.get("depth_mm") if isinstance(selected, dict) else None
+        ),
+        "output_image": str(output_image_path.resolve()),
+        "output_json": str(output_json_path.resolve()),
+        "response": compact,
+    }
+    write_json(output_json_path, item_result)
+    combined_error = str(request_error or inference_error or "")
+    is_system_error = request_error is not None or any(
+        marker in combined_error
+        for marker in (
+            "WinError 10013",
+            "Failed to establish a new connection",
+            "Locate API 请求失败",
+        )
+    )
+    return {
+        "record": entry["record"],
+        "product_name": product_name,
+        "skipped": False,
+        "success": success,
+        "summary": {
+            key: value for key, value in item_result.items() if key != "response"
+        },
+        "is_system_error": is_system_error,
+        "combined_error": combined_error,
+        "elapsed_seconds": elapsed,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="按 record→商品映射批量运行 SORTING pick/locate RGB+depth 测试"
@@ -373,6 +525,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING_PATH)
     parser.add_argument("--api-url", default=DEFAULT_API_URL)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--workers", type=int, default=DEFAULT_WORKERS)
     parser.add_argument("--retries", type=int, default=1)
     parser.add_argument("--max-consecutive-system-errors", type=int, default=3)
     parser.add_argument("--overwrite", action="store_true")
@@ -384,6 +537,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.workers < 1:
+        raise RuntimeError("--workers 必须大于等于 1")
     mapping_path = args.mapping.resolve()
     _, all_entries, catalog = load_and_validate_mapping(mapping_path)
     targeted = args.record is not None or args.product_name is not None
@@ -421,17 +576,20 @@ def main() -> None:
         if not isinstance(batch_results.get("results"), list):
             raise RuntimeError("现有批测汇总缺少 results 数组")
         batch_results["api_url"] = args.api_url
+        batch_results["workers"] = args.workers
         batch_results["started_at_unix"] = time.time()
         batch_results["last_targeted_run"] = {
             "record": args.record,
             "product_name": args.product_name,
         }
         batch_results.pop("finished_at_unix", None)
+        batch_results.pop("aborted_reason", None)
     else:
         batch_results = {
             "schema_version": 1,
             "mapping_file": str(mapping_path),
             "api_url": args.api_url,
+            "workers": args.workers,
             "task_type": "SORTING",
             "started_at_unix": time.time(),
             "total_records": len(all_entries),
@@ -444,151 +602,85 @@ def main() -> None:
             "skipped": 0,
             "results": [],
         }
-    completed = 0
-    consecutive_system_errors = 0
+    jobs: list[dict[str, Any]] = []
+    result_order: dict[tuple[str, str], int] = {}
+    order_index = 0
+    for all_entry in all_entries:
+        for all_product_name in all_entry["product_names"]:
+            result_order[(all_entry["record"], all_product_name)] = order_index
+            order_index += 1
     for entry in entries:
         rgb_base64 = base64.b64encode(entry["rgb_path"].read_bytes()).decode("ascii")
         depth_base64 = base64.b64encode(entry["depth_path"].read_bytes()).decode("ascii")
         for product_name in entry["product_names"]:
-            completed += 1
-            output_image_path = entry["record_directory"] / f"{product_name}.jpg"
-            output_json_path = entry["record_directory"] / f"{product_name}.json"
-            if not args.overwrite and output_image_path.is_file() and output_json_path.is_file():
-                try:
-                    existing_result = load_json(output_json_path)
-                except RuntimeError:
-                    existing_result = None
-                if (
-                    isinstance(existing_result, dict)
-                    and existing_result.get("status") == "success"
-                ):
-                    if targeted:
-                        print(
-                            f"[{completed}/{total}] SKIP-SUCCESS "
-                            f"{entry['record']} {product_name}",
-                            flush=True,
-                        )
-                        continue
-                    batch_results["successes"] += 1
-                    batch_results["skipped"] += 1
-                    batch_results["completed"] = completed
-                    batch_results["results"].append(
-                        {
-                            key: value
-                            for key, value in existing_result.items()
-                            if key != "response"
-                        }
-                    )
-                    batch_results["updated_at_unix"] = time.time()
-                    write_json(batch_result_path, batch_results)
-                    print(
-                        f"[{completed}/{total}] SKIP-SUCCESS "
-                        f"{entry['record']} {product_name}",
-                        flush=True,
-                    )
-                    continue
-
-            request_payload = {
-                "task_type": "SORTING",
-                "product_name": product_name,
-                "level": entry["level"],
-                "hand": entry["hand"],
-                "image_name": "rgb.jpg",
-                "image_base64": rgb_base64,
-                "depth_image_name": "depth_mm.npy",
-                "depth_image_base64": depth_base64,
-            }
-            started = time.perf_counter()
-            response_payload: dict[str, Any] = {}
-            http_status = 0
-            request_error: str | None = None
-            attempts = 0
-            for attempt in range(max(0, args.retries) + 1):
-                attempts = attempt + 1
-                try:
-                    http_status, response_payload = request_locate(
-                        args.api_url,
-                        request_payload,
-                        timeout_seconds=args.timeout,
-                    )
-                    request_error = None
-                except (requests.RequestException, RuntimeError) as error:
-                    request_error = str(error)
-                    response_payload = {}
-                inference_error = response_payload.get("error")
-                selected = response_payload.get("selected_instance")
-                if (
-                    request_error is None
-                    and 200 <= http_status < 300
-                    and not inference_error
-                    and isinstance(selected, dict)
-                ):
-                    break
-                if attempt < max(0, args.retries):
-                    print(
-                        f"[{completed}/{total}] RETRY {entry['record']} {product_name} "
-                        f"attempt={attempts}",
-                        flush=True,
-                    )
-
-            elapsed = round(time.perf_counter() - started, 3)
-            selected = response_payload.get("selected_instance")
-            inference_error = response_payload.get("error")
-            success = (
-                request_error is None
-                and 200 <= http_status < 300
-                and not inference_error
-                and isinstance(selected, dict)
+            jobs.append(
+                {
+                    "job_number": len(jobs) + 1,
+                    "entry": entry,
+                    "product_name": product_name,
+                    "sku_id": catalog[product_name].get("sku_id"),
+                    "rgb_base64": rgb_base64,
+                    "depth_base64": depth_base64,
+                }
             )
-            status = "success" if success else "error"
-            if not targeted:
-                if success:
+
+    completed = 0
+    consecutive_system_errors = 0
+    print(f"running workers={args.workers}", flush=True)
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        future_jobs = {
+            executor.submit(
+                run_batch_job,
+                job_number=job["job_number"],
+                total=total,
+                entry=job["entry"],
+                product_name=job["product_name"],
+                sku_id=job["sku_id"],
+                rgb_base64=job["rgb_base64"],
+                depth_base64=job["depth_base64"],
+                api_url=args.api_url,
+                timeout_seconds=args.timeout,
+                retries=args.retries,
+                overwrite=args.overwrite,
+            ): job
+            for job in jobs
+        }
+        for future in as_completed(future_jobs):
+            completed += 1
+            try:
+                result = future.result()
+            except Exception as error:
+                abort_reason = f"批测 worker 异常，任务已中止: {error}"
+                batch_results["aborted_reason"] = abort_reason
+                batch_results["finished_at_unix"] = time.time()
+                write_json(batch_result_path, batch_results)
+                for pending_future in future_jobs:
+                    pending_future.cancel()
+                raise RuntimeError(abort_reason) from error
+            record = result["record"]
+            product_name = result["product_name"]
+            if result["skipped"]:
+                print(
+                    f"[{completed}/{total}] SKIP-SUCCESS {record} {product_name}",
+                    flush=True,
+                )
+                if targeted:
+                    continue
+                batch_results["successes"] += 1
+                batch_results["skipped"] += 1
+            elif not targeted:
+                if result["success"]:
                     batch_results["successes"] += 1
                 else:
                     batch_results["failures"] += 1
 
-            draw_result(
-                entry["rgb_path"],
-                response_payload,
-                output_image_path,
-                status=status,
-            )
-            compact = compact_response(response_payload)
-            selected_bbox = selected.get("bbox") if isinstance(selected, dict) else None
-            item_result = {
-                "record": entry["record"],
-                "product_name": product_name,
-                "sku_id": catalog[product_name].get("sku_id"),
-                "level": entry["level"],
-                "hand": entry["hand"],
-                "status": status,
-                "http_status": http_status,
-                "attempts": attempts,
-                "elapsed_seconds": elapsed,
-                "error": request_error or inference_error,
-                "error_status_code": response_payload.get("error_status_code"),
-                "selected_bbox_pixel": selected_bbox,
-                "selected_bbox_normalized": normalized_bbox(
-                    selected_bbox,
-                    response_payload.get("image_size"),
-                ),
-                "selected_depth_mm": (
-                    selected.get("depth_mm") if isinstance(selected, dict) else None
-                ),
-                "output_image": str(output_image_path.resolve()),
-                "output_json": str(output_json_path.resolve()),
-                "response": compact,
-            }
-            write_json(output_json_path, item_result)
-            summary_item = {
-                key: value for key, value in item_result.items() if key != "response"
-            }
-            if targeted:
+            summary_item = result["summary"]
+            if targeted and not result["skipped"]:
                 existing_index = next(
                     (
                         index
                         for index, existing in enumerate(batch_results["results"])
-                        if existing.get("record") == entry["record"]
+                        if existing.get("record") == record
                         and existing.get("product_name") == product_name
                     ),
                     None,
@@ -598,45 +690,52 @@ def main() -> None:
                 else:
                     batch_results["results"][existing_index] = summary_item
                 batch_results["successes"] = sum(
-                    result.get("status") == "success"
-                    for result in batch_results["results"]
+                    item.get("status") == "success"
+                    for item in batch_results["results"]
                 )
                 batch_results["failures"] = sum(
-                    result.get("status") != "success"
-                    for result in batch_results["results"]
+                    item.get("status") != "success"
+                    for item in batch_results["results"]
                 )
                 batch_results["completed"] = len(batch_results["results"])
-            else:
+            elif not targeted:
                 batch_results["results"].append(summary_item)
                 batch_results["completed"] = completed
-            batch_results["updated_at_unix"] = time.time()
-            write_json(batch_result_path, batch_results)
-            print(
-                f"[{completed}/{total}] {status.upper()} {entry['record']} "
-                f"{product_name} {elapsed:.3f}s",
-                flush=True,
-            )
-            combined_error = str(request_error or inference_error or "")
-            is_system_error = request_error is not None or any(
-                marker in combined_error
-                for marker in (
-                    "WinError 10013",
-                    "Failed to establish a new connection",
-                    "Locate API 请求失败",
+
+            batch_results["results"].sort(
+                key=lambda item: result_order.get(
+                    (item.get("record"), item.get("product_name")),
+                    len(result_order),
                 )
             )
+            batch_results["updated_at_unix"] = time.time()
+            write_json(batch_result_path, batch_results)
+            if not result["skipped"]:
+                status = "SUCCESS" if result["success"] else "ERROR"
+                print(
+                    f"[{completed}/{total}] {status} {record} {product_name} "
+                    f"{result['elapsed_seconds']:.3f}s",
+                    flush=True,
+                )
+
+            if result["skipped"]:
+                continue
             consecutive_system_errors = (
-                consecutive_system_errors + 1 if is_system_error else 0
+                consecutive_system_errors + 1
+                if result["is_system_error"]
+                else 0
             )
             error_limit = max(1, args.max_consecutive_system_errors)
             if consecutive_system_errors >= error_limit:
                 abort_reason = (
                     f"连续 {consecutive_system_errors} 个系统连接错误，批测已中止: "
-                    f"{combined_error}"
+                    f"{result['combined_error']}"
                 )
                 batch_results["aborted_reason"] = abort_reason
                 batch_results["finished_at_unix"] = time.time()
                 write_json(batch_result_path, batch_results)
+                for pending_future in future_jobs:
+                    pending_future.cancel()
                 raise RuntimeError(abort_reason)
 
     batch_results["finished_at_unix"] = time.time()

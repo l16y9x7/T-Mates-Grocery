@@ -89,10 +89,11 @@ class ShortageQwenCoverageTest(unittest.TestCase):
             candidates,
             {0: [174.93, 144.80, 439.89, 325.28]},
             minimum_coverage=0.25,
+            minimum_relative_area=0.35,
         )
 
         self.assertNotIn(bottle_cap, filtered)
-        self.assertEqual(filtered, [candidates[5]])
+        self.assertEqual(filtered, candidates[:-1])
 
     def test_short_square_cannot_set_complete_candidate_reference(self) -> None:
         tall_complete = instance([0.0, 0.0, 72.0, 182.0])

@@ -117,6 +117,9 @@ PICK_MIN_SAM_QWEN_BBOX_COVERAGE = float(
         os.getenv("SHORTAGE_MIN_SAM_QWEN_BBOX_COVERAGE", "0.25"),
     )
 )
+PICK_MIN_SAM_TO_LARGEST_BBOX_AREA_RATIO = float(
+    os.getenv("PICK_MIN_SAM_TO_LARGEST_BBOX_AREA_RATIO", "0.35")
+)
 PICK_MIN_ASPECT_RATIO_TO_BEST = float(
     os.getenv("PICK_MIN_ASPECT_RATIO_TO_BEST", "0.75")
 )
@@ -140,6 +143,15 @@ PICK_MIN_VALID_DEPTH_PIXELS = int(
 )
 PICK_UPPER_CONFIDENCE_SCORE_MARGIN = float(
     os.getenv("PICK_UPPER_CONFIDENCE_SCORE_MARGIN", "0.10")
+)
+PICK_UPPER_VERTICAL_TIE_TOLERANCE_RATIO = float(
+    os.getenv("PICK_UPPER_VERTICAL_TIE_TOLERANCE_RATIO", "0.15")
+)
+PICK_MIN_MASK_BBOX_FILL_RATIO = float(
+    os.getenv("PICK_MIN_MASK_BBOX_FILL_RATIO", "0.15")
+)
+PICK_MIN_OVERLAP_MASK_AREA_RATIO = float(
+    os.getenv("PICK_MIN_OVERLAP_MASK_AREA_RATIO", "0.20")
 )
 HARD_CASE_FRONT_UPPER_TOLERANCE_RATIO = float(
     os.getenv("HARD_CASE_FRONT_UPPER_TOLERANCE_RATIO", "0.25")
@@ -1345,15 +1357,17 @@ def keep_sam_instances_with_qwen_coverage(
     qwen_bboxes_by_source: dict[int, list[float]],
     *,
     minimum_coverage: float = PICK_MIN_SAM_QWEN_BBOX_COVERAGE,
+    minimum_relative_area: float = PICK_MIN_SAM_TO_LARGEST_BBOX_AREA_RATIO,
 ) -> list[LocatedInstance]:
-    """Drop small SAM fragments while retaining each Qwen source's largest bbox."""
+    """Drop SAM bboxes tiny relative to both Qwen and the largest peer bbox."""
     threshold = max(0.0, min(1.0, minimum_coverage))
+    relative_area_threshold = max(0.0, min(1.0, minimum_relative_area))
     indices_by_source: dict[int, list[int]] = defaultdict(list)
     for index, instance in enumerate(instances):
         if instance.source_qwen_index in qwen_bboxes_by_source:
             indices_by_source[instance.source_qwen_index].append(index)
-    protected_indices = {
-        max(
+    largest_index_by_source = {
+        source: max(
             source_indices,
             key=lambda index: (
                 max(0.0, instances[index].bbox[2] - instances[index].bbox[0])
@@ -1363,7 +1377,19 @@ def keep_sam_instances_with_qwen_coverage(
                 else -1.0,
             ),
         )
-        for source_indices in indices_by_source.values()
+        for source, source_indices in indices_by_source.items()
+    }
+    protected_indices = set(largest_index_by_source.values())
+    largest_area_by_source = {
+        source: max(
+            0.0,
+            instances[index].bbox[2] - instances[index].bbox[0],
+        )
+        * max(
+            0.0,
+            instances[index].bbox[3] - instances[index].bbox[1],
+        )
+        for source, index in largest_index_by_source.items()
     }
     return [
         instance
@@ -1375,6 +1401,13 @@ def keep_sam_instances_with_qwen_coverage(
             qwen_bboxes_by_source[instance.source_qwen_index],
         )
         >= threshold
+        or (
+            largest_area_by_source[instance.source_qwen_index] > 0
+            and max(0.0, instance.bbox[2] - instance.bbox[0])
+            * max(0.0, instance.bbox[3] - instance.bbox[1])
+            / largest_area_by_source[instance.source_qwen_index]
+            >= relative_area_threshold
+        )
     ]
 
 
@@ -1472,16 +1505,27 @@ def select_upper_high_confidence_instance(
     instances: list[LocatedInstance],
     *,
     score_margin: float = PICK_UPPER_CONFIDENCE_SCORE_MARGIN,
+    vertical_tie_tolerance_ratio: float = PICK_UPPER_VERTICAL_TIE_TOLERANCE_RATIO,
+    minimum_mask_bbox_fill_ratio: float = PICK_MIN_MASK_BBOX_FILL_RATIO,
+    minimum_overlap_mask_area_ratio: float = PICK_MIN_OVERLAP_MASK_AREA_RATIO,
 ) -> LocatedInstance:
-    """Pick the uppermost instance among candidates close to the best score."""
+    """Pick an upper complete mask among candidates close to the best score."""
     if not instances:
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
     if len(instances) == 1:
         return instances[0]
 
+    # Remove visibly sparse/small fragments before their score or vertical
+    # position can define the candidate band. The largest mask and largest bbox
+    # in every overlap component remain protected by the helper.
+    quality_candidates = keep_mask_area_quality_candidates(
+        instances,
+        minimum_fill_ratio=minimum_mask_bbox_fill_ratio,
+        minimum_relative_mask_area=minimum_overlap_mask_area_ratio,
+    )
     scored = [
         instance
-        for instance in instances
+        for instance in quality_candidates
         if instance.score is not None and math.isfinite(instance.score)
     ]
     if scored:
@@ -1493,14 +1537,34 @@ def select_upper_high_confidence_instance(
             if instance.score >= minimum_score
         ]
     else:
-        candidates = instances
+        candidates = quality_candidates
 
-    return min(
-        candidates,
+    top_center_y = min(
+        (instance.bbox[1] + instance.bbox[3]) / 2
+        for instance in candidates
+    )
+    tallest_height = max(
+        max(0.0, instance.bbox[3] - instance.bbox[1])
+        for instance in candidates
+    )
+    vertical_tolerance = tallest_height * max(
+        0.0,
+        vertical_tie_tolerance_ratio,
+    )
+    upper_band = [
+        instance
+        for instance in candidates
+        if (instance.bbox[1] + instance.bbox[3]) / 2
+        <= top_center_y + vertical_tolerance
+    ]
+    return max(
+        upper_band,
         key=lambda instance: (
-            (instance.bbox[1] + instance.bbox[3]) / 2,
-            -(instance.score if instance.score is not None else -1.0),
-            instance.bbox[3],
+            mask_foreground_pixel_count(instance.mask),
+            max(0.0, instance.bbox[2] - instance.bbox[0])
+            * max(0.0, instance.bbox[3] - instance.bbox[1]),
+            instance.score if instance.score is not None else -1.0,
+            -((instance.bbox[1] + instance.bbox[3]) / 2),
         ),
     )
 
@@ -1563,6 +1627,69 @@ def bbox_overlap_components(
     for index in range(len(instances)):
         components[find(index)].append(index)
     return list(components.values())
+
+
+def keep_mask_area_quality_candidates(
+    instances: list[LocatedInstance],
+    *,
+    minimum_fill_ratio: float = PICK_MIN_MASK_BBOX_FILL_RATIO,
+    minimum_relative_mask_area: float = PICK_MIN_OVERLAP_MASK_AREA_RATIO,
+) -> list[LocatedInstance]:
+    """Drop sparse/small masks inside overlap groups while protecting maxima."""
+    if len(instances) < 2:
+        return instances
+
+    fill_threshold = max(0.0, min(1.0, minimum_fill_ratio))
+    relative_area_threshold = max(
+        0.0,
+        min(1.0, minimum_relative_mask_area),
+    )
+    mask_areas = [
+        mask_foreground_pixel_count(instance.mask) for instance in instances
+    ]
+    bbox_areas = [
+        max(0.0, instance.bbox[2] - instance.bbox[0])
+        * max(0.0, instance.bbox[3] - instance.bbox[1])
+        for instance in instances
+    ]
+    kept_indices: set[int] = set()
+    for component in bbox_overlap_components(instances):
+        if len(component) == 1:
+            kept_indices.update(component)
+            continue
+
+        largest_mask_area = max(mask_areas[index] for index in component)
+        largest_bbox_area = max(bbox_areas[index] for index in component)
+        protected_indices = {
+            index
+            for index in component
+            if mask_areas[index] == largest_mask_area
+            or bbox_areas[index] == largest_bbox_area
+        }
+
+        for index in component:
+            if index in protected_indices:
+                kept_indices.add(index)
+                continue
+            bbox_area = bbox_areas[index]
+            fill_ratio = mask_areas[index] / bbox_area if bbox_area > 0 else 0.0
+            relative_mask_area = (
+                mask_areas[index] / largest_mask_area
+                if largest_mask_area > 0
+                else 0.0
+            )
+            if (
+                fill_ratio >= fill_threshold
+                and relative_mask_area >= relative_area_threshold
+            ):
+                kept_indices.add(index)
+
+    filtered = [
+        instance
+        for index, instance in enumerate(instances)
+        if index in kept_indices
+    ]
+    return filtered or instances
 
 
 def keep_frontmost_in_overlap_chains(

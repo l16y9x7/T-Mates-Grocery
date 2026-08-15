@@ -212,7 +212,7 @@
     "sam3_prompt": "frontmost bottle"
   },
   "小苏打": {
-    "qwen3_prompt": "找到图片中货架上的小苏打堆，输出满足条件的所有小苏打堆的bbox，每一堆分开。返回格式：{\"name\": \"小苏打堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的小苏打堆，输出一个完整的bbox。返回格式：{\"name\": \"小苏打堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "topmost white and green package"
   },
   "小青柠汁饮料": {
