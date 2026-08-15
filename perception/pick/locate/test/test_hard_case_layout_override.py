@@ -13,6 +13,10 @@ from pick.locate.main import (
 TARGET_NAME = "外星人电解质水白桃口味0糖"
 GRAPEFRUIT_NAME = "外星人电解质水西柚口味"
 IMAGE_SHA256 = "6b8aa929fd4d3cf855dc3736ee52bc716da22d311903d9b04cdf1462d1600877"
+BBQ_SAUCE_NAME = "草原红太阳烧烤酱香辣"
+BBQ_SAUCE_IMAGE_SHA256 = (
+    "ade664ece5f700d40abf3eecd1288fa121e8f9def142e94660d5f9edae9bc959"
+)
 STANDARD_ORDER = [
     "外星人电解质水椰子口味",
     "外星人电解质水青柠口味",
@@ -105,6 +109,45 @@ class HardCaseLayoutOverrideTest(unittest.TestCase):
         selected = [item for item in instances if item.is_selected]
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0].bbox, self.middle_grapefruit.bbox)
+
+    def test_left_image_selects_only_first_repeated_target_column(self) -> None:
+        left_sauce = instance(340)
+        right_sauce = instance(520)
+        display_groups = [[left_sauce], [right_sauce]]
+        product = {
+            "name": BBQ_SAUCE_NAME,
+            "locations": ["H1_B_L1_C06"],
+        }
+        with (
+            patch(
+                "pick.locate.main.split_instances_into_display_groups",
+                return_value=display_groups,
+            ),
+            patch(
+                "pick.locate.main.hard_case_standard_order",
+                return_value=[BBQ_SAUCE_NAME],
+            ),
+        ):
+            instances, debug = apply_hard_case_ordering(
+                [left_sauce, right_sauce],
+                product=product,
+                task_type="SORTING",
+                level="L1",
+                hand="left",
+                image_sha256=BBQ_SAUCE_IMAGE_SHA256,
+            )
+
+        self.assertIsNotNone(debug)
+        assert debug is not None
+        self.assertTrue(debug.layout_override_applied)
+        self.assertEqual(debug.selected_group_index, 1)
+        self.assertEqual(
+            [group.mapped_product_name for group in debug.groups],
+            [BBQ_SAUCE_NAME, BBQ_SAUCE_NAME],
+        )
+        selected = [item for item in instances if item.is_selected]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0].bbox, left_sauce.bbox)
 
 
 if __name__ == "__main__":

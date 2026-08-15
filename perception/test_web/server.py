@@ -1,5 +1,6 @@
 import base64
 import binascii
+import hashlib
 import importlib.util
 import json
 import mimetypes
@@ -60,6 +61,10 @@ LOCATE_DEBUG_URL = os.getenv(
 )
 QWEN_SAMPLE_COUNT = 3
 QWEN_TEMPERATURE = 0.7
+QWEN_REQUEST_TIMEOUT_SECONDS = float(os.getenv("QWEN_REQUEST_TIMEOUT_SECONDS", "30"))
+QWEN_REQUEST_MAX_ATTEMPTS = max(
+    1, int(os.getenv("QWEN_REQUEST_MAX_ATTEMPTS", "3"))
+)
 QWEN_INFER_DATASETS = {
     "shortage": DATA_ROOT / "inspect_shortage_paired",
     "misplaced": DATA_ROOT / "inspect_misplaced_paired",
@@ -276,19 +281,36 @@ def list_qwen_infer_samples() -> dict:
                                 "已保留旧 override，但其图片、候选名称或顺序与"
                                 "当前审核阶段的实际输入不一致；本次使用重新生成的 Prompt。"
                             )
-                    result_stale = (
-                        result_path.is_file()
-                        and result_path.stat().st_mtime_ns < sample_version
-                    )
-                    last_result = (
+                    prompt_text = read_text_file(prompt_path, "Qwen 样例 Prompt")
+                    saved_result = (
                         load_json_file(result_path, "Qwen 样例推理结果")
-                        if result_path.is_file() and not result_stale
+                        if result_path.is_file()
                         else None
                     )
+                    current_signature = qwen_stage_input_signature(
+                        prompt_text, pair_root=manifest_path.parent, stage=stage
+                    )
+                    saved_signature = (
+                        saved_result.get("input_signature")
+                        if isinstance(saved_result, dict)
+                        else None
+                    )
+                    # New results are invalidated by actual prompt/image content,
+                    # not by manifest regeneration time. Keep the mtime fallback
+                    # only for legacy result files without a signature.
+                    result_stale = bool(
+                        saved_result
+                        and (
+                            saved_signature != current_signature
+                            if saved_signature
+                            else result_path.stat().st_mtime_ns < sample_version
+                        )
+                    )
+                    last_result = saved_result if saved_result and not result_stale else None
                     stage_views.append(
                         {
                             **stage,
-                            "prompt": read_text_file(prompt_path, "Qwen 样例 Prompt"),
+                            "prompt": prompt_text,
                             "prompt_source": prompt_source,
                             "prompt_warning": prompt_warning,
                             "result_stale": result_stale,
@@ -496,6 +518,9 @@ def run_saved_qwen_infer(request: SavedQwenInferRequest) -> dict:
         },
         "created_at": datetime.now(UTC).isoformat(),
         "prompt_used": prompt,
+        "input_signature": qwen_stage_input_signature(
+            prompt, pair_root=pair_root, stage=stage
+        ),
         "parsed_result": parsed_result,
         "raw_output": raw_output,
         "parse_error": parse_error,
@@ -1421,6 +1446,29 @@ def prompt_reference_images_for_stage(stage: dict) -> list[dict]:
     return sheets if sheets else candidate_images_for_stage(stage)
 
 
+def qwen_stage_input_signature(prompt: str, *, pair_root: Path, stage: dict) -> str:
+    """Fingerprint exactly the prompt and image bytes sent for one stage."""
+
+    digest = hashlib.sha256()
+    # The run endpoint intentionally strips surrounding whitespace before
+    # sending; normalize the displayed file the same way for comparison.
+    digest.update(prompt.strip().encode("utf-8"))
+    relative_paths = [str(stage.get("prompt_image_1", ""))]
+    relative_paths.extend(
+        str(item.get("path", "")) for item in prompt_reference_images_for_stage(stage)
+    )
+    for relative_path in relative_paths:
+        path = resolve_descendant(pair_root, relative_path)
+        try:
+            digest.update(path.read_bytes())
+        except OSError:
+            # Message construction performs the authoritative existence check.
+            # Retain a deterministic signature here so legacy/tests can still
+            # render their status instead of failing the whole samples API.
+            digest.update(f"missing:{relative_path}".encode("utf-8"))
+    return digest.hexdigest()
+
+
 def resolve_prompt_stage_paths(
     pair_root: Path,
     region_root: Path,
@@ -1641,9 +1689,7 @@ def call_qwen_messages(
     *,
     temperature: float,
 ) -> str:
-    response = requests.post(
-        QWEN3_URL,
-        json={
+    payload = {
             "model": QWEN3_MODEL,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -1651,9 +1697,19 @@ def call_qwen_messages(
             ],
             "temperature": temperature,
             "max_tokens": 800,
-        },
-        timeout=120,
-    )
+        }
+    response = None
+    for attempt in range(1, QWEN_REQUEST_MAX_ATTEMPTS + 1):
+        try:
+            response = requests.post(
+                QWEN3_URL, json=payload, timeout=QWEN_REQUEST_TIMEOUT_SECONDS
+            )
+            break
+        except (requests.Timeout, requests.ConnectionError):
+            if attempt >= QWEN_REQUEST_MAX_ATTEMPTS:
+                raise
+            time.sleep(min(0.5 * attempt, 1.0))
+    assert response is not None
     try:
         response.raise_for_status()
     except requests.HTTPError as error:

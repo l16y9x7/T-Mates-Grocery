@@ -25,6 +25,7 @@ from qwen_review import (  # noqa: E402
     build_candidate_contact_sheets,
     normalize_reference_image,
 )
+from qwen_review.visual_retrieval import RetrievalMatch
 
 
 class FakeResponse:
@@ -79,7 +80,22 @@ class FakeSession:
             name = kwargs["params"]["name"]
             suffix = "a" if name == "绿色奥利奥" else "b"
             return FakeResponse(payload=[f"images/{suffix}.jpg"])
-        if url.endswith("/images/a.jpg") or url.endswith("/images/b.jpg"):
+        if url.endswith("/sku/search_by_SKU"):
+            sku = kwargs["params"]["sku"]
+            products = {
+                "SKU_GLOBAL": {
+                    "sku_id": "SKU_GLOBAL",
+                    "name": "全库商品",
+                    "images": ["images/global.jpg"],
+                    "locations": ["H2_B_L4_C03"],
+                }
+            }
+            return FakeResponse(payload=products[sku])
+        if (
+            url.endswith("/images/a.jpg")
+            or url.endswith("/images/b.jpg")
+            or url.endswith("/images/global.jpg")
+        ):
             return FakeResponse(content=self.image, content_type="image/jpeg")
         if url.endswith("/chat/completions"):
             content_index = min(
@@ -350,7 +366,7 @@ class QwenReviewerTest(unittest.TestCase):
             qwen_calls[1][2]["json"],
             ensure_ascii=False,
         )
-        self.assertIn("不要按异常所在货架行限制候选", misplaced_serialized)
+        self.assertIn("候选来自全量商品标准库", misplaced_serialized)
         self.assertIn(
             "任务:识别局部图红色 bbox 中当前实际放置的商品。",
             misplaced_serialized,
@@ -437,6 +453,73 @@ class QwenReviewerTest(unittest.TestCase):
         self.assertTrue(red_pixels[312, 350])
         self.assertFalse(red_pixels[500, 640])
         self.assertGreater(int(row_image[270, 350, 1]), 100)
+
+    def test_misplaced_uses_full_catalog_retrieval_for_first_stage_only(self) -> None:
+        candidate_rows = [
+            [
+                {"sku_id": "SKU_A", "name": "绿色奥利奥"},
+                {"sku_id": "SKU_C", "name": "蓝色奥利奥"},
+            ],
+            [{"sku_id": "SKU_B", "name": "棕色奥利奥"}],
+        ]
+        constraint = ReviewRowConstraint(
+            row_index=1,
+            row_bbox=(0, 0, 1280, 360),
+            overlap_ratio=1.0,
+        )
+
+        class FakeRetriever:
+            def retrieve(self, image: np.ndarray) -> list[RetrievalMatch]:
+                self.image = image
+                return [RetrievalMatch("SKU_GLOBAL", "全库商品", 0.93)]
+
+        retriever = FakeRetriever()
+        session = FakeSession(
+            [
+                json.dumps(
+                    {"misplaced_product_name": "全库商品", "confidence": 0.9},
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {"gt_product_name": "绿色奥利奥", "confidence": 0.8},
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        reviewer = QwenReviewer(
+            sku_base_url="http://sku",
+            qwen_url="http://qwen/v1",
+            session=session,
+            visual_retriever=retriever,
+        )
+
+        result = reviewer.review(
+            task_type="MISPLACED",
+            location_id="H1_F_L1_C03",
+            pose_type="SHELF_VIEW_UPPER",
+            current=self.current,
+            baseline=self.baseline,
+            bboxes=[[300, 180, 101, 120]],
+            row_constraints=[
+                ReviewRowConstraint(
+                    row_index=1,
+                    row_bbox=(0, 0, 1280, 360),
+                    overlap_ratio=1.0,
+                )
+            ],
+        )
+
+        self.assertEqual(result.findings[0].misplaced_product_name, "全库商品")
+        self.assertEqual(result.findings[0].gt_product_name, "绿色奥利奥")
+        qwen_calls = [
+            call for call in session.calls if call[1].endswith("/chat/completions")
+        ]
+        misplaced_payload = json.dumps(qwen_calls[0][2]["json"], ensure_ascii=False)
+        expected_payload = json.dumps(qwen_calls[1][2]["json"], ensure_ascii=False)
+        self.assertIn("全库商品", misplaced_payload)
+        self.assertNotIn("绿色奥利奥", misplaced_payload)
+        self.assertIn("绿色奥利奥", expected_payload)
+        self.assertNotIn("全库商品", expected_payload)
 
         invalid_session = FakeSession(
             [

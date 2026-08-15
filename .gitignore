@@ -6,3 +6,5 @@ test_data/
 *.zip
 monitor_images/
 latest_camera_rgb.jpg
+perception/sku/.feature_cache/
+perception/sku/models/

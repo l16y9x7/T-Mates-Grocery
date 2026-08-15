@@ -720,17 +720,9 @@ def load_hard_case_layout_overrides(
         level = item.get("level")
         hand = item.get("hand")
         image_sha256 = item.get("image_sha256")
-        visible_order = item.get("visible_order_from_right")
         if not all(
             isinstance(value, str) and value.strip()
             for value in (name, level, hand, image_sha256)
-        ) or not (
-            isinstance(visible_order, list)
-            and visible_order
-            and all(
-                isinstance(value, str) and value.strip()
-                for value in visible_order
-            )
         ):
             raise HTTPException(
                 status_code=500,
@@ -742,12 +734,29 @@ def load_hard_case_layout_overrides(
         normalized_sha256 = image_sha256.strip().lower()
         if (
             not re.fullmatch(r"L[1-5]", normalized_level)
-            or normalized_hand != "right"
+            or normalized_hand not in {"left", "right"}
             or not re.fullmatch(r"[0-9a-f]{64}", normalized_sha256)
         ):
             raise HTTPException(
                 status_code=500,
                 detail="hard case 图片布局覆盖条目的 level、hand 或 image_sha256 无效",
+            )
+
+        visible_order = item.get(f"visible_order_from_{normalized_hand}")
+        if not (
+            isinstance(visible_order, list)
+            and visible_order
+            and all(
+                isinstance(value, str) and value.strip()
+                for value in visible_order
+            )
+        ):
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "hard case 图片布局覆盖条目缺少与 hand 对应的 "
+                    f"visible_order_from_{normalized_hand}"
+                ),
             )
         key = (
             name.strip(),
@@ -2072,7 +2081,11 @@ def apply_hard_case_ordering(
                     f"visible={visible_count}, override={len(layout_override)}"
                 ),
             )
-        directional_groups = list(reversed(display_groups))
+        directional_groups = (
+            display_groups
+            if actual_hand == "left"
+            else list(reversed(display_groups))
+        )
         directional_order = list(layout_override)
     else:
         if visible_count > len(standard_order):
@@ -2110,7 +2123,7 @@ def apply_hard_case_ordering(
         front_instances = keep_front_depth_row(group, shelf_front_line)
         if not front_instances:
             raise HTTPException(status_code=422, detail=f"{mapped_name} 没有第一排实例")
-        if mapped_name == target_name:
+        if mapped_name == target_name and selected_instance is None:
             selected_group_index = group_index
             selected_instance = select_frontmost_instance(front_instances)
         updated_group: list[LocatedInstance] = []

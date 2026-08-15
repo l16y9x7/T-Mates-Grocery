@@ -106,7 +106,9 @@ SAM3 实例优先按 Qwen 陈列堆来源组成陈列列；Qwen 只返回一个�
 
 若某一张已知图片的实体货架存在标准库没有记录的重复列，可在
 `perception/hard_case_layout_overrides.json` 中按
-`商品名 + level + hand + 原图 SHA-256` 配置该图片从右到左的实际可见顺序。
+`商品名 + level + hand + 原图 SHA-256` 配置该图片从相机保证的货架边缘开始的
+实际可见顺序：左手使用 `visible_order_from_left`，右手使用
+`visible_order_from_right`。重复的实体列必须在数组中重复填写。
 只有四个条件全部命中时才使用覆盖顺序，其他 hard case 仍使用标准库顺序。
 
 成功响应：

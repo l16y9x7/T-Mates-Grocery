@@ -47,6 +47,10 @@ from comparison_based.qwen_review.reviewer import (  # noqa: E402
     crop_review_region,
     normalize_reference_image,
 )
+from comparison_based.qwen_review.visual_retrieval import (  # noqa: E402
+    RetrievalMatch,
+    VisualSkuRetriever,
+)
 from config import QWEN3_MODEL, SKU_API_URL  # noqa: E402
 from row_detection import (  # noqa: E402
     RowDetectionConfig,
@@ -187,6 +191,50 @@ def build_api_candidates(
     return rows, candidates
 
 
+def build_retrieval_api_candidates(
+    matches: Sequence[RetrievalMatch],
+    sku_base_url: str,
+    *,
+    session: Any = requests,
+    timeout: float = SKU_TIMEOUT_SECONDS,
+) -> list[CandidateProduct]:
+    """Download only the full-catalog Top-K references selected by retrieval."""
+
+    base_url = sku_base_url.rstrip("/")
+    candidates: list[CandidateProduct] = []
+    for match in matches:
+        product_response = session.get(
+            f"{base_url}/sku/search_by_SKU",
+            params={"sku": match.sku_id},
+            timeout=timeout,
+        )
+        product_response.raise_for_status()
+        product = product_response.json()
+        if product.get("sku_id") != match.sku_id or product.get("name") != match.name:
+            raise ValueError(f"retrieval/SKU API mismatch: {match.sku_id}")
+        image_paths = product.get("images")
+        if not isinstance(image_paths, list) or not image_paths:
+            raise ValueError(f"SKU API returned no image for: {match.name}")
+        image_response = session.get(
+            f"{base_url}/{str(image_paths[0]).lstrip('/')}", timeout=timeout
+        )
+        image_response.raise_for_status()
+        media_type = image_response.headers.get("Content-Type", "image/jpeg")
+        image, media_type = normalize_reference_image(
+            image_response.content, media_type.split(";", 1)[0]
+        )
+        candidates.append(
+            CandidateProduct(
+                sku_id=match.sku_id,
+                name=match.name,
+                row_numbers=(),
+                image=image,
+                media_type=media_type,
+            )
+        )
+    return candidates
+
+
 def compare_images(
     spec: SampleSpec,
     baseline: np.ndarray,
@@ -262,6 +310,7 @@ def generate_sample(
     model: str,
     session: Any = requests,
     sku_timeout: float = SKU_TIMEOUT_SECONDS,
+    visual_retriever: VisualSkuRetriever | None = None,
 ) -> dict[str, Any]:
     dataset_root = data_root / spec.dataset
     baseline_path = dataset_root / f"{spec.pair_number}_1.jpg"
@@ -295,7 +344,11 @@ def generate_sample(
     candidate_manifest: list[dict[str, Any]] = []
     candidate_manifest_by_name: dict[str, dict[str, Any]] = {}
     candidate_root = pair_root / "candidate_images"
-    for index, candidate in enumerate(candidates, start=1):
+    def ensure_candidate_manifest(candidate: CandidateProduct) -> dict[str, Any]:
+        existing = candidate_manifest_by_name.get(candidate.name)
+        if existing is not None:
+            return existing
+        index = len(candidate_manifest) + 1
         extension = mimetypes.guess_extension(candidate.media_type) or ".jpg"
         image_name = f"{index:02d}_{candidate.sku_id}_{safe_filename(candidate.name)}{extension}"
         image_path = candidate_root / image_name
@@ -310,6 +363,10 @@ def generate_sample(
         }
         candidate_manifest.append(record)
         candidate_manifest_by_name[candidate.name] = record
+        return record
+
+    for candidate in candidates:
+        ensure_candidate_manifest(candidate)
 
     aligned_current = _resize_image(comparison.aligned_current)
     resized_baseline = _resize_image(baseline)
@@ -359,22 +416,49 @@ def generate_sample(
                 }
             ]
         else:
+            misplaced_image = crop_review_region(
+                aligned_current,
+                bbox,
+                "MISPLACED",
+                pose_type=spec.pose_type,
+                row_bbox=(row_match.row_bbox if row_match is not None else None),
+            )
+            retrieval_matches = (
+                visual_retriever.retrieve(misplaced_image)
+                if visual_retriever is not None
+                else []
+            )
+            retrieval_catalog_size = (
+                visual_retriever.prepare()[0]
+                if visual_retriever is not None
+                else len(candidates)
+            )
+            misplaced_candidates = (
+                build_retrieval_api_candidates(
+                    retrieval_matches,
+                    sku_base_url,
+                    session=session,
+                    timeout=sku_timeout,
+                )
+                if retrieval_matches
+                else list(candidates)
+            )
+            for candidate in misplaced_candidates:
+                ensure_candidate_manifest(candidate)
             stage_specs = [
                 {
                     "stage": "misplaced_product",
-                    "label": "1. 放错商品（全部可见候选）",
-                    "image": crop_review_region(
-                        aligned_current,
-                        bbox,
-                        "MISPLACED",
-                        pose_type=spec.pose_type,
-                        row_bbox=(
-                            row_match.row_bbox if row_match is not None else None
-                        ),
-                    ),
-                    "candidates": list(candidates),
+                    "label": "1. 放错商品（全库特征检索 Top-K）",
+                    "image": misplaced_image,
+                    "candidates": misplaced_candidates,
                     "misplaced_stage": "misplaced_product",
-                    "scope": "all_visible_rows",
+                    "scope": (
+                        "full_catalog_top_k"
+                        if retrieval_matches
+                        else "all_visible_rows_fallback"
+                    ),
+                    "retrieval_matches": retrieval_matches,
+                    "candidate_count_before": retrieval_catalog_size,
                 },
                 {
                     "stage": "expected_product",
@@ -390,6 +474,8 @@ def generate_sample(
                     "candidates": expected_candidates,
                     "misplaced_stage": "expected_product",
                     "scope": "expected_row",
+                    "retrieval_matches": [],
+                    "candidate_count_before": len(candidates),
                 },
             ]
 
@@ -473,10 +559,23 @@ def generate_sample(
                     "candidate_scope": stage_spec["scope"],
                     "prompt_image_1": str(image_path.relative_to(pair_root)),
                     "prompt": str(prompt_path.relative_to(pair_root)),
-                    "candidate_count_before": len(candidates),
+                    "candidate_count_before": stage_spec.get(
+                        "candidate_count_before", len(candidates)
+                    ),
                     "candidate_count_after": len(stage_candidates),
                     "candidate_images": stage_candidate_manifest,
                     "candidate_sheets": candidate_sheet_manifest,
+                    "retrieval_matches": [
+                        {
+                            "rank": rank,
+                            "sku_id": match.sku_id,
+                            "name": match.name,
+                            "score": match.score,
+                        }
+                        for rank, match in enumerate(
+                            stage_spec.get("retrieval_matches", []), start=1
+                        )
+                    ],
                 }
             )
 
@@ -536,8 +635,8 @@ def generate_sample(
         "note": (
             "Each prompt stage owns IMAGE 1 and its ordered candidate inputs. "
             "MISPLACED stage 1 uses the current crop expanded to the full "
-            "target-row height with modest horizontal context and all visible "
-            "candidates; stage 2 uses only the complete baseline "
+            "target-row height with modest horizontal context and full-catalog "
+            "visual-retrieval Top-K candidates; stage 2 uses only the complete baseline "
             "standard-placement row with the bbox marked and only the "
             "mapped SKU-row candidates. MISPLACED reference images are packed "
             "into numbered contact sheets; SHORTAGE keeps one image per SKU."
@@ -566,6 +665,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     session = requests.Session()
+    visual_retriever = VisualSkuRetriever.from_environment()
     results = [
         generate_sample(
             spec,
@@ -574,6 +674,7 @@ def main() -> None:
             model=args.model,
             session=session,
             sku_timeout=args.sku_timeout,
+            visual_retriever=visual_retriever,
         )
         for spec in SAMPLES
     ]

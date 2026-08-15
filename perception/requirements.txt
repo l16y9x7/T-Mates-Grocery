@@ -6,3 +6,8 @@ Pillow
 python-docx
 requests
 uvicorn
+# Full-catalog MISPLACED visual retrieval. Install a CUDA-compatible torch build
+# on the 4090 server when the generic PyPI wheel is not appropriate.
+torch
+torchvision
+transformers
