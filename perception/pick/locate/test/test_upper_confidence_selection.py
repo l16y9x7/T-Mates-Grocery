@@ -53,8 +53,9 @@ def instance(
 
 class UpperConfidenceSelectionTest(unittest.TestCase):
     def test_configured_products_are_sorting_only(self) -> None:
-        self.assertEqual(len(UPPER_CONFIDENCE_PICK_PRODUCTS), 14)
+        self.assertEqual(len(UPPER_CONFIDENCE_PICK_PRODUCTS), 13)
         self.assertTrue(uses_upper_confidence_pick("拖鞋", "SORTING"))
+        self.assertFalse(uses_upper_confidence_pick("小苏打", "SORTING"))
         self.assertFalse(uses_upper_confidence_pick("拖鞋", "SHORTAGE"))
         self.assertFalse(uses_upper_confidence_pick("拖鞋", "MISPLACED"))
         self.assertFalse(uses_upper_confidence_pick("杯子", "SORTING"))
@@ -69,42 +70,6 @@ class UpperConfidenceSelectionTest(unittest.TestCase):
         )
 
         self.assertIs(selected, upper)
-
-    def test_baking_soda_vertical_tie_prefers_larger_mask(self) -> None:
-        complete = instance(
-            [318.36071395874023, 170.7701644897461, 481.28822326660156, 385.0790812174479],
-            0.9216125011444092,
-            mask_area=6000,
-        )
-        narrow = instance(
-            [318.74684143066406, 193.69881657759348, 378.3339538574219, 358.03969319661456],
-            0.8971089124679565,
-            mask_area=1500,
-        )
-
-        selected = select_upper_high_confidence_instance(
-            [complete, narrow],
-            score_margin=0.10,
-            vertical_tie_tolerance_ratio=0.10,
-        )
-
-        self.assertIs(selected, complete)
-
-    def test_record_959612_front_baking_soda_reaches_mask_area_tie_break(self) -> None:
-        rear = instance(
-            [131.14462280273438, 168.8652801513672, 227.62725830078125, 353.14127604166663],
-            0.7582884430885315,
-            mask_area=12000,
-        )
-        front = instance(
-            [61.87446594238281, 187.81331888834634, 197.0447235107422, 375.2466634114583],
-            0.8034917116165161,
-            mask_area=20000,
-        )
-
-        selected = select_upper_high_confidence_instance([rear, front])
-
-        self.assertIs(selected, front)
 
     def test_mask_area_wins_over_bbox_area_inside_vertical_tie(self) -> None:
         larger_bbox = instance(

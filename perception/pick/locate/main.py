@@ -145,7 +145,7 @@ PICK_UPPER_CONFIDENCE_SCORE_MARGIN = float(
     os.getenv("PICK_UPPER_CONFIDENCE_SCORE_MARGIN", "0.10")
 )
 PICK_UPPER_VERTICAL_TIE_TOLERANCE_RATIO = float(
-    os.getenv("PICK_UPPER_VERTICAL_TIE_TOLERANCE_RATIO", "0.15")
+    os.getenv("PICK_UPPER_VERTICAL_TIE_TOLERANCE_RATIO", "0.10")
 )
 PICK_MIN_MASK_BBOX_FILL_RATIO = float(
     os.getenv("PICK_MIN_MASK_BBOX_FILL_RATIO", "0.15")
@@ -185,15 +185,15 @@ UPPER_CONFIDENCE_PICK_PRODUCTS = frozenset(
         "康师傅老坛酸菜牛肉面",
         "纯棉酒店大毛巾",
         "京东京造毛巾",
-        "小苏打",
         "心相印厨房纸巾",
         "拖鞋",
     }
 )
 
-# Salt bags frequently produce several overlapping top/edge fragments. For this
-# SKU, the complete pick region is represented most reliably by mask area.
-MAX_MASK_AREA_PICK_PRODUCTS = frozenset({"中盐精制盐"})
+# These bagged products frequently produce several overlapping top/edge
+# fragments. Their complete pick region is represented most reliably by the
+# actual SAM foreground-mask area, not bbox area, score, height, or depth.
+MAX_MASK_AREA_PICK_PRODUCTS = frozenset({"中盐精制盐", "小苏打"})
 
 LOCATION_PATTERN = re.compile(
     r"^H(?P<shelf>[12])_(?P<face>[FB])_L(?P<level>[1-5])_C(?P<column>\d{2})$"

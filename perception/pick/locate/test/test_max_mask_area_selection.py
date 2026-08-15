@@ -26,10 +26,11 @@ def rectangle_mask(size: tuple[int, int], box: tuple[int, int, int, int]) -> str
 
 
 class MaxMaskAreaSelectionTest(unittest.TestCase):
-    def test_only_refined_salt_uses_max_mask_area(self) -> None:
+    def test_refined_salt_and_baking_soda_use_max_mask_area(self) -> None:
         self.assertTrue(uses_max_mask_area_pick("中盐精制盐", "SORTING"))
+        self.assertTrue(uses_max_mask_area_pick("小苏打", "SORTING"))
         self.assertFalse(uses_max_mask_area_pick("中盐精制盐", "MISPLACED"))
-        self.assertFalse(uses_max_mask_area_pick("小苏打", "SORTING"))
+        self.assertFalse(uses_max_mask_area_pick("小苏打", "SHORTAGE"))
 
     def test_selects_actual_largest_mask_not_highest_or_uppermost(self) -> None:
         small_high_score = LocatedInstance(
@@ -48,6 +49,22 @@ class MaxMaskAreaSelectionTest(unittest.TestCase):
         )
 
         self.assertIs(selected, largest_lower_score)
+
+    def test_record_959612_baking_soda_ignores_height_and_bbox_area(self) -> None:
+        rear = LocatedInstance(
+            bbox=[131.14, 168.87, 227.63, 353.14],
+            mask=rectangle_mask((640, 480), (131, 169, 210, 300)),
+            score=0.7583,
+        )
+        front = LocatedInstance(
+            bbox=[61.87, 187.81, 197.04, 375.25],
+            mask=rectangle_mask((640, 480), (62, 188, 196, 374)),
+            score=0.8035,
+        )
+
+        selected = select_largest_mask_area_instance([rear, front])
+
+        self.assertIs(selected, front)
 
     def test_salt_pipeline_preserves_candidates_and_skips_depth(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
