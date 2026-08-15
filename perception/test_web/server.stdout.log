@@ -552,3 +552,15 @@ INFO:     192.168.3.53:58298 - "GET /api/sorting-batch-results/image/record_2026
 INFO:     192.168.3.53:58298 - "GET /api/sorting-batch-results/image/record_20260813_100124_240099/result?v=1786721723505206700&product_name=%E6%85%A2%E7%A2%B3%E5%8D%81%E8%89%B2%E7%B3%99%E7%B1%B3 HTTP/1.1" 200 OK
 INFO:     192.168.3.53:58298 - "GET /api/sorting-batch-results/image/record_20260813_100124_240099/result?v=1786722548242908700&product_name=%E9%AB%98%E7%BA%A4%E4%B8%83%E8%89%B2%E7%B3%99%E7%B1%B3 HTTP/1.1" 200 OK
 INFO:     192.168.3.53:58298 - "GET /api/sorting-batch-results/image/record_20260813_100129_360042/result?v=1786721731145159400&product_name=%E6%85%A2%E7%A2%B3%E5%8D%81%E8%89%B2%E7%B3%99%E7%B1%B3 HTTP/1.1" 200 OK
+INFO:     192.168.3.53:51693 - "GET /api/sorting-batch-results/image/record_20260813_081055_905807/rgb?v=1786619182974924500 HTTP/1.1" 200 OK
+INFO:     192.168.3.53:61172 - "GET /api/sorting-batch-results/image/record_20260813_081055_905807/result?v=1786718375734585500&product_name=%E8%88%92%E5%85%8B%E7%89%99%E8%86%8F%E6%B5%B7%E7%9B%90%E8%96%84%E8%8D%B7 HTTP/1.1" 200 OK
+INFO:     192.168.3.53:62623 - "GET /api/sorting-batch-results/rerun HTTP/1.1" 200 OK
+INFO:     192.168.3.53:63510 - "GET /api/sorting-batch-results/image/record_20260813_081055_905807/depth?v=1786619183069870400 HTTP/1.1" 200 OK
+INFO:     192.168.3.53:63510 - "GET / HTTP/1.1" 200 OK
+INFO:     192.168.3.53:63510 - "GET /static/style.css?v=20260814-batch-gallery HTTP/1.1" 304 Not Modified
+INFO:     192.168.3.53:61172 - "GET /static/app.js?v=20260814-batch-gallery HTTP/1.1" 304 Not Modified
+INFO:     192.168.3.53:61172 - "GET /api/skus?task_type=SORTING&level=L4&hand=left HTTP/1.1" 200 OK
+INFO:     192.168.3.53:63510 - "GET /api/sorting-batch-results HTTP/1.1" 200 OK
+INFO:     192.168.3.53:61172 - "GET /api/sorting-batch-results/rerun HTTP/1.1" 200 OK
+INFO:     192.168.3.53:63510 - "GET /api/sorting-batch-results/image/record_20260813_081055_905807/result?v=1786721235708530000&product_name=%E8%88%92%E5%85%8B%E7%89%99%E8%86%8F%E6%B5%B7%E7%9B%90%E8%96%84%E8%8D%B7 HTTP/1.1" 200 OK
+INFO:     192.168.3.53:63510 - "GET /api/sorting-batch-results HTTP/1.1" 200 OK

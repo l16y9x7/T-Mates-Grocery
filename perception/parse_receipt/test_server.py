@@ -6,6 +6,7 @@ import asyncio
 import io
 import json
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 from urllib.error import URLError
@@ -45,6 +46,48 @@ class FakeResponse:
 
 
 class ReceiptServerTests(unittest.TestCase):
+    def test_generated_receipt_cases_cover_catalog_and_match(self) -> None:
+        directory = Path(__file__).resolve().parent
+        with (directory / "receipt_test_cases.json").open(
+            "r", encoding="utf-8"
+        ) as file:
+            document = json.load(file)
+        with (directory.parent / "sku" / "products.json").open(
+            "r", encoding="utf-8"
+        ) as file:
+            products = json.load(file)["products"]
+
+        cases = document["test_cases"]
+        sku_names = [product["name"] for product in products]
+        catalog_sku_ids = {product["sku_id"] for product in products}
+        covered_sku_ids: set[str] = set()
+        pairs: set[frozenset[str]] = set()
+        self.assertGreaterEqual(len(cases), 100)
+        self.assertLessEqual(len(cases), 200)
+
+        for case in cases:
+            with self.subTest(case_id=case["case_id"]):
+                inputs = case["input"]
+                expected = case["expected"]
+                self.assertEqual(len(inputs), 2)
+                self.assertEqual(len(expected["sku_ids"]), 2)
+                self.assertNotEqual(expected["sku_ids"][0], expected["sku_ids"][1])
+
+                pair = frozenset(expected["sku_ids"])
+                self.assertNotIn(pair, pairs)
+                pairs.add(pair)
+                covered_sku_ids.update(expected["sku_ids"])
+
+                matched_names = [
+                    server.match_sku_name(
+                        item["name"], item["specification"], sku_names
+                    )
+                    for item in inputs
+                ]
+                self.assertEqual(matched_names, expected["product_names"])
+
+        self.assertEqual(covered_sku_ids, catalog_sku_ids)
+
     def test_capture_one_frame_gets_camera_without_writing_file(self) -> None:
         image = jpeg_bytes()
         with patch("server.urlopen", return_value=FakeResponse(image)) as mocked:

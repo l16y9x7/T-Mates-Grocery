@@ -138,3 +138,14 @@ python -m unittest -v test_server.py
 ```
 
 测试使用内存图片和模拟响应，不访问真实相机、Qwen 或 SKU，也不会保存图片文件。
+
+`receipt_test_cases.json` 另含 150 条双商品 SKU 匹配样例，覆盖
+`sku/products.json` 中的全部商品。每个 `input` 只包含 Qwen 接口使用的
+`name`、`specification` 字段，`expected` 则记录对应的标准 SKU ID 和商品名。
+样例混合了“简称 + 类型/口味”和“完整商品名 + 虚构数字规格”两种输入方式。
+
+商品目录更新后可重新生成：
+
+```bash
+python parse_receipt/build_receipt_test_cases.py
+```
