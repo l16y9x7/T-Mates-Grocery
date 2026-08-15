@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import sys
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,6 +26,11 @@ if str(PERCEPTION_ROOT) not in sys.path:
     sys.path.insert(0, str(PERCEPTION_ROOT))
 
 from config import QWEN3_MODEL, QWEN3_URL, SKU_API_URL  # noqa: E402
+from .visual_retrieval import (  # noqa: E402
+    RetrievalMatch,
+    VisualRetrievalError,
+    VisualSkuRetriever,
+)
 
 
 TaskType = Literal["SHORTAGE", "MISPLACED"]
@@ -32,7 +38,8 @@ MisplacedStage = Literal["misplaced_product", "expected_product"]
 PoseType = Literal["", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
 TARGET_SIZE = (1280, 720)
 SKU_TIMEOUT_SECONDS = 8.0
-QWEN_TIMEOUT_SECONDS = 120.0
+QWEN_TIMEOUT_SECONDS = float(os.getenv("QWEN_REQUEST_TIMEOUT_SECONDS", "30"))
+QWEN_MAX_ATTEMPTS = max(1, int(os.getenv("QWEN_REQUEST_MAX_ATTEMPTS", "3")))
 MAX_REFERENCE_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_REFERENCE_IMAGE_SIDE = 1024
 CONTACT_SHEET_COLUMNS = 5
@@ -56,6 +63,7 @@ MISPLACED_PROMPT_PATHS: dict[MisplacedStage, Path] = {
 DEFAULT_DEBUG_ROOT = Path(
     os.getenv("INSPECT_QWEN_DEBUG_DIR", str(PROMPT_ROOT / "debug"))
 )
+_ENV_RETRIEVER = object()
 
 
 class QwenReviewError(RuntimeError):
@@ -121,18 +129,27 @@ class QwenReviewer:
         qwen_model: str = QWEN3_MODEL,
         sku_timeout: float = SKU_TIMEOUT_SECONDS,
         qwen_timeout: float = QWEN_TIMEOUT_SECONDS,
+        qwen_max_attempts: int = QWEN_MAX_ATTEMPTS,
         api_key: str | None = None,
         session: Any | None = None,
         debug_root: str | Path | None = None,
+        visual_retriever: Any = _ENV_RETRIEVER,
     ) -> None:
         self.sku_base_url = sku_base_url.rstrip("/")
         self.qwen_url = _chat_completions_url(qwen_url)
         self.qwen_model = qwen_model
         self.sku_timeout = sku_timeout
         self.qwen_timeout = qwen_timeout
+        self.qwen_max_attempts = max(1, qwen_max_attempts)
         self.api_key = api_key or os.getenv("QWEN_API_KEY", "").strip() or None
         self.session = session or requests.Session()
         self.debug_root = Path(debug_root) if debug_root is not None else None
+        self.visual_retriever = (
+            VisualSkuRetriever.from_environment()
+            if visual_retriever is _ENV_RETRIEVER
+            else visual_retriever
+        )
+        self._retrieval_candidate_cache: dict[str, CandidateProduct] = {}
 
     def review(
         self,
@@ -307,6 +324,25 @@ class QwenReviewer:
                         else None
                     ),
                 )
+                retrieval_matches: list[RetrievalMatch] = []
+                misplaced_candidates = list(candidates)
+                if self.visual_retriever is not None:
+                    try:
+                        retrieval_matches = self.visual_retriever.retrieve(
+                            misplaced_image
+                        )
+                    except VisualRetrievalError as error:
+                        raise QwenReviewError("visual_retrieval", str(error)) from error
+                    if not retrieval_matches:
+                        raise QwenReviewError(
+                            "visual_retrieval", "全量 SKU 特征检索未返回候选商品"
+                        )
+                    misplaced_candidates = self._fetch_retrieval_candidate_images(
+                        retrieval_matches
+                    )
+                misplaced_candidate_names = {
+                    candidate.name for candidate in misplaced_candidates
+                }
                 expected_image = build_expected_product_reference_image(
                     baseline,
                     bbox,
@@ -323,7 +359,7 @@ class QwenReviewer:
                     pose_type=pose_type,
                     region_image=misplaced_image,
                     candidate_rows=rows,
-                    candidates=candidates,
+                    candidates=misplaced_candidates,
                     model=self.qwen_model,
                     misplaced_stage="misplaced_product",
                 )
@@ -354,11 +390,29 @@ class QwenReviewer:
                         misplaced_image,
                         misplaced_payload,
                     )
+                    if retrieval_matches:
+                        _write_json(
+                            region_directory / "misplaced_product" / "retrieval.json",
+                            {
+                                "scope": "full_catalog_top_k",
+                                "matches": [
+                                    {
+                                        "rank": rank,
+                                        "sku_id": match.sku_id,
+                                        "name": match.name,
+                                        "score": match.score,
+                                    }
+                                    for rank, match in enumerate(
+                                        retrieval_matches, start=1
+                                    )
+                                ],
+                            },
+                        )
                 misplaced_raw = self._request_qwen(misplaced_payload)
                 misplaced_finding = parse_qwen_review(
                     misplaced_raw,
                     task_type="MISPLACED",
-                    candidate_names=candidate_names,
+                    candidate_names=misplaced_candidate_names,
                     region_index=region_index,
                     misplaced_stage="misplaced_product",
                 )
@@ -427,6 +481,60 @@ class QwenReviewer:
             candidate_names=tuple(candidate.name for candidate in candidates),
             debug_directory=debug_directory,
         )
+
+    def _fetch_retrieval_candidate_images(
+        self,
+        matches: Sequence[RetrievalMatch],
+    ) -> list[CandidateProduct]:
+        candidates: list[CandidateProduct] = []
+        for match in matches:
+            cached = self._retrieval_candidate_cache.get(match.sku_id)
+            if cached is not None:
+                candidates.append(cached)
+                continue
+            product_response = self._request(
+                "GET",
+                f"{self.sku_base_url}/sku/search_by_SKU",
+                stage="candidate_lookup",
+                params={"sku": match.sku_id},
+                timeout=self.sku_timeout,
+            )
+            try:
+                product = product_response.json()
+                paths = product["images"]
+                returned_name = product["name"]
+                returned_sku = product["sku_id"]
+                path = paths[0]
+            except (ValueError, KeyError, IndexError, TypeError) as error:
+                raise QwenReviewError(
+                    "candidate_lookup",
+                    f"商品 {match.sku_id} 的 SKU 接口返回格式无效",
+                ) from error
+            if returned_sku != match.sku_id or returned_name != match.name:
+                raise QwenReviewError(
+                    "candidate_lookup",
+                    f"特征索引与 SKU 服务不一致: {match.sku_id}/{match.name}",
+                )
+            image_response = self._request(
+                "GET",
+                f"{self.sku_base_url}/{quote(path.lstrip('/'), safe='/')}",
+                stage="candidate_image_download",
+                timeout=self.sku_timeout,
+            )
+            image, media_type = _validated_reference_response(
+                image_response,
+                match.name,
+            )
+            candidate = CandidateProduct(
+                sku_id=match.sku_id,
+                name=match.name,
+                row_numbers=(),
+                image=image,
+                media_type=media_type,
+            )
+            self._retrieval_candidate_cache[match.sku_id] = candidate
+            candidates.append(candidate)
+        return candidates
 
     def _create_debug_directory(
         self,
@@ -567,15 +675,7 @@ class QwenReviewer:
                 stage="candidate_image_download",
                 timeout=self.sku_timeout,
             )
-            image = image_response.content
-            if not image or len(image) > MAX_REFERENCE_IMAGE_BYTES:
-                raise QwenReviewError(
-                    "candidate_image_download",
-                    f"商品 {name} 的标准图片为空或过大",
-                )
-            media_type = image_response.headers.get("Content-Type", "image/jpeg")
-            media_type = media_type.split(";", 1)[0]
-            image, media_type = normalize_reference_image(image, media_type)
+            image, media_type = _validated_reference_response(image_response, name)
             candidates.append(
                 CandidateProduct(
                     sku_id=sku_by_name[name],
@@ -612,16 +712,44 @@ class QwenReviewer:
         return content
 
     def _request(self, method: str, url: str, *, stage: str, **kwargs: Any) -> Any:
-        try:
-            response = self.session.request(method, url, **kwargs)
-        except requests.RequestException as error:
-            raise QwenReviewError(stage, f"无法连接上游服务: {error}") from error
+        attempts = self.qwen_max_attempts if stage == "qwen_review" else 1
+        for attempt in range(1, attempts + 1):
+            try:
+                response = self.session.request(method, url, **kwargs)
+                break
+            except (requests.Timeout, requests.ConnectionError) as error:
+                if attempt >= attempts:
+                    raise QwenReviewError(
+                        stage,
+                        f"无法连接上游服务（已尝试 {attempts} 次）: {error}",
+                    ) from error
+                logger.warning(
+                    "Qwen request attempt %s/%s failed: %s",
+                    attempt,
+                    attempts,
+                    error,
+                )
+                time.sleep(min(0.5 * attempt, 1.0))
+            except requests.RequestException as error:
+                raise QwenReviewError(stage, f"无法连接上游服务: {error}") from error
         if not response.ok:
             raise QwenReviewError(
                 stage,
                 f"上游服务返回 HTTP {response.status_code}: {response.text[:300]}",
             )
         return response
+
+
+def _validated_reference_response(response: Any, name: str) -> tuple[bytes, str]:
+    image = response.content
+    if not image or len(image) > MAX_REFERENCE_IMAGE_BYTES:
+        raise QwenReviewError(
+            "candidate_image_download",
+            f"商品 {name} 的标准图片为空或过大",
+        )
+    media_type = response.headers.get("Content-Type", "image/jpeg")
+    media_type = media_type.split(";", 1)[0]
+    return normalize_reference_image(image, media_type)
 
 
 def build_qwen_payload(

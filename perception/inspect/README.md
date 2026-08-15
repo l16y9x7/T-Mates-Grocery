@@ -72,8 +72,11 @@ Content-Type: application/json
   检测行少于预期数、多出超过 1 行，或 bbox 不在窗口内时，退回全视角候选逻辑。
 - `SHORTAGE` 使用缺货前 baseline/reference 图（样例中的 `_1.jpg`）按异常 bbox 裁出
   Qwen 主图，并只下载、发送异常所在行的候选 SKU 标准图。
-- `MISPLACED` 拆成两个独立 Qwen 阶段：第一阶段使用当前异常局部图和全部可见行候选
-  识别 `misplaced_product_name`，不按异常所在行缩小候选。
+- `MISPLACED` 拆成两个独立 Qwen 阶段：第一阶段使用当前异常局部图，通过本地视觉
+  特征模型从全量 SKU 标准库召回 Top-K，再由 Qwen 识别
+  `misplaced_product_name`，不受当前货架面、可见行或异常所在行限制。未配置
+  `INSPECT_SKU_RETRIEVAL_MODEL_PATH` 时保留旧的可见行候选流程用于兼容开发环境；
+  正式部署应配置本地模型路径。
 - 第二阶段把 row detection 裁出的 current 目标行和摆放正确时的 baseline 目标行上下
   拼接，红框标出同一异常位置，只发送对应 SKU 行候选，判断当前行缺失、被替代的
   `gt_product_name`；两阶段分别校验后才合并为一条放错结果。
@@ -81,6 +84,23 @@ Content-Type: application/json
 
 当前 SKU 候选行数约定为：`pose_type=""` 对应 1 行，`SHELF_VIEW_UPPER` 对应 2 行，
 `SHELF_VIEW_LOWER` 对应 3 行。行检测失败或少于该数量不会使巡检接口失败。
+
+MISPLACED 全库特征检索配置：
+
+- `INSPECT_SKU_RETRIEVAL_MODEL_PATH`：提前下载的 Hugging Face 视觉模型本地目录；
+- `INSPECT_SKU_RETRIEVAL_TOP_K`：召回数量，默认 `10`；
+- `INSPECT_SKU_RETRIEVAL_DEVICE`：`auto`、`cuda`、`mps` 或 `cpu`，默认自动选择；
+- `INSPECT_SKU_RETRIEVAL_INDEX_PATH`：离线特征索引路径；标准图或模型路径变化后会自动重建。
+
+推荐模型为 `google/siglip-base-patch16-224`。联网准备机器上执行：
+
+```bash
+python perception/sku/prepare_retrieval_model.py --device auto
+```
+
+脚本会把模型下载到 `perception/sku/models/`，并为 `images_new` 的全部商品建立本地
+特征索引。正式运行只需设置 `INSPECT_SKU_RETRIEVAL_MODEL_PATH` 指向该模型目录，
+模型加载使用 `local_files_only=True`，不需要外网。
 
 ## 启动
 

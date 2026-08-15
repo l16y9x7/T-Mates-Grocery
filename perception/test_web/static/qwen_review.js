@@ -230,7 +230,7 @@ function renderConstraint() {
   } else if (currentSample?.task_type === "SHORTAGE") {
     hint.textContent = `SHORTAGE 只发送 SKU 接口第 ${constraint.row_index} 行的候选，降低跨行误识别。`;
   } else if (currentPromptStage?.stage === "misplaced_product") {
-    hint.textContent = "MISPLACED 第一阶段识别当前放错商品，不按目标行缩小候选，使用全部可见货架行候选。";
+    hint.textContent = "MISPLACED 第一阶段识别当前放错商品，使用全量标准库视觉检索得到的 Top-K 候选。";
   } else {
     hint.textContent = `MISPLACED 第二阶段显示当前/Reference 整行对比图，只从 SKU 第 ${constraint.row_index} 行候选判断缺失商品。`;
   }
@@ -405,7 +405,7 @@ function renderImages() {
   document.querySelector("#inputScopeNote").textContent = isExpectedStage
     ? "第二阶段：IMAGE 1 上半部分是当前异常行，下半部分是摆放正确时的 Reference 行；后续发送按标准货位从左到右排列的目标行 SKU 拼图。"
     : currentSample.task_type === "MISPLACED"
-      ? "第一阶段：IMAGE 1 是当前放错商品局部图；后续发送全部可见候选的带编号 SKU 拼图，不使用目标行限制。"
+      ? "第一阶段：IMAGE 1 是当前放错商品局部图；后续发送全量标准库视觉检索 Top-K 的带编号 SKU 拼图，不使用目标行限制。"
       : "IMAGE 1 从缺货前 reference（每组 _1 图）按异常 bbox 裁出，框内保留原商品；后续只发送目标 SKU 行候选。";
 
   setSourceImage("baselineImage", "baselineFigure", currentSample.baseline_url);
