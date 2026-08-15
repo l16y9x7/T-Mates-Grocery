@@ -9,7 +9,7 @@
   },
   "Dove沐浴泡泡樱花甜香": {
     "qwen3_prompt": "找到图片中货架上的红色Dove沐浴露，输出一个完整的bbox。返回格式：{\"name\": \"红色Dove沐浴露\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost spray"
+    "sam3_prompt": "frontmost spray bottle"
   },
   "Dove沐浴泡泡樱花甜香袋装": {
     "qwen3_prompt": "找到图片中货架上的所有Dove包装袋，输出一个完整的bbox。返回格式：{\"name\": \"Dove包装袋\", \"bbox\": [x1, y1, x2, y2]}",
@@ -17,18 +17,18 @@
   },
   "Dove沐浴泡泡清甜奶香": {
     "qwen3_prompt": "找到图片中货架上的蓝色Dove沐浴露，输出一个完整的bbox。返回格式：{\"name\": \"蓝色Dove沐浴露\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost spray"
+    "sam3_prompt": "frontmost spray bottle"
   },
   "Dove沐浴泡泡白桃果香": {
     "qwen3_prompt": "找到图片中货架上的棕色Dove沐浴露，输出一个完整的bbox。返回格式：{\"name\": \"棕色Dove沐浴露\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost spray"
+    "sam3_prompt": "frontmost spray bottle"
   },
   "Lay's乐事薯片墨西哥鸡汁番茄味": {
     "qwen3_prompt": "找到图片中货架上的红色乐事薯片，输出满足条件的红色乐事薯片的bbox。返回格式：{\"name\": \"红色乐事薯片\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost red Lay's package"
   },
   "Lay's乐事薯片意大利香浓红烩味": {
-    "qwen3_prompt": "找到图片中货架上的绿色乐事薯片右边的意大利香浓红烩味乐事薯片，输出满足条件的意大利香浓红烩味乐事薯片的bbox。返回格式：{\"name\": \"意大利香浓红烩味乐事薯片\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的绿色乐事薯片右边、淡蓝色乐事薯片左边的意大利香浓红烩味乐事薯片，输出满足条件的意大利香浓红烩味乐事薯片的bbox。返回格式：{\"name\": \"意大利香浓红烩味乐事薯片\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost blue Lay's package"
   },
   "Lay's乐事薯片经典原味": {
@@ -300,8 +300,8 @@
     "sam3_prompt": "frontmost transparent bottle"
   },
   "百草味海苔肉松蛋卷": {
-    "qwen3_prompt": "找到图片中货架上的淡蓝色圆柱形百草味罐子，不是奥利奥，输出满足条件的所有淡蓝色百草味罐子的bbox。返回格式：{\"name\": \"淡蓝色百草味罐子\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "topmost can"
+    "qwen3_prompt": "找到图片中货架上的淡蓝色圆柱形百草味罐子，不是奥利奥，输出一个包含这些罐子的完整的大bbox。返回格式：{\"name\": \"淡蓝色百草味罐子\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "container"
   },
   "百醇巧克力味": {
     "qwen3_prompt": "找到图片中货架上的褐色百醇包装盒，输出满足条件的褐色百醇包装盒的bbox。返回格式：{\"name\": \"褐色百醇包装盒\", \"bbox\": [x1, y1, x2, y2]}",
@@ -364,7 +364,7 @@
     "sam3_prompt": "frontmost white and blue box"
   },
   "舒肤佳香皂芦荟呵护香型": {
-    "qwen3_prompt": "找到图片中货架上的粉白色肥皂盒子，输出一个完整的bbox。返回格式：{\"name\": \"粉白色肥皂盒子\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的最前方的粉白色肥皂盒子，输出bbox。返回格式：{\"name\": \"粉白色肥皂盒子\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost white and pink box"
   },
   "芬达罐装": {
