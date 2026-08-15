@@ -7,16 +7,15 @@
 
 ## 当前接口契约
 
-`/perception/inspect` 只负责用两张 RGB 判断异常货架与商品名称；本接口接收
-正常场景和当前场景的两组 RGB-D，生成当前头部相机视角下缺失商品的理论 mask。
+`/perception/inspect` 负责判断异常货架与商品名称；本接口固定从
+`agent/output/task0` 读取正常场景 RGB-D，请求只上传当前场景 RGB-D，生成当前
+头部相机视角下缺失商品的理论 mask。
 
 ```json
 {
   "task_type": "SHORTAGE",
   "product_name": "可口可乐罐装",
   "location_id": "H1_F_L2_C01",
-  "baseline_image_base64": "<正常场景 RGB>",
-  "baseline_depth_image_base64": "<正常场景 NPY/PNG/RAW 深度>",
   "current_image_base64": "<当前场景 RGB>",
   "current_depth_image_base64": "<当前场景 NPY/PNG/RAW 深度>",
   "reference_pose": {
@@ -42,6 +41,22 @@
   "region_index": 1
 }
 ```
+
+`location_id` 可以是商品货位（如 `H1_B_L2_C01`）或巡检导航点（如
+`H1_B_L_INSPECT`）。商品货位会根据 `agent/config/product-hand-options.yaml` 中的
+`target_id` 映射到左右巡检点，再与视角组成目录名：
+
+```text
+agent/output/task0/H1_B_L_INSPECT_LOWER/
+├── rgb.jpg
+├── depth_mm.npy
+└── meta.json
+```
+
+`SHELF_VIEW_UPPER` 对应 `_UPPER`，`SHELF_VIEW_LOWER` 对应 `_LOWER`。省略
+`pose_type` 时，商品层 L1/L2 自动使用 UPPER，L3/L4/L5 自动使用 LOWER；若直接传
+巡检导航点则必须提供 `pose_type`。可用 `INITIAL_SCAN_ROOT` 覆盖 task0 根目录，使用
+`PRODUCT_HAND_OPTIONS_PATH` 覆盖货位映射文件。
 
 相机内参也可以通过环境变量 `PLACE_HEAD_CAMERA_INTRINSICS` 配置为同样结构的
 JSON，此时请求不必重复传入。若当前帧使用不同相机内参，可额外传
@@ -80,7 +95,7 @@ JSON，此时请求不必重复传入。若当前帧使用不同相机内参，�
 
 `POST /perception/place/locate/debug` 使用相同请求，并额外返回 reference/visible
 mask、理论 `expected_depth_mm` NPY、匹配的 `row_index/row_bbox`、RGB-D 配准矩阵及
-质量指标。存在多个异常区域时，
+质量指标，以及实际使用的 `inspection_target_id/baseline_path`。存在多个异常区域时，
 `region_index` 按从上到下、同行从左到右的 1-based 顺序选择；也可以传
 `reference_bbox=[x,y,width,height]` 精确指定 inspection 检出的基准图区域。
 
@@ -111,25 +126,20 @@ row-major 的 `4×4` 数组，平移单位统一为毫米。
 
 ## 数据准备
 
-每个标准货位至少保存：
+初始扫描由 task0 按巡检点和上下视角保存：
 
 ```text
-reference_scenes/<location_id>/
+agent/output/task0/<inspection_target_id>_<UPPER|LOWER>/
 ├── rgb.jpg
 ├── depth_mm.npy
-├── camera_info.json
-├── target_mask.png
-├── target_pose_camera.json
-└── metadata.json
+└── meta.json
 ```
 
-- `rgb.jpg` 和 `depth_mm.npy` 必须时间同步并完成深度到 RGB 的对齐。
-- `camera_info.json` 保存彩色相机内参和畸变参数。
-- `target_mask.png` 是正常场景中目标商品的 mask。
-- `target_pose_camera.json` 保存 `T_ref_object`。
-- `metadata.json` 至少保存 `product_name`、`location_id`、相机 frame 和单位。
-
-运行时还需要当前 RGB、对齐深度、相机内参，以及当前相机到机器人基座的外参。
+- `rgb.jpg` 和 `depth_mm.npy` 必须时间同步并完成深度到 RGB 的对齐；加载时会校验
+  `meta.json` 的尺寸、单位和 `aligned_to=rgb`。
+- 商品 reference pose 由请求的 `reference_pose` 提供，单位必须是毫米。
+- 相机内参由请求或 `PLACE_HEAD_CAMERA_INTRINSICS` 提供。
+- 运行时还需要当前 RGB、对齐深度，以及后续手眼转换使用的外参。
 
 ## 推荐流程
 

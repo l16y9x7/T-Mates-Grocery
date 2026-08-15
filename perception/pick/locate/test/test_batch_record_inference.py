@@ -21,6 +21,86 @@ class BatchRecordInferenceTest(unittest.TestCase):
 
         self.assertEqual(args.workers, 4)
 
+    def test_mapping_accepts_self_collect_directory_and_depth_png(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_directory = root / "H1_B_L_INSPECT-L1-LEFT"
+            record_directory.mkdir()
+            (record_directory / "rgb.jpg").write_bytes(b"rgb")
+            (record_directory / "depth.png").write_bytes(b"depth")
+            mapping_path = root / "sorting_pick_locate_batch.json"
+            mapping_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "task_type": "SORTING",
+                        "record_root": ".",
+                        "rgb_file": "rgb.jpg",
+                        "depth_file": "depth.png",
+                        "records": [
+                            {
+                                "record": record_directory.name,
+                                "level": "L1",
+                                "hand": "left",
+                                "product_names": ["小苏打"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            _, entries, _ = batch.load_and_validate_mapping(mapping_path)
+
+        self.assertEqual(entries[0]["record"], "H1_B_L_INSPECT-L1-LEFT")
+        self.assertEqual(entries[0]["depth_path"].name, "depth.png")
+        self.assertEqual(entries[0]["level"], "L1")
+        self.assertEqual(entries[0]["hand"], "left")
+
+    def test_job_sends_actual_rgb_and_depth_filenames(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            record_directory = Path(directory)
+            rgb_path = record_directory / "rgb.jpg"
+            depth_path = record_directory / "depth.png"
+            rgb_path.write_bytes(b"rgb")
+            depth_path.write_bytes(b"depth")
+            entry = {
+                "record": "H1_B_L_INSPECT-L1-LEFT",
+                "record_directory": record_directory,
+                "rgb_path": rgb_path,
+                "depth_path": depth_path,
+                "hand": "left",
+                "level": "L1",
+            }
+            response = {
+                "image_size": [640, 480],
+                "instances": [],
+                "selected_instance": {"bbox": [0, 0, 10, 10]},
+            }
+
+            with (
+                patch.object(batch, "request_locate", return_value=(200, response)) as request,
+                patch.object(batch, "draw_result"),
+            ):
+                batch.run_batch_job(
+                    job_number=1,
+                    total=1,
+                    entry=entry,
+                    product_name="小苏打",
+                    sku_id="SKU_TEST",
+                    rgb_base64="rgb",
+                    depth_base64="depth",
+                    api_url="http://127.0.0.1:8083",
+                    timeout_seconds=10.0,
+                    retries=0,
+                    overwrite=True,
+                )
+
+        payload = request.call_args.args[1]
+        self.assertEqual(payload["image_name"], "rgb.jpg")
+        self.assertEqual(payload["depth_image_name"], "depth.png")
+
     def test_main_runs_four_jobs_concurrently_and_sorts_summary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -154,9 +154,14 @@ textarea:focus {
 
 .batch-navigation {
   display: flex;
+  flex-wrap: wrap;
   align-items: end;
   justify-content: flex-end;
   gap: 10px;
+}
+
+#batchResultFileSelect {
+  min-width: 340px;
 }
 
 .batch-navigation select {

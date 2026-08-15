@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspection · Qwen Review</title>
-    <link rel="stylesheet" href="/static/qwen_review.css?v=3" />
+    <link rel="stylesheet" href="/static/qwen_review.css?v=4" />
   </head>
   <body>
     <main>
@@ -19,6 +19,49 @@
           <a href="/">Locate Debug</a>
         </nav>
       </header>
+
+      <section class="initial-scan-card card" aria-labelledby="initialScanTitle">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">INITIAL SCAN · ROW DETECTION</p>
+            <h2 id="initialScanTitle">初始扫描货架行检查</h2>
+          </div>
+          <span id="initialScanStatus" class="status">正在读取 task0 扫描图……</span>
+        </div>
+        <div class="initial-scan-toolbar">
+          <label>
+            <span>巡检点与视角</span>
+            <select id="initialScanSelect"></select>
+          </label>
+          <dl class="initial-scan-metrics">
+            <div><dt>视角</dt><dd id="initialScanPose">—</dd></div>
+            <div><dt>横条</dt><dd id="initialScanRailCount">—</dd></div>
+            <div><dt>商品行</dt><dd id="initialScanRowCount">—</dd></div>
+            <div><dt>图像尺寸</dt><dd id="initialScanImageSize">—</dd></div>
+          </dl>
+        </div>
+        <div class="source-grid initial-scan-grid">
+          <figure>
+            <figcaption>
+              <strong>Task0 RGB</strong>
+              <small>初始扫描原图</small>
+            </figcaption>
+            <div class="source-image-wrap">
+              <img id="initialScanSourceImage" alt="初始扫描原图" />
+            </div>
+          </figure>
+          <figure>
+            <figcaption>
+              <strong>Rows / rails overlay</strong>
+              <small>白字为 ROW，红线为 RAIL</small>
+            </figcaption>
+            <div class="source-image-wrap">
+              <img id="initialScanOverlayImage" alt="初始扫描货架行标注图" />
+            </div>
+          </figure>
+        </div>
+        <pre id="initialScanDetails" class="initial-scan-details">等待检测结果</pre>
+      </section>
 
       <section class="toolbar card" aria-label="样例选择">
         <label>
@@ -226,6 +269,6 @@
         </div>
       </section>
     </main>
-    <script src="/static/qwen_review.js?v=7"></script>
+    <script src="/static/qwen_review.js?v=8"></script>
   </body>
 </html>

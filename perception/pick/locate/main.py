@@ -100,6 +100,9 @@ QWEN_CONSENSUS_IOU = 0.85
 RGB_INFERENCE_SIZE = (1280, 720)
 RGB_INFERENCE_JPEG_QUALITY = 95
 CROP_PADDING_RATIO = 0.1
+QWEN_CROP_PADDING_RATIO_OVERRIDES = {
+    "小鹿妈妈牙线": 0.5,
+}
 SAM3_THRESHOLD = 0.5
 SAM3_MASK_THRESHOLD = 0.5
 SAM_BBOX_OVERLAP_MIN_RATIO = float(
@@ -1144,13 +1147,16 @@ def get_stable_qwen_bboxes(
 
 
 def qwen_bbox_to_crop(
-    bbox: list[float], image_size: tuple[int, int]
+    bbox: list[float],
+    image_size: tuple[int, int],
+    *,
+    padding_ratio: float = CROP_PADDING_RATIO,
 ) -> tuple[int, int, int, int]:
-    """按网页默认规则将 [0,1000] Qwen 坐标转为像素并外扩 10%。"""
+    """将 [0,1000] Qwen 坐标转为像素，并按指定比例向四周外扩。"""
     image_width, image_height = image_size
     x1, y1, x2, y2 = qwen_bbox_to_original(bbox, image_size)
-    padding_x = (x2 - x1) * CROP_PADDING_RATIO
-    padding_y = (y2 - y1) * CROP_PADDING_RATIO
+    padding_x = (x2 - x1) * padding_ratio
+    padding_y = (y2 - y1) * padding_ratio
     crop_box = (
         max(0, math.floor(x1 - padding_x)),
         max(0, math.floor(y1 - padding_y)),
@@ -1160,6 +1166,14 @@ def qwen_bbox_to_crop(
     if crop_box[2] - crop_box[0] < 2 or crop_box[3] - crop_box[1] < 2:
         raise ValueError("Qwen3 bbox 无法生成有效 crop")
     return crop_box
+
+
+def qwen_crop_padding_ratio(product_name: str) -> float:
+    """返回商品对应的 Qwen crop 外扩比例，未配置商品保持默认 10%。"""
+    return QWEN_CROP_PADDING_RATIO_OVERRIDES.get(
+        product_name.strip(),
+        CROP_PADDING_RATIO,
+    )
 
 
 def qwen_bbox_to_original(
@@ -1508,6 +1522,78 @@ def uses_upper_confidence_pick(product_name: str, task_type: str) -> bool:
         task_type.strip().upper() == "SORTING"
         and product_name.strip() in UPPER_CONFIDENCE_PICK_PRODUCTS
     )
+
+
+def keep_instances_from_nearest_qwen_shelf_row(
+    instances: list[LocatedInstance],
+    qwen_bboxes_by_source: dict[int, list[float]],
+    image_height: int,
+    *,
+    row_gap_tolerance_ratio: float = 0.05,
+) -> list[LocatedInstance]:
+    """Keep the Qwen shelf row nearest the image's vertical center.
+
+    Upper-confidence products may appear on two visible shelf levels. Their
+    final "upper item" rule must run inside the intended shelf row instead of
+    treating the row above as another item in the same vertical stack.
+    """
+    if len(instances) < 2 or image_height <= 0:
+        return instances
+
+    instance_sources = {
+        instance.source_qwen_index
+        for instance in instances
+        if instance.source_qwen_index in qwen_bboxes_by_source
+    }
+    source_intervals = sorted(
+        (
+            source,
+            max(0.0, min(float(image_height), float(qwen_bboxes_by_source[source][1]))),
+            max(0.0, min(float(image_height), float(qwen_bboxes_by_source[source][3]))),
+        )
+        for source in instance_sources
+    )
+    if len(source_intervals) < 2:
+        return instances
+
+    tolerance = image_height * max(0.0, row_gap_tolerance_ratio)
+    rows: list[dict[str, Any]] = []
+    for source, first_y, second_y in sorted(
+        source_intervals,
+        key=lambda item: (min(item[1], item[2]), max(item[1], item[2])),
+    ):
+        top = min(first_y, second_y)
+        bottom = max(first_y, second_y)
+        if rows and top <= float(rows[-1]["bottom"]) + tolerance:
+            rows[-1]["bottom"] = max(float(rows[-1]["bottom"]), bottom)
+            rows[-1]["sources"].add(source)
+        else:
+            rows.append({"top": top, "bottom": bottom, "sources": {source}})
+
+    if len(rows) < 2:
+        return instances
+
+    image_center_y = image_height / 2.0
+
+    def row_distance(row: dict[str, Any]) -> tuple[float, float]:
+        top = float(row["top"])
+        bottom = float(row["bottom"])
+        if top <= image_center_y <= bottom:
+            edge_distance = 0.0
+        else:
+            edge_distance = min(
+                abs(image_center_y - top),
+                abs(image_center_y - bottom),
+            )
+        return edge_distance, abs(image_center_y - (top + bottom) / 2.0)
+
+    selected_sources = min(rows, key=row_distance)["sources"]
+    filtered = [
+        instance
+        for instance in instances
+        if instance.source_qwen_index in selected_sources
+    ]
+    return filtered or instances
 
 
 def select_upper_high_confidence_instance(
@@ -2254,9 +2340,14 @@ def locate_product_in_image(
     qwen_bbox_records: list[QwenBBoxRecord] = []
     qwen_bboxes_by_source: dict[int, list[float]] = {}
     located_instances: list[LocatedInstance] = []
+    crop_padding_ratio = qwen_crop_padding_ratio(canonical_name)
     for qwen_index, qwen_bbox in enumerate(qwen_bboxes):
         try:
-            crop_box = qwen_bbox_to_crop(qwen_bbox, inference_image.size)
+            crop_box = qwen_bbox_to_crop(
+                qwen_bbox,
+                inference_image.size,
+                padding_ratio=crop_padding_ratio,
+            )
         except ValueError:
             continue
         qwen_bbox_original = qwen_bbox_to_original(
@@ -2300,6 +2391,17 @@ def locate_product_in_image(
         hard_case is None
         and uses_max_mask_area_pick(canonical_name, task_type)
     )
+    if upper_confidence_pick:
+        located_instances = keep_instances_from_nearest_qwen_shelf_row(
+            located_instances,
+            qwen_bboxes_by_source,
+            original_image.height,
+        )
+        if not located_instances:
+            raise HTTPException(
+                status_code=404,
+                detail="目标货架行没有可用的 SAM3 候选",
+            )
     special_no_depth_pick = upper_confidence_pick or max_mask_area_pick
     if hard_case is None and not special_no_depth_pick:
         # This is the first normal-candidate filter. Remove SAM fragments that

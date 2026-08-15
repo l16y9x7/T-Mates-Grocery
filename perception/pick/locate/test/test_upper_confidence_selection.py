@@ -13,6 +13,7 @@ from pick.locate import main as locate_main
 from pick.locate.main import (
     LocatedInstance,
     UPPER_CONFIDENCE_PICK_PRODUCTS,
+    keep_instances_from_nearest_qwen_shelf_row,
     keep_mask_area_quality_candidates,
     select_upper_high_confidence_instance,
     uses_upper_confidence_pick,
@@ -173,6 +174,34 @@ class UpperConfidenceSelectionTest(unittest.TestCase):
         )
 
         self.assertIs(selected, lower_best)
+
+    def test_two_visible_shelves_keep_qwen_row_nearest_image_center(self) -> None:
+        upper_left = instance([50, 10, 250, 100], 0.99).model_copy(
+            update={"source_qwen_index": 0}
+        )
+        upper_right = instance([300, 10, 470, 100], 0.98).model_copy(
+            update={"source_qwen_index": 1}
+        )
+        target_left = instance([50, 290, 250, 380], 0.91).model_copy(
+            update={"source_qwen_index": 2}
+        )
+        target_right = instance([300, 290, 470, 380], 0.96).model_copy(
+            update={"source_qwen_index": 3}
+        )
+
+        filtered = keep_instances_from_nearest_qwen_shelf_row(
+            [upper_left, upper_right, target_left, target_right],
+            {
+                0: [50, 0, 250, 100],
+                1: [300, 0, 480, 100],
+                2: [50, 290, 250, 455],
+                3: [290, 290, 470, 455],
+            },
+            480,
+        )
+
+        self.assertEqual(filtered, [target_left, target_right])
+        self.assertIn(select_upper_high_confidence_instance(filtered), filtered)
 
     def test_sorting_pipeline_preserves_candidates_and_never_requests_depth(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

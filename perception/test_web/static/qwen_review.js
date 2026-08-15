@@ -6,8 +6,10 @@ const promptInput = document.querySelector("#promptInput");
 const runButton = document.querySelector("#runButton");
 const runFullButton = document.querySelector("#runFullButton");
 const savePromptButton = document.querySelector("#savePromptButton");
+const initialScanSelect = document.querySelector("#initialScanSelect");
 
 let samples = [];
+let initialScans = [];
 let currentSample = null;
 let currentRegion = null;
 let currentPromptStage = null;
@@ -40,6 +42,48 @@ function option(value, label) {
   element.value = value;
   element.textContent = label;
   return element;
+}
+
+function renderInitialScan() {
+  const sample = initialScans.find((item) => item.scan_name === initialScanSelect.value);
+  if (!sample) return;
+  document.querySelector("#initialScanPose").textContent = sample.pose_type;
+  document.querySelector("#initialScanRailCount").textContent = String(sample.rail_count);
+  document.querySelector("#initialScanRowCount").textContent = String(sample.row_count);
+  document.querySelector("#initialScanImageSize").textContent =
+    Array.isArray(sample.image_size) ? sample.image_size.join(" × ") : "—";
+  document.querySelector("#initialScanSourceImage").src = sample.source_url;
+  document.querySelector("#initialScanOverlayImage").src = sample.overlay_url;
+  document.querySelector("#initialScanDetails").textContent = JSON.stringify({
+    inspection_target_id: sample.inspection_target_id,
+    pose_type: sample.pose_type,
+    rails: sample.rails,
+    rows: sample.rows,
+  }, null, 2);
+  status(
+    "#initialScanStatus",
+    `${sample.scan_name} · ${sample.rail_count} rails · ${sample.row_count} rows`,
+    "success",
+  );
+}
+
+async function initializeInitialScans() {
+  try {
+    const payload = await api("/api/qwen-review/initial-scans");
+    initialScans = payload.samples || [];
+    initialScanSelect.replaceChildren();
+    initialScans.forEach((sample) => {
+      initialScanSelect.append(option(
+        sample.scan_name,
+        `${sample.inspection_target_id} · ${sample.pose_type.replace("SHELF_VIEW_", "")}`,
+      ));
+    });
+    if (!initialScans.length) throw new Error("没有找到 task0 初始扫描");
+    renderInitialScan();
+  } catch (error) {
+    status("#initialScanStatus", error.message, "error");
+    initialScanSelect.disabled = true;
+  }
 }
 
 function selectedSamples() {
@@ -546,6 +590,7 @@ async function initialize() {
 }
 
 taskSelect.addEventListener("change", populatePairs);
+initialScanSelect.addEventListener("change", renderInitialScan);
 pairSelect.addEventListener("change", selectPair);
 regionSelect.addEventListener("change", selectRegion);
 promptStageSelect.addEventListener("change", selectPromptStage);
@@ -553,3 +598,4 @@ runButton.addEventListener("click", runInfer);
 runFullButton.addEventListener("click", runFullInspect);
 savePromptButton.addEventListener("click", savePrompt);
 initialize();
+initializeInitialScans();

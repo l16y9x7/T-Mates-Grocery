@@ -22,6 +22,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if __package__ and __package__.startswith("perception."):
+    from ...initial_scan import InitialScanError, load_initial_scan
     from ...row_detection import (
         PoseType,
         RowDetectionConfig,
@@ -29,6 +30,7 @@ if __package__ and __package__.startswith("perception."):
         detect_rows,
     )
 else:
+    from initial_scan import InitialScanError, load_initial_scan
     from row_detection import (
         PoseType,
         RowDetectionConfig,
@@ -115,15 +117,13 @@ class PoseOutput(BaseModel):
 
 
 class PlaceLocateRequest(BaseModel):
-    """A normal reference RGB-D frame and the latest RGB-D frame."""
+    """Current RGB-D plus the identity of a fixed task0 reference scan."""
 
     model_config = ConfigDict(extra="forbid")
 
     task_type: TaskType = "SHORTAGE"
     product_name: str = Field(min_length=1)
     location_id: str = Field(min_length=1)
-    baseline_image_base64: str = Field(min_length=1)
-    baseline_depth_image_base64: str = Field(min_length=1)
     current_image_base64: str = Field(min_length=1)
     current_depth_image_base64: str = Field(min_length=1)
     reference_pose: PoseInput
@@ -189,6 +189,8 @@ class RegistrationMetrics(BaseModel):
 class PlaceLocateDebugResponse(PlaceLocateResponse):
     task_type: TaskType
     location_id: str
+    inspection_target_id: str
+    baseline_path: str
     region_index: int
     image_size: list[int]
     reference_bbox: list[int]
@@ -531,6 +533,9 @@ def build_debug_response(
     current_depth_mm: np.ndarray,
     reference_intrinsics: CameraIntrinsics,
     current_intrinsics: CameraIntrinsics,
+    *,
+    inspection_target_id: str,
+    baseline_path: str,
 ) -> PlaceLocateDebugResponse:
     registration: RGBDRegistrationResult = register_rgbd_images(
         reference_image,
@@ -585,6 +590,8 @@ def build_debug_response(
         ),
         task_type=request.task_type,
         location_id=request.location_id,
+        inspection_target_id=inspection_target_id,
+        baseline_path=baseline_path,
         region_index=selected_index,
         image_size=[current_width, current_height],
         reference_bbox=reference_bbox,
@@ -608,21 +615,20 @@ def build_debug_response(
 
 
 def locate_place_debug(request: PlaceLocateRequest) -> PlaceLocateDebugResponse:
-    reference_image = decode_color_image(
-        request.baseline_image_base64,
-        "baseline_image_base64",
-    )
+    try:
+        initial_scan = load_initial_scan(request.location_id, request.pose_type)
+    except InitialScanError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"type": "initial_scan_error", "message": str(error)},
+        ) from error
+    runtime_request = request.model_copy(update={"pose_type": initial_scan.pose_type})
+    reference_image = initial_scan.rgb
     current_image = decode_color_image(
         request.current_image_base64,
         "current_image_base64",
     )
-    reference_depth = decode_depth_image(
-        request.baseline_depth_image_base64,
-        "baseline_depth_image_base64",
-        reference_image.shape[:2],
-        is_bigendian=request.depth_is_bigendian,
-        depth_unit_mm=request.depth_unit_mm,
-    )
+    reference_depth = initial_scan.depth_mm
     current_depth = decode_depth_image(
         request.current_depth_image_base64,
         "current_depth_image_base64",
@@ -631,19 +637,21 @@ def locate_place_debug(request: PlaceLocateRequest) -> PlaceLocateDebugResponse:
         depth_unit_mm=request.depth_unit_mm,
     )
     reference_intrinsics, current_intrinsics = resolve_intrinsics(
-        request,
+        runtime_request,
         reference_image,
         current_image,
     )
     try:
         return build_debug_response(
-            request,
+            runtime_request,
             reference_image,
             current_image,
             reference_depth,
             current_depth,
             reference_intrinsics,
             current_intrinsics,
+            inspection_target_id=initial_scan.inspection_target_id,
+            baseline_path=str(initial_scan.rgb_path),
         )
     except HTTPException:
         raise

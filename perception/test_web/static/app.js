@@ -17,6 +17,7 @@ const locateImageInput = document.querySelector("#locateImageInput");
 const locateDepthInput = document.querySelector("#locateDepthInput");
 const locateDepthByteOrder = document.querySelector("#locateDepthByteOrder");
 const clearLocateImage = document.querySelector("#clearLocateImage");
+const batchResultFileSelect = document.querySelector("#batchResultFileSelect");
 const batchRecordSelect = document.querySelector("#batchRecordSelect");
 const batchProductSelect = document.querySelector("#batchProductSelect");
 const batchPrevious = document.querySelector("#batchPrevious");
@@ -38,6 +39,17 @@ let offlineDepthName = "";
 let offlineDepthBase64 = "";
 let batchRecords = [];
 let batchRerunPollTimer = null;
+
+function selectedBatchResultFile() {
+  return batchResultFileSelect.value || "";
+}
+
+function sortingBatchApiUrl(path) {
+  const resultFile = selectedBatchResultFile();
+  if (!resultFile) return path;
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}result_file=${encodeURIComponent(resultFile)}`;
+}
 
 function setBatchImage(imageSelector, emptySelector, url, emptyText) {
   const image = document.querySelector(imageSelector);
@@ -61,6 +73,30 @@ function setBatchImage(imageSelector, emptySelector, url, emptyText) {
 
 function currentBatchRecord() {
   return batchRecords[Number(batchRecordSelect.value) || 0] || null;
+}
+
+async function loadBatchResultFiles() {
+  const previousResultFile = selectedBatchResultFile();
+  const data = await api("/api/sorting-batch-results/files", { cache: "no-store" });
+  const files = data.files || [];
+  batchResultFileSelect.replaceChildren();
+  files.forEach((file) => {
+    const option = document.createElement("option");
+    option.value = file.id;
+    option.textContent =
+      `${file.label} · ${file.completed || 0}/${file.total_detections || 0}` +
+      `${file.failures ? ` · ${file.failures} 失败` : ""}`;
+    batchResultFileSelect.append(option);
+  });
+  const preferred = files.some((file) => file.id === previousResultFile)
+    ? previousResultFile
+    : data.default;
+  if (preferred) batchResultFileSelect.value = preferred;
+  batchResultFileSelect.disabled = files.length === 0;
+  if (!files.length) {
+    throw new Error("没有找到 sorting_pick_locate_batch_results.json");
+  }
+  await loadBatchResults();
 }
 
 function renderBatchProduct() {
@@ -129,8 +165,12 @@ async function loadBatchResults() {
   batchRefresh.disabled = true;
   document.querySelector("#batchSummary").textContent = "正在读取批测结果…";
   try {
-    const data = await api("/api/sorting-batch-results", { cache: "no-store" });
+    const data = await api(sortingBatchApiUrl("/api/sorting-batch-results"), {
+      cache: "no-store",
+    });
     batchRecords = data.records || [];
+    document.querySelector("#batchDatasetLabel").textContent =
+      `SORTING BATCH / ${data.dataset || selectedBatchResultFile()}`;
     batchRecordSelect.replaceChildren();
     batchRecords.forEach((record, index) => {
       const failures = record.items.filter((item) => item.status !== "success").length;
@@ -180,7 +220,7 @@ function stopBatchRerunPolling() {
 async function pollBatchRerunStatus() {
   stopBatchRerunPolling();
   try {
-    const status = await api("/api/sorting-batch-results/rerun");
+    const status = await api(sortingBatchApiUrl("/api/sorting-batch-results/rerun"));
     if (status.running) {
       batchRefresh.disabled = true;
       batchRefresh.textContent = "批测运行中…";
@@ -223,6 +263,7 @@ async function rerunBatchResultsWithOverwrite() {
       body: JSON.stringify({
         record: record.record,
         product_name: item.product_name,
+        result_file: selectedBatchResultFile(),
       }),
     });
     if (!status.running && status.state === "failed") {
@@ -1042,6 +1083,13 @@ cropDetectionSelect.addEventListener("change", () => {
 });
 batchRecordSelect.addEventListener("change", () => renderBatchRecord());
 batchProductSelect.addEventListener("change", renderBatchProduct);
+batchResultFileSelect.addEventListener("change", () => {
+  stopBatchRerunPolling();
+  batchRecords = [];
+  batchRecordSelect.replaceChildren();
+  batchProductSelect.replaceChildren();
+  loadBatchResults().finally(pollBatchRerunStatus);
+});
 batchPrevious.addEventListener("click", () => {
   batchRecordSelect.value = String(Math.max(0, Number(batchRecordSelect.value) - 1));
   renderBatchRecord();
@@ -1064,6 +1112,6 @@ loadSkus().catch((error) => {
   setStatus("#saveSamPromptStatus", error.message, "error");
   setStatus("#samStatus", error.message, "error");
 });
-loadBatchResults().finally(pollBatchRerunStatus);
+loadBatchResultFiles().finally(pollBatchRerunStatus);
 
 syncSamPairedSku();

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import cv2
@@ -10,6 +11,7 @@ import numpy as np
 from pydantic import ValidationError
 
 from . import main as api
+from initial_scan import InitialScan
 from row_detection import ShelfRow
 
 
@@ -45,12 +47,12 @@ class PlaceLocateApiTest(unittest.TestCase):
         reference_depth = np.full((height, width), 1200, dtype=np.uint16)
         reference_depth[70:180, 120:200] = 900
         current_depth = np.full((height, width), 1200, dtype=np.uint16)
+        self.reference_image = reference
+        self.reference_depth = reference_depth.astype(np.float32)
         return api.PlaceLocateRequest(
             task_type="SHORTAGE",
             product_name="测试商品",
             location_id="H1_F_L2_C01",
-            baseline_image_base64=encode_rgb(reference),
-            baseline_depth_image_base64=encode_depth(reference_depth),
             current_image_base64=encode_rgb(current),
             current_depth_image_base64=encode_depth(current_depth),
             reference_pose=api.PoseInput(
@@ -73,17 +75,31 @@ class PlaceLocateApiTest(unittest.TestCase):
         )
 
     def test_rgbd_route_returns_theoretical_current_mask(self) -> None:
-        result = api.locate_place_debug(self.make_request())
+        request = self.make_request()
+        scan = InitialScan(
+            inspection_target_id="H1_F_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+            directory=Path("task0/H1_F_L_INSPECT_UPPER"),
+            rgb_path=Path("task0/H1_F_L_INSPECT_UPPER/rgb.jpg"),
+            depth_path=Path("task0/H1_F_L_INSPECT_UPPER/depth_mm.npy"),
+            rgb=self.reference_image,
+            depth_mm=self.reference_depth,
+            metadata={},
+        )
+        with patch.object(api, "load_initial_scan", return_value=scan):
+            result = api.locate_place_debug(request)
 
         self.assertEqual(result.product_name, "测试商品")
         self.assertEqual(result.location_id, "H1_F_L2_C01")
+        self.assertEqual(result.inspection_target_id, "H1_F_L_INSPECT")
+        self.assertTrue(result.baseline_path.endswith("rgb.jpg"))
         self.assertEqual(result.image_size, [320, 240])
         self.assertGreater(result.projected_point_count, 1000)
         self.assertGreater(result.registration.inlier_count, 12)
         self.assertEqual(result.target_pose.frame_id, "current_head_camera")
         expected_target_pose = (
             np.asarray(result.registration.current_from_reference)
-            @ np.asarray(self.make_request().reference_pose.matrix)
+            @ np.asarray(request.reference_pose.matrix)
         )
         self.assertTrue(
             np.allclose(
@@ -116,6 +132,8 @@ class PlaceLocateApiTest(unittest.TestCase):
             ),
             task_type="SHORTAGE",
             location_id="H1_F",
+            inspection_target_id="H1_F_L_INSPECT",
+            baseline_path="task0/H1_F_L_INSPECT_UPPER/rgb.jpg",
             region_index=1,
             image_size=[320, 240],
             reference_bbox=[1, 2, 3, 4],
@@ -152,17 +170,20 @@ class PlaceLocateApiTest(unittest.TestCase):
             },
         )
 
-    def test_request_requires_both_rgb_and_depth_pairs(self) -> None:
+    def test_request_requires_current_rgbd_and_reads_baseline_from_task0(self) -> None:
         required = set(api.PlaceLocateRequest.model_json_schema()["required"])
         self.assertTrue(
             {
-                "baseline_image_base64",
-                "baseline_depth_image_base64",
                 "current_image_base64",
                 "current_depth_image_base64",
                 "reference_pose",
             }.issubset(required)
         )
+        self.assertNotIn("baseline_image_base64", required)
+        self.assertNotIn("baseline_depth_image_base64", required)
+        properties = api.PlaceLocateRequest.model_json_schema()["properties"]
+        self.assertNotIn("baseline_image_base64", properties)
+        self.assertNotIn("baseline_depth_image_base64", properties)
 
     def test_request_rejects_unknown_fields(self) -> None:
         payload = self.make_request().model_dump()

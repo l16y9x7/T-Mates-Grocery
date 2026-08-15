@@ -29,6 +29,11 @@ python server.py
 
 ## Inspection Qwen Review
 
+页面顶部的“初始扫描货架行检查”读取 `../agent/output/task0` 中全部 Upper/Lower
+扫描图，调用共享 `row_detection`，并排显示原图和带 `ROW/RAIL` 的标注图。检测产物
+缓存在 `test_data/initial_scan_row_detection`；源 `rgb.jpg` 更新或视角不一致时会自动
+重新生成。
+
 `/qwen-review` 读取 `test_data/inspect_*_paired/qwen_prompt_samples`，页面上方显示
 解析结果、原始输出及可编辑 Prompt，下方按 `[IMAGE N]` 顺序展示 bbox 扩展图和该
 region 实际发送的候选 SKU 标准图。页面同时展示 baseline、原始 current、算法对齐后的

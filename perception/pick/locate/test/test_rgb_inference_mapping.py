@@ -19,6 +19,64 @@ def encoded_mask(size: tuple[int, int]) -> str:
 
 
 class RgbInferenceMappingTest(unittest.TestCase):
+    def test_floss_box_qwen_crop_uses_fifty_percent_padding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "rgb.jpg"
+            Image.new("RGB", (640, 480), "white").save(image_path)
+            observed: dict[str, object] = {}
+
+            def sam_instances(_prompt: str, crop_image: Image.Image):
+                observed["sam_crop_size"] = crop_image.size
+                return [
+                    {
+                        "bbox_xyxy": [0.0, 0.0, *map(float, crop_image.size)],
+                        "mask_png_base64": encoded_mask(crop_image.size),
+                        "score": 0.9,
+                    }
+                ]
+
+            with (
+                patch.object(
+                    locate_main,
+                    "load_prompt_pair",
+                    return_value=("qwen prompt", "sam prompt"),
+                ),
+                patch.object(
+                    locate_main,
+                    "get_stable_qwen_bboxes",
+                    return_value=locate_main.QwenConsensusBBoxes(
+                        [[400, 400, 600, 600]],
+                        [],
+                    ),
+                ),
+                patch.object(
+                    locate_main,
+                    "call_sam3",
+                    side_effect=sam_instances,
+                ),
+                patch.object(
+                    locate_main,
+                    "store_monitor_image",
+                    return_value=str(image_path),
+                ),
+            ):
+                response = locate_main.locate_product_in_image(
+                    {"sku_id": "SKU_037", "name": "小鹿妈妈牙线"},
+                    image_path,
+                    task_type="SORTING",
+                    hand="left",
+                )
+
+        self.assertEqual(observed["sam_crop_size"], (512, 288))
+        self.assertEqual(
+            response.qwen_bboxes[0].bbox_original,
+            [256.0, 192.0, 384.0, 288.0],
+        )
+        self.assertEqual(
+            response.qwen_bboxes[0].crop_box_original,
+            [192, 144, 448, 336],
+        )
+
     def test_locate_uses_1280x720_rgb_and_maps_sam_back_to_original(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             image_path = Path(directory) / "rgb.jpg"

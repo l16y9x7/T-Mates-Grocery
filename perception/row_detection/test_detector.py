@@ -141,6 +141,31 @@ class RowDetectionTest(unittest.TestCase):
         self.assertEqual(len(result.rows), 2)
         self.assertTrue(all(rail.line is not None for rail in result.rails))
 
+    def test_merges_nearby_product_band_into_stronger_shelf_rail(self) -> None:
+        image = np.full((720, 1280, 3), 45, dtype=np.uint8)
+        cv2.rectangle(image, (140, 180), (710, 188), (25, 25, 210), -1)
+        cv2.rectangle(image, (0, 242), (1279, 295), (25, 25, 210), -1)
+        cv2.rectangle(image, (0, 599), (1279, 654), (25, 25, 210), -1)
+
+        result = detect_rows(
+            image,
+            RowDetectionConfig(pose_type="SHELF_VIEW_UPPER"),
+        )
+
+        self.assertEqual(len(result.rails), 2)
+        self.assertEqual(len(result.rows), 2)
+        self.assertGreater(result.rails[0].y_center, 240)
+        self.assertEqual(result.rows[0].bbox[3], result.rails[0].y_center)
+
+    def test_does_not_merge_close_rails_on_opposite_image_sides(self) -> None:
+        image = np.full((720, 1280, 3), 45, dtype=np.uint8)
+        cv2.rectangle(image, (0, 200), (510, 215), (25, 25, 210), -1)
+        cv2.rectangle(image, (770, 270), (1279, 285), (25, 25, 210), -1)
+
+        result = detect_rows(image)
+
+        self.assertEqual(len(result.rails), 2)
+
     def test_lower_pose_returns_bottom_three_rows_and_uses_image_bottom(self) -> None:
         image = np.full((720, 1280, 3), 45, dtype=np.uint8)
         for top in (105, 315, 530):

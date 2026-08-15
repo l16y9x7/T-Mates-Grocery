@@ -21,6 +21,8 @@ class PromptMappingTest(unittest.TestCase):
         self.assertIn('id="locateImageInput"', index_html)
         self.assertIn('id="batchRgbImage"', index_html)
         self.assertIn('id="batchDepthImage"', index_html)
+        self.assertIn('id="batchResultFileSelect"', index_html)
+        self.assertIn("loadBatchResultFiles", app_js)
         self.assertIn("/api/sorting-batch-results", app_js)
         self.assertIn("rerunBatchResultsWithOverwrite", app_js)
         self.assertIn("重跑当前项（--overwrite）", index_html)
@@ -46,6 +48,61 @@ class PromptMappingTest(unittest.TestCase):
             server.SKU_CATALOG_PATH,
             expected_root.parent / "sku" / "products.json",
         )
+
+    def test_qwen_review_lists_and_serves_initial_scan_row_detection(self) -> None:
+        review_html = (server.STATIC_DIR / "qwen_review.html").read_text(
+            encoding="utf-8"
+        )
+        review_js = (server.STATIC_DIR / "qwen_review.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('id="initialScanSelect"', review_html)
+        self.assertIn("/api/qwen-review/initial-scans", review_js)
+
+        with tempfile.TemporaryDirectory() as directory:
+            temporary_root = Path(directory)
+            scan_root = temporary_root / "task0"
+            scan_directory = scan_root / "H1_B_L_INSPECT_UPPER"
+            scan_directory.mkdir(parents=True)
+            image = server.np.zeros((720, 1280, 3), dtype=server.np.uint8)
+            server.cv2.line(image, (0, 220), (1279, 220), (0, 0, 255), 10)
+            server.cv2.line(image, (0, 500), (1279, 500), (0, 0, 255), 10)
+            success, encoded = server.cv2.imencode(".jpg", image)
+            self.assertTrue(success)
+            encoded.tofile(scan_directory / "rgb.jpg")
+            result_root = temporary_root / "row_results"
+
+            with (
+                patch.object(server, "initial_scan_root", return_value=scan_root),
+                patch.object(server, "INITIAL_SCAN_ROW_RESULTS_ROOT", result_root),
+                patch.object(
+                    server,
+                    "detect_rows",
+                    wraps=server.detect_rows,
+                ) as detect_rows,
+            ):
+                first = server.list_initial_scan_rows()
+                second = server.list_initial_scan_rows()
+                source_response = server.get_initial_scan_source(
+                    "H1_B_L_INSPECT_UPPER"
+                )
+                overlay_response = server.get_initial_scan_row_overlay(
+                    "H1_B_L_INSPECT_UPPER"
+                )
+
+            self.assertEqual(detect_rows.call_count, 1)
+            self.assertEqual(first, second)
+            self.assertEqual(len(first["samples"]), 1)
+            sample = first["samples"][0]
+            self.assertEqual(sample["pose_type"], "SHELF_VIEW_UPPER")
+            self.assertEqual(sample["rail_count"], 2)
+            self.assertEqual(sample["row_count"], 2)
+            self.assertEqual(Path(source_response.path), scan_directory / "rgb.jpg")
+            self.assertTrue(Path(overlay_response.path).is_file())
+
+        with self.assertRaises(HTTPException) as raised:
+            server.resolve_initial_scan_for_web("../H1_B_L_INSPECT_UPPER")
+        self.assertEqual(raised.exception.status_code, 400)
 
     def test_sorting_batch_gallery_lists_and_serves_rgb_depth_and_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -136,6 +193,95 @@ class PromptMappingTest(unittest.TestCase):
                     product_name="测试商品",
                 )
                 self.assertEqual(Path(result_response.path), record_root / "测试商品.jpg")
+
+    def test_sorting_batch_file_selector_supports_self_collect_depth_png(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data_root = Path(directory)
+            batch_root = data_root / "2026-08-15-self-collect"
+            batch_root.mkdir()
+            record_name = "H1_B_L_INSPECT-L1-LEFT"
+            record_root = batch_root / record_name
+            record_root.mkdir()
+            (record_root / "rgb.jpg").write_bytes(b"rgb")
+            ok, depth_png = server.cv2.imencode(
+                ".png",
+                server.np.array([[0, 450], [500, 700]], dtype=server.np.uint16),
+            )
+            self.assertTrue(ok)
+            (record_root / "depth.png").write_bytes(depth_png.tobytes())
+            (record_root / "小苏打.jpg").write_bytes(b"result")
+            (record_root / "小苏打.json").write_text(
+                json.dumps(
+                    {
+                        "response": {
+                            "qwen3_prompt_used": "测试 Qwen prompt",
+                            "sam3_prompt_used": "测试 SAM prompt",
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (batch_root / "sorting_pick_locate_batch.json").write_text(
+                json.dumps(
+                    {
+                        "rgb_file": "rgb.jpg",
+                        "depth_file": "depth.png",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            results_path = batch_root / "sorting_pick_locate_batch_results.json"
+            results_path.write_text(
+                json.dumps(
+                    {
+                        "total_records": 1,
+                        "total_detections": 1,
+                        "completed": 1,
+                        "successes": 1,
+                        "failures": 0,
+                        "results": [
+                            {
+                                "record": record_name,
+                                "product_name": "小苏打",
+                                "status": "success",
+                                "level": "L1",
+                                "hand": "left",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            result_id = "2026-08-15-self-collect/sorting_pick_locate_batch_results.json"
+            with (
+                patch.object(server, "DATA_ROOT", data_root),
+                patch.object(server, "is_hard_case_request", return_value=False),
+                patch.object(
+                    server,
+                    "load_prompt_pair_mapping",
+                    return_value={
+                        "小苏打": {
+                            "qwen3_prompt": "测试 Qwen prompt",
+                            "sam3_prompt": "测试 SAM prompt",
+                        }
+                    },
+                ),
+            ):
+                files = server.list_sorting_batch_result_files()
+                result = server.list_sorting_batch_results(result_id)
+                depth_response = server.get_sorting_batch_image(
+                    record_name,
+                    "depth",
+                    result_file=result_id,
+                )
+
+        self.assertEqual(files["default"], result_id)
+        self.assertEqual(files["files"][0]["label"], "2026-08-15-self-collect")
+        self.assertEqual(result["dataset"], "2026-08-15-self-collect")
+        self.assertIn("result_file=", result["records"][0]["rgb_url"])
+        self.assertTrue(depth_response.body.startswith(b"\x89PNG\r\n\x1a\n"))
 
     def test_sorting_batch_rerun_starts_selected_overwrite_once(self) -> None:
         process = Mock()

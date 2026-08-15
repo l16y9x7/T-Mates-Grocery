@@ -9,7 +9,7 @@
   },
   "Dove沐浴泡泡樱花甜香": {
     "qwen3_prompt": "找到图片中货架上的红色Dove沐浴露，输出一个完整的bbox。返回格式：{\"name\": \"红色Dove沐浴露\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost container with long neck"
+    "sam3_prompt": "frontmost spray"
   },
   "Dove沐浴泡泡樱花甜香袋装": {
     "qwen3_prompt": "找到图片中货架上的所有Dove包装袋，输出一个完整的bbox。返回格式：{\"name\": \"Dove包装袋\", \"bbox\": [x1, y1, x2, y2]}",
@@ -17,11 +17,11 @@
   },
   "Dove沐浴泡泡清甜奶香": {
     "qwen3_prompt": "找到图片中货架上的蓝色Dove沐浴露，输出一个完整的bbox。返回格式：{\"name\": \"蓝色Dove沐浴露\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost container with long neck"
+    "sam3_prompt": "frontmost spray"
   },
   "Dove沐浴泡泡白桃果香": {
     "qwen3_prompt": "找到图片中货架上的棕色Dove沐浴露，输出一个完整的bbox。返回格式：{\"name\": \"棕色Dove沐浴露\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost container with long neck"
+    "sam3_prompt": "frontmost spray"
   },
   "Lay's乐事薯片墨西哥鸡汁番茄味": {
     "qwen3_prompt": "找到图片中货架上的红色乐事薯片，输出满足条件的红色乐事薯片的bbox。返回格式：{\"name\": \"红色乐事薯片\", \"bbox\": [x1, y1, x2, y2]}",
@@ -53,7 +53,7 @@
   },
   "三色藜麦": {
     "qwen3_prompt": "找到图片中货架上的三色藜麦包装袋，输出满足条件的所有三色藜麦包装袋的bbox，每一堆分开。返回格式：{\"name\": \"三色藜麦包装袋\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost white package"
+    "sam3_prompt": "frontmost package"
   },
   "上好佳鲜虾条": {
     "qwen3_prompt": "找到图片中货架上的所有黄色虾条包装袋，输出满足条件的所有黄色虾条包装袋的bbox。返回格式：{\"name\": \"黄色虾条包装袋\", \"bbox\": [x1, y1, x2, y2]}",
@@ -64,7 +64,7 @@
     "sam3_prompt": "frontmost bottle"
   },
   "中盐精制盐": {
-    "qwen3_prompt": "找到图片中货架上的精制盐堆，输出满足条件的所有精制盐堆的bbox，每一堆分开。返回格式：{\"name\": \"精制盐堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的蓝白精制盐包装堆，输出满足条件的所有精制盐包装堆的bbox，每一堆分开。返回格式：{\"name\": \"精制盐包装堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "topmost white and blue package"
   },
   "京东京造毛巾": {
@@ -81,7 +81,7 @@
   },
   "冷酸灵云感觉牙刷": {
     "qwen3_prompt": "找到图片中货架上的牙刷堆，输出一个完整的bbox。返回格式：{\"name\": \"牙刷堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "toothbrush package"
+    "sam3_prompt": "package"
   },
   "半亩花田洗发水": {
     "qwen3_prompt": "找到图片中货架上的所有半亩花田洗发水瓶，输出bbox。返回格式：{\"name\": \"半亩花田洗发水瓶\", \"bbox\": [x1, y1, x2, y2]}",
@@ -212,7 +212,7 @@
     "sam3_prompt": "frontmost bottle"
   },
   "小苏打": {
-    "qwen3_prompt": "找到图片中货架上的小苏打堆，输出一个完整的bbox。返回格式：{\"name\": \"小苏打堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的小苏打包装袋堆，输出一个完整的bbox。返回格式：{\"name\": \"小苏打包装袋堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "topmost white and green package"
   },
   "小青柠汁饮料": {
@@ -316,7 +316,7 @@
     "sam3_prompt": "topmost PICC towel package"
   },
   "纯甄酸奶": {
-    "qwen3_prompt": "找到图片中货架上的蓝色酸奶盒子，输出他们的bbox。返回格式：{\"name\": \"蓝色酸奶盒子\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的蓝色酸奶盒子，输出一个包含它们的大bbox。返回格式：{\"name\": \"蓝色酸奶盒子\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost blue and white carton"
   },
   "绿豆冰沙": {
@@ -356,7 +356,7 @@
     "sam3_prompt": "frontmost box"
   },
   "舒肤佳香皂柠檬清新香型": {
-    "qwen3_prompt": "找到图片中货架上的黄白色肥皂盒子，输出一个完整的bbox。返回格式：{\"name\": \"黄白色肥皂盒子\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的黄白色肥皂盒子，在Tide左边，输出一个完整的bbox。返回格式：{\"name\": \"黄白色肥皂盒子\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost white and yellow box"
   },
   "舒肤佳香皂纯白清香型": {
@@ -388,8 +388,8 @@
     "sam3_prompt": "frontmost red sauce package"
   },
   "蒙牛纯牛奶": {
-    "qwen3_prompt": "找到图片中货架上的绿白纯牛奶堆，输出满足条件的所有纯牛奶堆的bbox，每一堆都分开。返回格式：{\"name\": \"纯牛奶堆\", \"bbox\": [x1, y1, x2, y2]",
-    "sam3_prompt": "frontmost milk carton"
+    "qwen3_prompt": "找到图片中货架上的绿白蒙牛纯牛奶堆，不是酸奶，输出一个包含所有蒙牛纯牛奶的bbox。返回格式：{\"name\": \"蒙牛纯牛奶堆\", \"bbox\": [x1, y1, x2, y2]",
+    "sam3_prompt": "frontmost green and white milk carton"
   },
   "蒸鱼豉油": {
     "qwen3_prompt": "找到图片中货架的绿色包装棕色瓶盖蒸鱼豉油瓶，输出满足条件的所有绿色包装棕色瓶盖蒸鱼豉油瓶的bbox。返回格式：{\"name\": \"绿色包装棕色瓶盖蒸鱼豉油瓶\", \"bbox\": [x1, y1, x2, y2]}",
@@ -420,7 +420,7 @@
     "sam3_prompt": "frontmost bottle"
   },
   "雪碧罐装": {
-    "qwen3_prompt": "找到图中货架上所有的雪碧瓶，返回一个完整包含所有雪碧瓶堆的大bbox。最终返回格式：{\"name\": \"雪碧瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图中货架上所有的绿色雪碧瓶，返回一个完整包含所有雪碧瓶的大bbox。最终返回格式：{\"name\": \"雪碧瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost green can"
   },
   "高纤七色糙米": {

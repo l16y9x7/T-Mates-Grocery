@@ -39,6 +39,8 @@ class RowDetectionConfig:
     min_rail_span_ratio: float = 0.34
     max_rail_height_ratio: float = 0.12
     merge_y_gap_ratio: float = 0.010
+    nearby_rail_merge_ratio: float = 0.12
+    nearby_rail_min_horizontal_overlap: float = 0.65
     min_product_row_height_ratio: float = 0.075
     include_trailing_row: bool = False
     pose_type: PoseType = ""
@@ -70,6 +72,8 @@ class RowDetectionConfig:
             "min_rail_span_ratio",
             "max_rail_height_ratio",
             "merge_y_gap_ratio",
+            "nearby_rail_merge_ratio",
+            "nearby_rail_min_horizontal_overlap",
             "min_product_row_height_ratio",
             "hough_min_line_ratio",
             "hough_max_line_gap_ratio",
@@ -590,6 +594,54 @@ def _merge_rail_sources(
     return sorted(merged, key=lambda rail: rail.y_center)
 
 
+def _rail_horizontal_overlap(first: ShelfRail, second: ShelfRail) -> float:
+    first_left, _, first_width, _ = first.bbox
+    second_left, _, second_width, _ = second.bbox
+    overlap = max(
+        0,
+        min(first_left + first_width, second_left + second_width)
+        - max(first_left, second_left),
+    )
+    return overlap / max(1, min(first_width, second_width))
+
+
+def _consolidate_nearby_rails(
+    rails: Sequence[ShelfRail],
+    height: int,
+    config: RowDetectionConfig,
+) -> list[ShelfRail]:
+    """Collapse nearby detections of one shelf lip to its strongest rail.
+
+    A thick shelf lip can produce two red edges, while a long red product label
+    can sit just above the actual lip.  Both cases must not create a tiny fake
+    product row.  Horizontal overlap prevents unrelated partial rails at
+    opposite sides of the image from being collapsed.
+    """
+
+    if not rails:
+        return []
+    merge_distance = max(2, int(round(height * config.nearby_rail_merge_ratio)))
+    clusters: list[list[ShelfRail]] = []
+    for rail in sorted(rails, key=lambda item: item.y_center):
+        if clusters:
+            previous = clusters[-1][-1]
+            close_enough = rail.y_center - previous.y_center <= merge_distance
+            overlap = _rail_horizontal_overlap(previous, rail)
+            if close_enough and overlap >= config.nearby_rail_min_horizontal_overlap:
+                clusters[-1].append(rail)
+                continue
+        clusters.append([rail])
+
+    def confidence(rail: ShelfRail) -> tuple[float, int, float]:
+        return (
+            rail.span_ratio * rail.red_support_ratio,
+            rail.bbox[3],
+            rail.span_ratio,
+        )
+
+    return [max(cluster, key=confidence) for cluster in clusters]
+
+
 def _build_rows(
     rails: Sequence[ShelfRail],
     width: int,
@@ -697,6 +749,7 @@ def detect_rows(
     if settings.enable_hough_fallback and len(rails) < 2:
         sloped_rails = _find_sloped_rails(source, red_mask, settings)
         rails = _merge_rail_sources(rails, sloped_rails, height)
+    rails = _consolidate_nearby_rails(rails, height, settings)
     rows = _build_rows(rails, width, height, settings)
     return RowDetectionResult(
         image_size=(width, height),

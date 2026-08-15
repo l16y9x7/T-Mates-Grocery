@@ -157,8 +157,10 @@ def load_and_validate_mapping(
         product_names = raw_entry.get("product_names")
         if (
             not isinstance(record_name, str)
-            or not record_name.startswith("record_")
+            or not record_name.strip()
+            or record_name in {".", ".."}
             or Path(record_name).name != record_name
+            or any(character in INVALID_WINDOWS_FILENAME_CHARS for character in record_name)
             or record_name in seen_records
         ):
             raise RuntimeError(f"record 名称无效或重复: {record_name}")
@@ -414,9 +416,9 @@ def run_batch_job(
         "product_name": product_name,
         "level": entry["level"],
         "hand": entry["hand"],
-        "image_name": "rgb.jpg",
+        "image_name": entry["rgb_path"].name,
         "image_base64": rgb_base64,
-        "depth_image_name": "depth_mm.npy",
+        "depth_image_name": entry["depth_path"].name,
         "depth_image_base64": depth_base64,
     }
     started = time.perf_counter()

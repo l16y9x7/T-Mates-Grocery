@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>视觉 Prompt 实验台</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260814-batch-gallery" />
+    <link rel="stylesheet" href="/static/style.css?v=20260815-batch-file-selector" />
   </head>
   <body>
     <main class="shell">
@@ -48,11 +48,15 @@
       <section class="batch-review" aria-labelledby="batchReviewTitle">
         <div class="batch-review-heading">
           <div>
-            <p class="eyebrow">SORTING BATCH / 2026-08-13</p>
+            <p id="batchDatasetLabel" class="eyebrow">SORTING BATCH</p>
             <h2 id="batchReviewTitle">批量 Pick / Locate 结果</h2>
             <p id="batchSummary" class="batch-summary">正在读取批测结果…</p>
           </div>
           <div class="batch-navigation">
+            <label class="image-picker">
+              <span>结果文件</span>
+              <select id="batchResultFileSelect" disabled></select>
+            </label>
             <label class="image-picker">
               <span>record</span>
               <select id="batchRecordSelect" disabled></select>
@@ -302,6 +306,6 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=20260814-batch-gallery"></script>
+    <script src="/static/app.js?v=20260815-batch-file-selector"></script>
   </body>
 </html>
