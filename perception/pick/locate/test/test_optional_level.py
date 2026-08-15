@@ -65,6 +65,33 @@ class OptionalLevelTest(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 400)
         self.assertIn("必须提供 level", str(context.exception.detail))
 
+    def test_offline_hard_case_does_not_require_depth(self) -> None:
+        request = locate_main.LocateRequest(
+            task_type="SORTING",
+            product_name="脉动菠萝口味",
+            level="L4",
+            hand="left",
+            image_name="rgb.jpg",
+            image_base64="aW1hZ2U=",
+        )
+        expected_response = object()
+        with (
+            patch.object(
+                locate_main,
+                "lookup_sku_by_name",
+                return_value={"sku_id": "SKU_TEST", "name": "脉动菠萝口味"},
+            ),
+            patch.object(
+                locate_main,
+                "locate_product_in_image",
+                return_value=expected_response,
+            ) as locate_product_in_image,
+        ):
+            response = locate_main.locate_product_debug(request)
+
+        self.assertIs(response, expected_response)
+        self.assertIsNone(locate_product_in_image.call_args.kwargs["depth_image"])
+
     def test_shortage_never_requires_hard_case_level(self) -> None:
         self.assertFalse(
             locate_main.hard_case_level_required(

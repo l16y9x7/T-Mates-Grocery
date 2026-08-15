@@ -30,6 +30,11 @@
     "hand": "left"
   },
   {
+    "product_name": "外星人电解质水白桃口味0糖",
+    "level": "L3",
+    "hand": "right"
+  },
+  {
     "product_name": "脉动观梅止渴饮",
     "level": "L4",
     "hand": "left"
@@ -43,6 +48,11 @@
     "product_name": "脉动菠萝口味",
     "level": "L4",
     "hand": "left"
+  },
+  {
+    "product_name": "脉动菠萝口味",
+    "level": "L4",
+    "hand": "right"
   },
   {
     "product_name": "外星人电解质水青柠口味0糖",
@@ -68,6 +78,11 @@
     "product_name": "脉动菠萝口味",
     "level": "L5",
     "hand": "left"
+  },
+  {
+    "product_name": "脉动菠萝口味",
+    "level": "L5",
+    "hand": "right"
   },
   {
     "product_name": "镇江香醋",

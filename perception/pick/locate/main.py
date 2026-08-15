@@ -52,6 +52,9 @@ else:
 PROMPT_MAPPING_PATH = ROOT / "qwen_sam_prompt_mapping.json"
 HARD_CASE_PROMPT_MAPPING_PATH = ROOT / "qwen_sam_prompt_mapping_hard_case.json"
 HARD_CASE_SCOPE_PATH = ROOT.parents[1] / "hard_case_config.json"
+HARD_CASE_LAYOUT_OVERRIDES_PATH = (
+    ROOT.parents[1] / "hard_case_layout_overrides.json"
+)
 SUPPORTED_TASK_TYPES = ("SORTING", "SHORTAGE", "MISPLACED")
 PROMPT_MAPPING_PATHS = {
     "SORTING": PROMPT_MAPPING_PATH,
@@ -131,6 +134,18 @@ PICK_MIN_VALID_DEPTH_PIXELS = int(
 )
 PICK_UPPER_CONFIDENCE_SCORE_MARGIN = float(
     os.getenv("PICK_UPPER_CONFIDENCE_SCORE_MARGIN", "0.10")
+)
+HARD_CASE_FRONT_UPPER_TOLERANCE_RATIO = float(
+    os.getenv("HARD_CASE_FRONT_UPPER_TOLERANCE_RATIO", "0.25")
+)
+HARD_CASE_FRONT_MAX_UPPER_TOLERANCE_RATIO = float(
+    os.getenv("HARD_CASE_FRONT_MAX_UPPER_TOLERANCE_RATIO", "0.35")
+)
+HARD_CASE_FRONT_LOWER_TOLERANCE_RATIO = float(
+    os.getenv("HARD_CASE_FRONT_LOWER_TOLERANCE_RATIO", "0.35")
+)
+HARD_CASE_FRONT_DISTANCE_GAP_RATIO = float(
+    os.getenv("HARD_CASE_FRONT_DISTANCE_GAP_RATIO", "0.15")
 )
 CAMERA_DEPTH_UNIT_MM = float(os.getenv("CAMERA_DEPTH_UNIT_MM", "1.0"))
 REQUEST_TIMEOUT_SECONDS = 120
@@ -272,6 +287,7 @@ class HardCaseDebugInfo(BaseModel):
     target_column: int
     standard_order: list[str]
     front_row_only: bool = True
+    layout_override_applied: bool = False
     groups: list[HardCaseGroupResult] = Field(default_factory=list)
     selected_group_index: int
 
@@ -650,6 +666,103 @@ def load_hard_case_scope() -> set[tuple[str, str, str]]:
             raise HTTPException(status_code=500, detail=f"hard case 范围存在重复条目: {key}")
         scope.add(key)
     return scope
+
+
+def load_hard_case_layout_overrides(
+) -> dict[tuple[str, str, str, str], tuple[str, ...]]:
+    """Load exact-image hard-case orders, preserving intentional duplicates."""
+    try:
+        payload = json.loads(
+            HARD_CASE_LAYOUT_OVERRIDES_PATH.read_text(encoding="utf-8")
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(
+            status_code=500,
+            detail="hard case 图片布局覆盖配置不存在",
+        ) from error
+    except (OSError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"读取 hard case 图片布局覆盖配置失败: {error}",
+        ) from error
+    if not isinstance(payload, list):
+        raise HTTPException(
+            status_code=500,
+            detail="hard case 图片布局覆盖配置必须是数组",
+        )
+
+    overrides: dict[tuple[str, str, str, str], tuple[str, ...]] = {}
+    for item in payload:
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=500,
+                detail="hard case 图片布局覆盖条目格式错误",
+            )
+        name = item.get("product_name")
+        level = item.get("level")
+        hand = item.get("hand")
+        image_sha256 = item.get("image_sha256")
+        visible_order = item.get("visible_order_from_right")
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (name, level, hand, image_sha256)
+        ) or not (
+            isinstance(visible_order, list)
+            and visible_order
+            and all(
+                isinstance(value, str) and value.strip()
+                for value in visible_order
+            )
+        ):
+            raise HTTPException(
+                status_code=500,
+                detail="hard case 图片布局覆盖条目缺少字段",
+            )
+
+        normalized_level = level.strip().upper()
+        normalized_hand = hand.strip().lower()
+        normalized_sha256 = image_sha256.strip().lower()
+        if (
+            not re.fullmatch(r"L[1-5]", normalized_level)
+            or normalized_hand != "right"
+            or not re.fullmatch(r"[0-9a-f]{64}", normalized_sha256)
+        ):
+            raise HTTPException(
+                status_code=500,
+                detail="hard case 图片布局覆盖条目的 level、hand 或 image_sha256 无效",
+            )
+        key = (
+            name.strip(),
+            normalized_level,
+            normalized_hand,
+            normalized_sha256,
+        )
+        if key in overrides:
+            raise HTTPException(
+                status_code=500,
+                detail=f"hard case 图片布局覆盖存在重复条目: {key}",
+            )
+        # Do not de-duplicate this sequence: repeated physical columns are the
+        # reason this exact-image override exists.
+        overrides[key] = tuple(value.strip() for value in visible_order)
+    return overrides
+
+
+def hard_case_layout_order_for_image(
+    product_name: str,
+    level: str | None,
+    hand: str,
+    image_sha256: str | None,
+) -> tuple[str, ...] | None:
+    if not level or not image_sha256:
+        return None
+    key = (
+        product_name.strip(),
+        level.strip().upper(),
+        hand.strip().lower(),
+        image_sha256.strip().lower(),
+    )
+    return load_hard_case_layout_overrides().get(key)
 
 
 def hard_case_group_for_product(
@@ -1410,12 +1523,12 @@ def select_largest_mask_area_instance(
     )
 
 
-def keep_frontmost_in_overlap_chains(
+def bbox_overlap_components(
     instances: list[LocatedInstance],
-) -> list[LocatedInstance]:
-    """每个 bbox 重叠连通分量只保留一个最前方实例。"""
-    if len(instances) < 2:
-        return instances
+) -> list[list[int]]:
+    """Return bbox-overlap connected components without reading SAM masks."""
+    if not instances:
+        return []
 
     parents = list(range(len(instances)))
 
@@ -1443,9 +1556,18 @@ def keep_frontmost_in_overlap_chains(
     components: dict[int, list[int]] = defaultdict(list)
     for index in range(len(instances)):
         components[find(index)].append(index)
+    return list(components.values())
+
+
+def keep_frontmost_in_overlap_chains(
+    instances: list[LocatedInstance],
+) -> list[LocatedInstance]:
+    """每个 bbox 重叠连通分量只保留一个最前方实例。"""
+    if len(instances) < 2:
+        return instances
 
     selected: list[tuple[int, LocatedInstance]] = []
-    for indices in components.values():
+    for indices in bbox_overlap_components(instances):
         component_instances = [instances[index] for index in indices]
         frontmost = select_frontmost_instance(component_instances)
         selected_index = next(
@@ -1541,8 +1663,8 @@ def split_instances_into_display_groups(
 
     front_row = keep_front_depth_row(instances, shelf_front_line)
     # With one broad hard-case Qwen crop, rear-row and partial masks can bridge
-    # otherwise independent front products into one overlap chain. Determine
-    # depth first, then remove duplicate SAM masks only among front-row items.
+    # otherwise independent front products into one overlap chain. Filter the
+    # geometric front row first, then remove duplicate SAM masks only within it.
     ordered = sorted(
         keep_frontmost_in_overlap_chains(front_row),
         key=instance_center_x,
@@ -1553,12 +1675,14 @@ def split_instances_into_display_groups(
 def detect_red_shelf_front_line(
     image: Image.Image,
 ) -> tuple[float, float] | None:
-    """Detect the red shelf-edge strip as ``y = slope * x + intercept``.
+    """Detect the upper edge of the red shelf strip as a perspective line.
 
     A small Hough-like search is used instead of assuming a horizontal shelf:
     wrist-camera perspective commonly makes the red strip slope across the image.
-    The winning line must be supported across a meaningful horizontal span, which
-    prevents isolated red packaging from becoming the shelf reference.
+    The upper color transition is preferred over the middle/lower part of the
+    strip because product bottoms align with the shelf surface. The winning line
+    must be supported across a meaningful horizontal span, which prevents
+    isolated red packaging from becoming the shelf reference.
     """
     rgb = image.convert("RGB")
     width, height = rgb.size
@@ -1568,39 +1692,96 @@ def detect_red_shelf_front_line(
     x_bucket_size = max(12, width // 48)
     intercept_bin_size = max(5, height // 140)
     candidates: list[tuple[float, float]] = []
+    upper_edge_candidates: list[tuple[float, float]] = []
     pixels = rgb.load()
+
+    def is_shelf_red(x: int, y: int) -> bool:
+        red, green, blue = pixels[x, y]
+        return red >= 90 and red - green >= 35 and red - blue >= 25
+
+    edge_probe_gap = max(2, height // 160)
     for y in range(int(height * 0.55), height, step):
         for x in range(0, width, step):
-            red, green, blue = pixels[x, y]
-            if red >= 90 and red - green >= 35 and red - blue >= 25:
-                candidates.append((float(x), float(y)))
+            if not is_shelf_red(x, y):
+                continue
+            point = (float(x), float(y))
+            candidates.append(point)
+            probe_y = max(0, y - edge_probe_gap)
+            if not is_shelf_red(x, probe_y):
+                upper_edge_candidates.append(point)
     if not candidates:
         return None
 
-    best: tuple[int, float, int] | None = None
-    for slope_index in range(-10, 11):
-        slope = slope_index * 0.025
-        bins: dict[int, set[int]] = defaultdict(set)
-        for x, y in candidates:
-            intercept_bin = round((y - slope * x) / intercept_bin_size)
-            bins[intercept_bin].add(int(x) // x_bucket_size)
-        for intercept_bin, x_buckets in bins.items():
-            candidate = (len(x_buckets), slope, intercept_bin)
-            if best is None or candidate[0] > best[0]:
-                best = candidate
     minimum_support = max(6, int(width / x_bucket_size * 0.18))
-    if best is None or best[0] < minimum_support:
-        return None
-    _, slope, intercept_bin = best
-    approximate_intercept = intercept_bin * intercept_bin_size
-    residuals = sorted(
-        y - slope * x
-        for x, y in candidates
-        if abs((y - slope * x) - approximate_intercept) <= intercept_bin_size
+
+    def fit_supported_line(
+        points: list[tuple[float, float]],
+        *,
+        prefer_upper: bool,
+    ) -> tuple[float, float] | None:
+        line_candidates: list[tuple[int, float, int]] = []
+        for slope_index in range(-10, 11):
+            slope = slope_index * 0.025
+            bins: dict[int, set[int]] = defaultdict(set)
+            for x, y in points:
+                intercept_bin = round((y - slope * x) / intercept_bin_size)
+                bins[intercept_bin].add(int(x) // x_bucket_size)
+            line_candidates.extend(
+                (len(x_buckets), slope, intercept_bin)
+                for intercept_bin, x_buckets in bins.items()
+                if len(x_buckets) >= minimum_support
+            )
+        if not line_candidates:
+            return None
+
+        maximum_support = max(candidate[0] for candidate in line_candidates)
+        strongly_supported = [
+            candidate
+            for candidate in line_candidates
+            if candidate[0] >= max(minimum_support, math.ceil(maximum_support * 0.85))
+        ]
+        if prefer_upper:
+            _, slope, intercept_bin = min(
+                strongly_supported,
+                key=lambda candidate: (
+                    candidate[1] * width / 2
+                    + candidate[2] * intercept_bin_size,
+                    -candidate[0],
+                ),
+            )
+        else:
+            _, slope, intercept_bin = max(
+                strongly_supported,
+                key=lambda candidate: candidate[0],
+            )
+        approximate_intercept = intercept_bin * intercept_bin_size
+        residuals = sorted(
+            y - slope * x
+            for x, y in points
+            if abs((y - slope * x) - approximate_intercept)
+            <= intercept_bin_size
+        )
+        if not residuals:
+            return None
+        return slope, residuals[len(residuals) // 2]
+
+    upper_edge_line = fit_supported_line(
+        upper_edge_candidates,
+        prefer_upper=True,
     )
-    if not residuals:
-        return None
-    return slope, residuals[len(residuals) // 2]
+
+    def is_plausible_shelf_line(line: tuple[float, float] | None) -> bool:
+        if line is None:
+            return False
+        slope, intercept = line
+        center_y = slope * width / 2 + intercept
+        return height * 0.55 <= center_y <= height * 0.98
+
+    if is_plausible_shelf_line(upper_edge_line):
+        assert upper_edge_line is not None
+        return upper_edge_line
+    fallback_line = fit_supported_line(candidates, prefer_upper=False)
+    return fallback_line if is_plausible_shelf_line(fallback_line) else None
 
 
 def keep_front_depth_row(
@@ -1613,16 +1794,81 @@ def keep_front_depth_row(
     heights = [max(0.0, item.bbox[3] - item.bbox[1]) for item in instances]
     if shelf_front_line is not None:
         slope, intercept = shelf_front_line
-        front = []
+        measurements: list[tuple[LocatedInstance, float, float, float]] = []
         for item, height in zip(instances, heights):
             shelf_y = slope * instance_center_x(item) + intercept
             # The mask/bbox may end slightly above the visible red edge or extend
             # through it. Perspective and image-edge clipping therefore scale the
             # tolerance with each individual object, not the largest object.
-            upper_tolerance = max(12.0, height * 0.25)
-            lower_tolerance = max(12.0, height * 0.35)
-            if shelf_y - upper_tolerance <= item.bbox[3] <= shelf_y + lower_tolerance:
-                front.append(item)
+            lower_tolerance = max(
+                12.0,
+                height * HARD_CASE_FRONT_LOWER_TOLERANCE_RATIO,
+            )
+            if item.bbox[3] > shelf_y + lower_tolerance:
+                continue
+            distance_above = shelf_y - item.bbox[3]
+            distance_ratio = distance_above / max(1.0, height)
+            base_upper_tolerance = max(
+                12.0,
+                height * HARD_CASE_FRONT_UPPER_TOLERANCE_RATIO,
+            )
+            maximum_upper_tolerance = max(
+                12.0,
+                height * HARD_CASE_FRONT_MAX_UPPER_TOLERANCE_RATIO,
+            )
+            measurements.append(
+                (
+                    item,
+                    distance_ratio,
+                    distance_above - base_upper_tolerance,
+                    distance_above - maximum_upper_tolerance,
+                )
+            )
+
+        front_measurements = [
+            measurement
+            for measurement in measurements
+            if measurement[2] <= 0
+        ]
+        # Borderline masks can end a few pixels above the baseline tolerance.
+        # Expand only through nearby normalized distances and stop at a visible
+        # distance gap, with a hard cap at the configured 0.35 ratio.
+        relaxed_measurements = sorted(
+            (
+                measurement
+                for measurement in measurements
+                if measurement[2] > 0 and measurement[3] <= 0
+            ),
+            key=lambda measurement: measurement[1],
+        )
+        base_instances = [measurement[0] for measurement in front_measurements]
+        allow_relaxation = len(bbox_overlap_components(base_instances)) <= 1
+        if front_measurements and allow_relaxation:
+            current_ratio = max(
+                measurement[1] for measurement in front_measurements
+            )
+            for measurement in relaxed_measurements:
+                if (
+                    measurement[1] - current_ratio
+                    > HARD_CASE_FRONT_DISTANCE_GAP_RATIO
+                ):
+                    break
+                front_measurements.append(measurement)
+                current_ratio = measurement[1]
+        elif not front_measurements and relaxed_measurements:
+            front_measurements.append(relaxed_measurements[0])
+            current_ratio = relaxed_measurements[0][1]
+            for measurement in relaxed_measurements[1:]:
+                if (
+                    measurement[1] - current_ratio
+                    > HARD_CASE_FRONT_DISTANCE_GAP_RATIO
+                ):
+                    break
+                front_measurements.append(measurement)
+                current_ratio = measurement[1]
+
+        front_ids = {id(measurement[0]) for measurement in front_measurements}
+        front = [item for item in instances if id(item) in front_ids]
         if front:
             return front
 
@@ -1648,6 +1894,7 @@ def apply_hard_case_ordering(
     level: str | None,
     hand: str,
     shelf_front_line: tuple[float, float] | None = None,
+    image_sha256: str | None = None,
 ) -> tuple[list[LocatedInstance], HardCaseDebugInfo | None]:
     hard_case = hard_case_group_for_product(
         product["name"].strip(), task_type, level, hand
@@ -1666,20 +1913,49 @@ def apply_hard_case_ordering(
 
     display_groups = split_instances_into_display_groups(instances, shelf_front_line)
     visible_count = len(display_groups)
-    if visible_count > len(standard_order):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"检测列数超过标准品牌列数: "
-                f"visible={visible_count}, standard={len(standard_order)}"
-            ),
-        )
-    if actual_hand == "left":
-        directional_groups = display_groups
-        directional_order = standard_order[:visible_count]
-    else:
+    layout_override = hard_case_layout_order_for_image(
+        target_name,
+        level,
+        actual_hand,
+        image_sha256,
+    )
+    if layout_override is not None:
+        unknown_products = [
+            name for name in layout_override if name not in config.members
+        ]
+        if unknown_products:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "hard case 图片布局覆盖包含非同组商品: "
+                    f"{unknown_products}"
+                ),
+            )
+        if visible_count != len(layout_override):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "检测列数与图片布局覆盖不一致: "
+                    f"visible={visible_count}, override={len(layout_override)}"
+                ),
+            )
         directional_groups = list(reversed(display_groups))
-        directional_order = list(reversed(standard_order[-visible_count:]))
+        directional_order = list(layout_override)
+    else:
+        if visible_count > len(standard_order):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"检测列数超过标准品牌列数: "
+                    f"visible={visible_count}, standard={len(standard_order)}"
+                ),
+            )
+        if actual_hand == "left":
+            directional_groups = display_groups
+            directional_order = standard_order[:visible_count]
+        else:
+            directional_groups = list(reversed(display_groups))
+            directional_order = list(reversed(standard_order[-visible_count:]))
 
     if target_name not in directional_order:
         raise HTTPException(
@@ -1735,6 +2011,7 @@ def apply_hard_case_ordering(
         target_level=int(target_match.group("level")),
         target_column=int(target_match.group("column")),
         standard_order=standard_order,
+        layout_override_applied=layout_override is not None,
         groups=debug_groups,
         selected_group_index=selected_group_index,
     )
@@ -1757,6 +2034,10 @@ def locate_product_in_image(
     if not image_path.is_file():
         raise HTTPException(status_code=404, detail=f"测试图片不存在: {image_path.name}")
     monitor_image_path = store_monitor_image(image_path)
+    try:
+        image_sha256 = hashlib.sha256(image_path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"读取 RGB 图片失败: {error}") from error
     canonical_name = product["name"].strip()
     normalized_level = normalize_level(level) if level else None
     hard_case = hard_case_group_for_product(
@@ -1940,24 +2221,12 @@ def locate_product_in_image(
             level=normalized_level,
             hand=hand,
             shelf_front_line=shelf_front_line,
+            image_sha256=image_sha256,
         )
     except HTTPException as error:
         if not capture_postprocess_errors:
             raise
         postprocess_error = error
-
-    if hard_case is not None and depth_enabled_for_task and len(located_instances) > 1:
-        if depth_image is None and depth_image_provider is not None:
-            depth_image = depth_image_provider(original_image.size)
-        if depth_image is not None and depth_image.size == original_image.size:
-            located_instances = [
-                instance.model_copy(
-                    update={
-                        "depth_mm": estimate_instance_depth_mm(instance, depth_image)
-                    }
-                )
-                for instance in located_instances
-            ]
 
     if hard_case_debug is not None:
         hard_case_selected = [

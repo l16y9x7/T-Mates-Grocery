@@ -670,6 +670,48 @@ CANDIDATE 2: 旧商品B;
             },
         )
 
+    def test_locate_debug_proxy_allows_offline_hard_case_without_depth(self) -> None:
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {
+            "image_base64": "aW1hZ2U=",
+            "qwen_bboxes": [],
+            "instances": [],
+        }
+        with patch.object(server.requests, "post", return_value=response) as post_mock:
+            server.run_locate_debug(
+                server.LocateDebugProxyRequest(
+                    task_type="SORTING",
+                    product_name="脉动菠萝口味",
+                    level="L4",
+                    hand="left",
+                    image_name="hard_case.jpg",
+                    image_base64="data:image/jpeg;base64,aW1hZ2U=",
+                )
+            )
+
+        self.assertNotIn("depth_image_name", post_mock.call_args.kwargs["json"])
+
+    def test_locate_debug_proxy_allows_normal_offline_case_without_depth(self) -> None:
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {
+            "image_base64": "aW1hZ2U=",
+            "qwen_bboxes": [],
+            "instances": [],
+        }
+        with patch.object(server.requests, "post", return_value=response) as post_mock:
+            server.run_locate_debug(
+                server.LocateDebugProxyRequest(
+                    task_type="SORTING",
+                    product_name="可口可乐",
+                    level="L1",
+                    hand="left",
+                    image_name="normal.jpg",
+                    image_base64="data:image/jpeg;base64,aW1hZ2U=",
+                )
+            )
+
+        self.assertNotIn("depth_image_name", post_mock.call_args.kwargs["json"])
+
     def test_locate_debug_proxy_rejects_half_offline_image(self) -> None:
         with self.assertRaises(HTTPException) as raised:
             server.run_locate_debug(

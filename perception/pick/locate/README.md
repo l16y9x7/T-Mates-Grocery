@@ -88,15 +88,26 @@ python main.py
 普通 case 运行。左手相机从标准顺序左端开始对应，右手相机从右端开始对应。
 
 SAM3 实例优先按 Qwen 陈列堆来源组成陈列列；Qwen 只返回一个合并区域时，使用过滤后的
-第一排 SAM 实例作为可见列。系统优先检测原图中的红色货架前沿，按每个 bbox 底边到
-透视前沿线的距离保留第一排；检测不到红线时才回退到瓶底高度规则，框高和 mask 面积
-不作为硬淘汰条件。hard case 会先筛第一排，再对第一排中的重叠 SAM mask 去重，避免
+第一排 SAM 实例作为可见列。hard case 不使用深度做跨列筛选；系统拟合原图中红色货架
+前沿的上边缘，按每个 bbox 底边到透视
+前沿线的距离做几何初筛；商品底边位于红线上方的基础容差为自身高度的 25%。
+基础筛选按 bbox 重叠链估算后最多只剩一列时，才在归一化距离连续的前提下渐进放宽，最大
+为 35%；已有两列或更多时不放宽。检测不到红线时才回退到瓶底高度规则，框高
+和 mask 面积不作为硬淘汰条件。以上比例可通过
+`HARD_CASE_FRONT_UPPER_TOLERANCE_RATIO`、
+`HARD_CASE_FRONT_MAX_UPPER_TOLERANCE_RATIO` 和
+`HARD_CASE_FRONT_DISTANCE_GAP_RATIO` 调整。hard case 会先筛第一排，再对第一排中的重叠 SAM mask 去重，避免
 后排或局部 mask 把相邻商品传递性合并。Debug 响应的 `hard_case` 给出目标 location、顺序和
 陈列组映射；最终 `instances` 带有 `mapped_product_name`、
 `hard_case_group_index`、`is_selected`。正式接口只返回 `is_selected=true` 的目标实例。
 不要求当前图片检测到标准库中的全部品牌列：左手检测结果对应标准顺序最左侧的可见
 前缀，右手检测结果对应标准顺序最右侧的可见后缀。只有目标 SKU 不在当前可见列范围
 内时才拒识。
+
+若某一张已知图片的实体货架存在标准库没有记录的重复列，可在
+`perception/hard_case_layout_overrides.json` 中按
+`商品名 + level + hand + 原图 SHA-256` 配置该图片从右到左的实际可见顺序。
+只有四个条件全部命中时才使用覆盖顺序，其他 hard case 仍使用标准库顺序。
 
 成功响应：
 
