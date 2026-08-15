@@ -111,11 +111,17 @@ SAM_FRONT_AREA_DOMINANCE_RATIO = float(
 SAM_SMALLEST_MASK_MAX_RATIO = float(
     os.getenv("SAM_SMALLEST_MASK_MAX_RATIO", "0.5")
 )
-SHORTAGE_MIN_SAM_QWEN_BBOX_COVERAGE = float(
-    os.getenv("SHORTAGE_MIN_SAM_QWEN_BBOX_COVERAGE", "0.25")
+PICK_MIN_SAM_QWEN_BBOX_COVERAGE = float(
+    os.getenv(
+        "PICK_MIN_SAM_QWEN_BBOX_COVERAGE",
+        os.getenv("SHORTAGE_MIN_SAM_QWEN_BBOX_COVERAGE", "0.25"),
+    )
 )
 PICK_MIN_ASPECT_RATIO_TO_BEST = float(
     os.getenv("PICK_MIN_ASPECT_RATIO_TO_BEST", "0.75")
+)
+PICK_MIN_HEIGHT_RATIO_TO_TALLEST = float(
+    os.getenv("PICK_MIN_HEIGHT_RATIO_TO_TALLEST", "0.60")
 )
 PICK_OCCLUSION_DEPTH_MARGIN_MM = float(
     os.getenv("PICK_OCCLUSION_DEPTH_MARGIN_MM", "30")
@@ -1338,7 +1344,7 @@ def keep_sam_instances_with_qwen_coverage(
     instances: list[LocatedInstance],
     qwen_bboxes_by_source: dict[int, list[float]],
     *,
-    minimum_coverage: float = SHORTAGE_MIN_SAM_QWEN_BBOX_COVERAGE,
+    minimum_coverage: float = PICK_MIN_SAM_QWEN_BBOX_COVERAGE,
 ) -> list[LocatedInstance]:
     """Drop small SAM fragments while retaining each Qwen source's largest bbox."""
     threshold = max(0.0, min(1.0, minimum_coverage))
@@ -2146,7 +2152,19 @@ def locate_product_in_image(
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
 
     raw_sam_instances = list(located_instances)
-    if task_type.strip().upper() == "SHORTAGE":
+    upper_confidence_pick = (
+        hard_case is None
+        and uses_upper_confidence_pick(canonical_name, task_type)
+    )
+    max_mask_area_pick = (
+        hard_case is None
+        and uses_max_mask_area_pick(canonical_name, task_type)
+    )
+    special_no_depth_pick = upper_confidence_pick or max_mask_area_pick
+    if hard_case is None and not special_no_depth_pick:
+        # This is the first normal-candidate filter. Remove SAM fragments that
+        # occupy very little of their unpadded Qwen bbox before aspect, depth,
+        # overlap-chain, or center-distance decisions can favor them.
         located_instances = keep_sam_instances_with_qwen_coverage(
             located_instances,
             qwen_bboxes_by_source,
@@ -2157,15 +2175,6 @@ def locate_product_in_image(
                 detail="SAM3 候选占原始 Qwen bbox 的面积均过小",
             )
     depth_enabled_for_task = task_type.strip().upper() != "SHORTAGE"
-    upper_confidence_pick = (
-        hard_case is None
-        and uses_upper_confidence_pick(canonical_name, task_type)
-    )
-    max_mask_area_pick = (
-        hard_case is None
-        and uses_max_mask_area_pick(canonical_name, task_type)
-    )
-    special_no_depth_pick = upper_confidence_pick or max_mask_area_pick
     if hard_case is None and not special_no_depth_pick:
         # Reject visibly incomplete/sliver masks before depth. Otherwise a tiny
         # mask on a nearer neighboring object can establish the front-row depth
@@ -2475,13 +2484,29 @@ def bbox_width_height_ratio(instance: LocatedInstance) -> float:
 def keep_visibly_complete_pick_candidates(
     instances: list[LocatedInstance],
     min_ratio_to_best: float = PICK_MIN_ASPECT_RATIO_TO_BEST,
+    min_height_ratio_to_tallest: float = PICK_MIN_HEIGHT_RATIO_TO_TALLEST,
 ) -> list[LocatedInstance]:
-    """过滤相对同类最佳外观明显过窄、通常被左右遮挡的实例。"""
+    """过滤明显过矮或相对同类完整外观过窄的实例。"""
     if len(instances) < 2:
         return instances
 
+    bbox_heights = [
+        max(0.0, instance.bbox[3] - instance.bbox[1])
+        for instance in instances
+    ]
+    tallest_height = max(bbox_heights)
+    if tallest_height <= 0:
+        return instances
+    height_threshold = tallest_height * max(
+        0.0,
+        min(1.0, min_height_ratio_to_tallest),
+    )
     aspect_ratios = [bbox_width_height_ratio(instance) for instance in instances]
-    best_aspect_ratio = max(aspect_ratios)
+    best_aspect_ratio = max(
+        aspect_ratio
+        for aspect_ratio, bbox_height in zip(aspect_ratios, bbox_heights)
+        if bbox_height >= height_threshold
+    )
     if best_aspect_ratio <= 0:
         return instances
 
@@ -2489,8 +2514,13 @@ def keep_visibly_complete_pick_candidates(
     minimum_aspect_ratio = best_aspect_ratio * relative_threshold
     filtered = [
         instance
-        for instance, aspect_ratio in zip(instances, aspect_ratios)
-        if aspect_ratio >= minimum_aspect_ratio
+        for instance, aspect_ratio, bbox_height in zip(
+            instances,
+            aspect_ratios,
+            bbox_heights,
+        )
+        if bbox_height >= height_threshold
+        and aspect_ratio >= minimum_aspect_ratio
     ]
     return filtered or instances
 

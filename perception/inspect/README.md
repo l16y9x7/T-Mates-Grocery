@@ -30,6 +30,8 @@ Content-Type: application/json
   `location_id` 一起用于查询当前画面候选 SKU。
 - `reference_item_area` 可省略。
 - 图片输入和现有对比算法阈值参数保持不变。
+- 本接口不接收深度：它只确定异常货架和商品语义。正常/当前两组深度留给后续
+  `/perception/place/locate`，用于把原商品 mask 三维重投影到当前头部相机视角。
 
 `SHORTAGE` 响应统一使用 `findings`；没有缺货时返回
 `{"findings": []}`，检测到缺货区域时返回：
@@ -59,7 +61,8 @@ Content-Type: application/json
 再通过 `/sku/get_image` 获取标准图。Qwen 只能返回候选集合中的标准商品名；无法确认、
 候选外名称、重复区域以及实际商品与标准商品相同的放错结果都会被拒绝或过滤。
 
-主接口会直接调用 `row_detection.detect_rows()` 检测基准图中的货架行，不经过 HTTP：
+主接口会直接调用公共模块 `perception/row_detection` 的 `detect_rows()` 检测基准图中的
+货架行，不经过 HTTP；`place/locate` 复用同一实现约束目标点云所在层：
 
 - 对比算法输出的 bbox 与传给 Qwen 的 `aligned_current` 使用同一个 `1280×720`
   基准坐标系，避免相机位姿变化导致局部裁图偏移。

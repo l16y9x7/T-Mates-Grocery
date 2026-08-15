@@ -1,4 +1,4 @@
-"""Detect horizontal shelf rails and the product rows above them."""
+"""Shared shelf-rail and product-row detection for perception services."""
 
 from .detector import (
     RowDetectionConfig,

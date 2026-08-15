@@ -20,9 +20,9 @@ from typing import Literal, Protocol, Sequence
 import cv2
 import numpy as np
 from fastapi import APIRouter, FastAPI, HTTPException
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-if __package__:
+if __package__ and __package__.startswith("perception."):
     from .comparison_based import ComparisonConfig, detect_shortage
     from .comparison_based.qwen_review import (
         DEFAULT_DEBUG_ROOT,
@@ -33,9 +33,12 @@ if __package__:
         ReviewRowConstraint,
         ReviewedFinding,
     )
-    from .row_detection import RowDetectionConfig, RowDetectionResult, detect_rows
+    from ..row_detection import RowDetectionConfig, RowDetectionResult, detect_rows
 else:
     INSPECT_ROOT = Path(__file__).resolve().parent
+    PERCEPTION_ROOT = INSPECT_ROOT.parent
+    if str(PERCEPTION_ROOT) not in sys.path:
+        sys.path.insert(0, str(PERCEPTION_ROOT))
     if str(INSPECT_ROOT) not in sys.path:
         sys.path.insert(0, str(INSPECT_ROOT))
     from comparison_based import ComparisonConfig, detect_shortage
@@ -72,6 +75,8 @@ router = APIRouter()
 
 class InspectRequest(BaseModel):
     """Two shelf images and the inspection task to run."""
+
+    model_config = ConfigDict(extra="forbid")
 
     task_type: TaskType
     location_id: str = Field(min_length=1)

@@ -10,6 +10,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 
 INSPECT_ROOT = Path(__file__).resolve().parents[1]
@@ -284,6 +285,17 @@ class InspectMainTest(unittest.TestCase):
         schema = inspect_api.app.openapi()
         required = schema["components"]["schemas"]["InspectRequest"]["required"]
         self.assertIn("pose_type", required)
+
+    def test_request_rejects_depth_fields_belonging_to_place_locate(self) -> None:
+        with self.assertRaises(ValidationError):
+            inspect_api.InspectRequest(
+                task_type="SHORTAGE",
+                location_id="H1_F",
+                pose_type="SHELF_VIEW_UPPER",
+                baseline_image_base64="rgb",
+                current_image_base64="rgb",
+                baseline_depth_image_base64="depth",
+            )
 
     def test_openapi_registers_main_route(self) -> None:
         self.assertIn("/perception/inspect", inspect_api.app.openapi()["paths"])

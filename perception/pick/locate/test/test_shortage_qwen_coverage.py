@@ -5,6 +5,7 @@ import unittest
 from pick.locate.main import (
     LocatedInstance,
     bbox_coverage_ratio,
+    keep_visibly_complete_pick_candidates,
     keep_sam_instances_with_qwen_coverage,
 )
 
@@ -71,6 +72,39 @@ class ShortageQwenCoverageTest(unittest.TestCase):
         )
 
         self.assertEqual(filtered, [unknown_source])
+
+    def test_record_187404_area_filter_removes_bottle_cap_bbox(self) -> None:
+        complete_bboxes = [
+            [371.35, 156.79, 437.93, 316.03],
+            [175.51, 173.04, 209.24, 317.53],
+            [210.10, 166.68, 253.88, 327.91],
+            [219.92, 159.28, 267.02, 328.69],
+            [326.97, 165.84, 375.08, 319.51],
+            [255.50, 144.81, 328.10, 326.83],
+        ]
+        bottle_cap = instance([306.78, 172.07, 339.07, 208.00])
+        candidates = [instance(bbox) for bbox in complete_bboxes] + [bottle_cap]
+
+        filtered = keep_sam_instances_with_qwen_coverage(
+            candidates,
+            {0: [174.93, 144.80, 439.89, 325.28]},
+            minimum_coverage=0.25,
+        )
+
+        self.assertNotIn(bottle_cap, filtered)
+        self.assertEqual(filtered, [candidates[5]])
+
+    def test_short_square_cannot_set_complete_candidate_reference(self) -> None:
+        tall_complete = instance([0.0, 0.0, 72.0, 182.0])
+        short_square = instance([0.0, 0.0, 32.0, 36.0])
+
+        filtered = keep_visibly_complete_pick_candidates(
+            [tall_complete, short_square],
+            min_ratio_to_best=0.75,
+            min_height_ratio_to_tallest=0.60,
+        )
+
+        self.assertEqual(filtered, [tall_complete])
 
 
 if __name__ == "__main__":

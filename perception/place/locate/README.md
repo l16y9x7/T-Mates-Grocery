@@ -1,9 +1,88 @@
-# Place Locate 设计草稿
+# Place Locate
 
 目标接口：`POST /perception/place/locate`
 
-本文档描述一个基于 RGB-D 场景配准的初版方案。它适用于货架整体保持静止、
+接口已挂载到统一的 `8083` 感知服务。它适用于货架整体保持静止、
 相机观察位姿发生变化，但目标商品从标准场景中消失的补货场景。
+
+## 当前接口契约
+
+`/perception/inspect` 只负责用两张 RGB 判断异常货架与商品名称；本接口接收
+正常场景和当前场景的两组 RGB-D，生成当前头部相机视角下缺失商品的理论 mask。
+
+```json
+{
+  "task_type": "SHORTAGE",
+  "product_name": "可口可乐罐装",
+  "location_id": "H1_F_L2_C01",
+  "baseline_image_base64": "<正常场景 RGB>",
+  "baseline_depth_image_base64": "<正常场景 NPY/PNG/RAW 深度>",
+  "current_image_base64": "<当前场景 RGB>",
+  "current_depth_image_base64": "<当前场景 NPY/PNG/RAW 深度>",
+  "reference_pose": {
+    "frame_id": "reference_head_camera",
+    "unit": "millimeter",
+    "matrix": [
+      [1, 0, 0, 20],
+      [0, 1, 0, -30],
+      [0, 0, 1, 900],
+      [0, 0, 0, 1]
+    ]
+  },
+  "pose_type": "SHELF_VIEW_UPPER",
+  "current_image_name": "current_rgb.jpg",
+  "camera_intrinsics": {
+    "fx": 900.0,
+    "fy": 900.0,
+    "cx": 640.0,
+    "cy": 360.0,
+    "width": 1280,
+    "height": 720
+  },
+  "region_index": 1
+}
+```
+
+相机内参也可以通过环境变量 `PLACE_HEAD_CAMERA_INTRINSICS` 配置为同样结构的
+JSON，此时请求不必重复传入。若当前帧使用不同相机内参，可额外传
+`current_camera_intrinsics`。深度必须已对齐到各自 RGB，数值通过 `depth_unit_mm`
+统一换算为毫米。
+
+正式响应保留 `/perception/pick/locate` 的 mask 字段，同时返回转换后的主目标位姿：
+
+```json
+{
+  "product_name": "可口可乐罐装",
+  "bbox": [310, 220, 430, 650],
+  "mask": "<当前视角理论 mask 的 PNG base64>",
+  "image_path": "current_rgb.jpg",
+  "target_pose": {
+    "frame_id": "current_head_camera",
+    "unit": "millimeter",
+    "matrix": [
+      [1, 0, 0, 25],
+      [0, 1, 0, -28],
+      [0, 0, 1, 905],
+      [0, 0, 0, 1]
+    ]
+  }
+}
+```
+
+`bbox` 为 `[x1,y1,x2,y2]`，归一化到 `[1,1000]`。正式响应中的 `mask` 始终是
+完整理论投影；当前深度只参与配准、遮挡和占用判断，不会用空缺后的货架背景深度
+替换原商品深度。`target_pose` 是主结果，后续再通过现有手眼标定转换到左右手或
+机器人基座坐标系；mask 和 expected depth 用于校验该位姿及放置空间。
+
+`pose_type` 与 inspection 含义一致，支持 `""`、`SHELF_VIEW_UPPER` 和
+`SHELF_VIEW_LOWER`。接口复用顶层 `perception/row_detection`，将 reference mask
+限制到目标商品所在货架层；无法可靠检测行时自动回退到未裁层的 change mask。
+
+`POST /perception/place/locate/debug` 使用相同请求，并额外返回 reference/visible
+mask、理论 `expected_depth_mm` NPY、匹配的 `row_index/row_bbox`、RGB-D 配准矩阵及
+质量指标。存在多个异常区域时，
+`region_index` 按从上到下、同行从左到右的 1-based 顺序选择；也可以传
+`reference_bbox=[x,y,width,height]` 精确指定 inspection 检出的基准图区域。
 
 ## 结论
 
@@ -84,71 +163,20 @@ inspection 的 ORB + homography 可以作为 RGB 特征初值或调试图，但�
 重投影时需要做 z-buffer 和当前深度检查。若目标投影被其它物体遮挡，Debug 响应可
 同时返回完整投影 mask 和当前视角可见 mask。
 
-## 接口草案
+## Debug 响应
 
-请求：
-
-```json
-{
-  "product_name": "奥利奥冰淇淋抹茶味",
-  "location_id": "H1_F_L2_C11",
-  "hand": "left",
-  "image_name": null,
-  "image_base64": null,
-  "depth_npy_base64": null
-}
-```
-
-- 生产请求不传图片时，从相机服务获取同步 RGB-D 和 camera info。
-- 本地测试可以同时上传 RGB 和 NPY 深度。
-- `location_id` 不应省略，因为部分 SKU 在多个货位出现，仅凭商品名无法唯一确定
-  放置位置。
-
-成功响应：
-
-```json
-{
-  "product_name": "奥利奥冰淇淋抹茶味",
-  "location_id": "H1_F_L2_C11",
-  "strategy": "REFERENCE_POSE_TRANSFER",
-  "target_pose": {
-    "frame_id": "robot_base",
-    "unit": "millimeter",
-    "matrix": [
-      [1, 0, 0, 420],
-      [0, 1, 0, -85],
-      [0, 0, 1, 930],
-      [0, 0, 0, 1]
-    ]
-  },
-  "target_mask": "<base64 PNG>",
-  "registration": {
-    "current_from_reference": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
-    "rmse_mm": 3.2,
-    "inlier_ratio": 0.86,
-    "correspondence_count": 1240
-  },
-  "confidence": 0.94,
-  "image_path": "C:/.../current_rgb.jpg"
-}
-```
-
-Debug 接口还应返回：
-
-- 正常场景 RGB、当前 RGB；
-- 静态背景有效 mask；
-- 初始配准和 ICP 后的 `T_cur_ref`；
-- 变换后的点云投影；
-- 完整 `target_mask`、可见 `target_mask`；
-- 配准 RMSE、inlier ratio 和失败原因。
+正式请求和响应见文档开头的“当前接口契约”。Debug 接口额外返回 reference mask、
+完整/可见 target mask、转换后商品表面的理论 `expected_depth_mm`、`T_cur_ref`，以及
+RGB 重投影 RMSE、三维 RMSE、对应点数量和 inlier ratio。
 
 ## 配准质量门槛
 
-以下数值需要用实际数据标定，初版可以从这些范围开始：
+当前 HTTP 层先执行以下保守门槛，后续需要用实际数据继续标定：
 
-- 静态背景有效三维对应点不少于 100；
-- ICP inlier ratio 不低于 0.6；
-- 点到平面 RMSE 不高于 10 mm；
+- 三维 RANSAC 有效对应点不少于 12；
+- 三维 inlier ratio 不低于 0.5；
+- 三维 RMSE 不高于 20 mm；
+- RGB 重投影 RMSE 不高于 4 px；
 - 旋转矩阵行列式接近 1；
 - 转换后的目标位姿仍位于目标货架层范围内；
 - 目标体积与当前点云没有显著碰撞。
@@ -188,6 +216,14 @@ Debug 接口还应返回：
 - reference mask 点云向当前相机的完整/可见 mask 重投影；
 - 重投影目标的 z-buffer `expected_depth_mm`，mask 外深度为 0；
 - 标准商品位姿向当前相机和机器人坐标系的转移。
+
+`main.py` 已提供并挂载：
+
+- `POST /perception/place/locate` 正式接口；
+- `POST /perception/place/locate/debug` 诊断接口；
+- RGB 与 NPY/PNG/TIFF/RAW 深度解码及对齐尺寸校验；
+- 请求内参或 `PLACE_HEAD_CAMERA_INTRINSICS` 标定读取；
+- 缺货区域选择、reference mask 深度细化及理论 mask 输出。
 
 运行核心测试：
 

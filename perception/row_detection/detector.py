@@ -1,4 +1,4 @@
-"""Detect red shelf rails and derive product-row regions.
+"""Shared detection of red shelf rails and product-row regions.
 
 The detector is intentionally training-free.  It isolates red pixels in HSV,
 joins horizontal fragments, scores every image row by horizontal support, and

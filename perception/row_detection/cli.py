@@ -1,4 +1,4 @@
-"""Run shelf-row detection on individual images or sample directories."""
+"""Run the shared shelf-row detector on images or sample directories."""
 
 from __future__ import annotations
 

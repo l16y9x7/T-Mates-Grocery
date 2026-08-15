@@ -16,6 +16,7 @@ if __package__:
     from .pick.check import server as check_api
     from .pick.locate import main as locate_api
     from .place.check import server as place_check_api
+    from .place.locate import main as place_locate_api
 else:
     from config import SERVICE_BIND_HOST
 
@@ -35,12 +36,14 @@ else:
     from pick.check import server as check_api
     from pick.locate import main as locate_api
     from place.check import server as place_check_api
+    from place.locate import main as place_locate_api
 
 
 app = FastAPI(title="Perception API", version="1.0.0")
 app.include_router(locate_api.router)
 app.include_router(check_api.router)
 app.include_router(place_check_api.router)
+app.include_router(place_locate_api.router)
 app.include_router(receipt_api.router)
 app.include_router(inspect_api.router)
 app.add_exception_handler(

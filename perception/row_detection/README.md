@@ -19,7 +19,7 @@
 批量验证现有样例：
 
 ```powershell
-python inspect/row_detection/cli.py `
+python row_detection/cli.py `
   test_data/inspect_shortage_paired `
   test_data/inspect_misplaced_paired `
   --pattern "*.jpg" `
@@ -32,9 +32,6 @@ python inspect/row_detection/cli.py `
 代码调用：
 
 ```python
-import sys
-sys.path.insert(0, "inspect")
-
 from row_detection import detect_rows
 
 result = detect_rows("shelf.jpg")
