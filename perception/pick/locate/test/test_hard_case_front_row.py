@@ -34,6 +34,23 @@ def masked_instance(
     )
 
 
+def shaped_mask_instance(
+    bbox: list[float],
+    rectangles: list[tuple[int, int, int, int]],
+) -> LocatedInstance:
+    mask = Image.new("L", (640, 480), 0)
+    draw = ImageDraw.Draw(mask)
+    for rectangle in rectangles:
+        draw.rectangle(rectangle, fill=255)
+    buffer = io.BytesIO()
+    mask.save(buffer, format="PNG")
+    return LocatedInstance(
+        bbox=bbox,
+        mask=base64.b64encode(buffer.getvalue()).decode("ascii"),
+        score=0.9,
+    )
+
+
 class HardCaseShelfFrontTest(unittest.TestCase):
     def test_detects_upper_edge_of_thick_red_shelf_strip(self) -> None:
         image = Image.new("RGB", (640, 480), "#20262b")
@@ -106,6 +123,41 @@ class HardCaseShelfFrontTest(unittest.TestCase):
         )
 
         self.assertEqual(selected, [baseline, borderline])
+
+    def test_twenty_five_percent_candidates_are_split_at_distance_gap(self) -> None:
+        first_front = instance([0, 0, 50, 95])
+        second_front = instance([60, 0, 110, 92])
+        rear_inside_baseline = instance([120, -22, 170, 78])
+        second_rear_inside_baseline = instance([180, -24, 230, 76])
+
+        selected = keep_front_depth_row(
+            [
+                first_front,
+                second_front,
+                rear_inside_baseline,
+                second_rear_inside_baseline,
+            ],
+            (0.0, 100.0),
+        )
+
+        self.assertEqual(selected, [first_front, second_front])
+
+    def test_mask_tail_does_not_make_rear_instance_touch_shelf(self) -> None:
+        rear_with_thin_tail = shaped_mask_instance(
+            [0, 0, 50, 100],
+            [(0, 0, 49, 70), (24, 70, 25, 99)],
+        )
+        front = shaped_mask_instance(
+            [60, 0, 110, 96],
+            [(60, 0, 109, 95)],
+        )
+
+        selected = keep_front_depth_row(
+            [rear_with_thin_tail, front],
+            (0.0, 100.0),
+        )
+
+        self.assertEqual(selected, [front])
 
     def test_does_not_relax_when_multiple_base_columns_exist(self) -> None:
         first_front = instance([0, -25, 50, 75])

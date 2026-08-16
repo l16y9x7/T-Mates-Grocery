@@ -166,7 +166,10 @@ HARD_CASE_FRONT_LOWER_TOLERANCE_RATIO = float(
     os.getenv("HARD_CASE_FRONT_LOWER_TOLERANCE_RATIO", "0.35")
 )
 HARD_CASE_FRONT_DISTANCE_GAP_RATIO = float(
-    os.getenv("HARD_CASE_FRONT_DISTANCE_GAP_RATIO", "0.15")
+    os.getenv("HARD_CASE_FRONT_DISTANCE_GAP_RATIO", "0.10")
+)
+HARD_CASE_MASK_LOWER_CONTACT_QUANTILE = float(
+    os.getenv("HARD_CASE_MASK_LOWER_CONTACT_QUANTILE", "0.80")
 )
 CAMERA_DEPTH_UNIT_MM = float(os.getenv("CAMERA_DEPTH_UNIT_MM", "1.0"))
 REQUEST_TIMEOUT_SECONDS = 120
@@ -250,6 +253,14 @@ HARD_CASE_GROUPS: dict[str, HardCaseGroupConfig] = {
     ),
     "bbq_sauce_original": HardCaseGroupConfig(
         members=("草原红太阳烧烤酱原味",),
+        preferred_hand="left",
+    ),
+    "shuke_toothpaste": HardCaseGroupConfig(
+        members=(
+            "舒克牙膏竹炭薄荷",
+            "舒克牙膏柠檬百香果",
+            "舒克牙膏海盐薄荷",
+        ),
         preferred_hand="left",
     ),
     "soy_vinegar_fish_soy": HardCaseGroupConfig(
@@ -690,8 +701,8 @@ def load_hard_case_scope() -> set[tuple[str, str, str]]:
 
 
 def load_hard_case_layout_overrides(
-) -> dict[tuple[str, str, str, str], tuple[str, ...]]:
-    """Load exact-image hard-case orders, preserving intentional duplicates."""
+) -> dict[tuple[str, str, str], tuple[str, ...]]:
+    """Load tuple-scoped hard-case orders, preserving intentional duplicates."""
     try:
         payload = json.loads(
             HARD_CASE_LAYOUT_OVERRIDES_PATH.read_text(encoding="utf-8")
@@ -699,50 +710,47 @@ def load_hard_case_layout_overrides(
     except FileNotFoundError as error:
         raise HTTPException(
             status_code=500,
-            detail="hard case 图片布局覆盖配置不存在",
+            detail="hard case 布局覆盖配置不存在",
         ) from error
     except (OSError, json.JSONDecodeError) as error:
         raise HTTPException(
             status_code=500,
-            detail=f"读取 hard case 图片布局覆盖配置失败: {error}",
+            detail=f"读取 hard case 布局覆盖配置失败: {error}",
         ) from error
     if not isinstance(payload, list):
         raise HTTPException(
             status_code=500,
-            detail="hard case 图片布局覆盖配置必须是数组",
+            detail="hard case 布局覆盖配置必须是数组",
         )
 
-    overrides: dict[tuple[str, str, str, str], tuple[str, ...]] = {}
+    overrides: dict[tuple[str, str, str], tuple[str, ...]] = {}
     for item in payload:
         if not isinstance(item, dict):
             raise HTTPException(
                 status_code=500,
-                detail="hard case 图片布局覆盖条目格式错误",
+                detail="hard case 布局覆盖条目格式错误",
             )
         name = item.get("product_name")
         level = item.get("level")
         hand = item.get("hand")
-        image_sha256 = item.get("image_sha256")
         if not all(
             isinstance(value, str) and value.strip()
-            for value in (name, level, hand, image_sha256)
+            for value in (name, level, hand)
         ):
             raise HTTPException(
                 status_code=500,
-                detail="hard case 图片布局覆盖条目缺少字段",
+                detail="hard case 布局覆盖条目缺少字段",
             )
 
         normalized_level = level.strip().upper()
         normalized_hand = hand.strip().lower()
-        normalized_sha256 = image_sha256.strip().lower()
         if (
             not re.fullmatch(r"L[1-5]", normalized_level)
             or normalized_hand not in {"left", "right"}
-            or not re.fullmatch(r"[0-9a-f]{64}", normalized_sha256)
         ):
             raise HTTPException(
                 status_code=500,
-                detail="hard case 图片布局覆盖条目的 level、hand 或 image_sha256 无效",
+                detail="hard case 布局覆盖条目的 level 或 hand 无效",
             )
 
         visible_order = item.get(f"visible_order_from_{normalized_hand}")
@@ -757,7 +765,7 @@ def load_hard_case_layout_overrides(
             raise HTTPException(
                 status_code=500,
                 detail=(
-                    "hard case 图片布局覆盖条目缺少与 hand 对应的 "
+                    "hard case 布局覆盖条目缺少与 hand 对应的 "
                     f"visible_order_from_{normalized_hand}"
                 ),
             )
@@ -765,32 +773,29 @@ def load_hard_case_layout_overrides(
             name.strip(),
             normalized_level,
             normalized_hand,
-            normalized_sha256,
         )
         if key in overrides:
             raise HTTPException(
                 status_code=500,
-                detail=f"hard case 图片布局覆盖存在重复条目: {key}",
+                detail=f"hard case 布局覆盖存在重复条目: {key}",
             )
         # Do not de-duplicate this sequence: repeated physical columns are the
-        # reason this exact-image override exists.
+        # reason this tuple-scoped override exists.
         overrides[key] = tuple(value.strip() for value in visible_order)
     return overrides
 
 
-def hard_case_layout_order_for_image(
+def hard_case_layout_order_for_request(
     product_name: str,
     level: str | None,
     hand: str,
-    image_sha256: str | None,
 ) -> tuple[str, ...] | None:
-    if not level or not image_sha256:
+    if not level:
         return None
     key = (
         product_name.strip(),
         level.strip().upper(),
         hand.strip().lower(),
-        image_sha256.strip().lower(),
     )
     return load_hard_case_layout_overrides().get(key)
 
@@ -2012,6 +2017,45 @@ def detect_red_shelf_front_line(
     return fallback_line if is_plausible_shelf_line(fallback_line) else None
 
 
+def instance_lower_contact_y(instance: LocatedInstance) -> float:
+    """Estimate the object's main lower contour without trusting mask tails."""
+    encoded = instance.mask.split(",", 1)[-1]
+    if not encoded:
+        return instance.bbox[3]
+    try:
+        mask_bytes = base64.b64decode(encoded, validate=True)
+        with Image.open(io.BytesIO(mask_bytes)) as source_mask:
+            mask = source_mask.convert("L")
+    except (ValueError, binascii.Error, UnidentifiedImageError, OSError):
+        return instance.bbox[3]
+
+    left = max(0, int(math.floor(instance.bbox[0])))
+    top = max(0, int(math.floor(instance.bbox[1])))
+    right = min(mask.width, int(math.ceil(instance.bbox[2])))
+    bottom = min(mask.height, int(math.ceil(instance.bbox[3])))
+    if left >= right or top >= bottom:
+        return instance.bbox[3]
+
+    pixels = mask.load()
+    column_bottoms: list[int] = []
+    for x in range(left, right):
+        for y in range(bottom - 1, top - 1, -1):
+            if pixels[x, y] >= 128:
+                column_bottoms.append(y + 1)
+                break
+    minimum_columns = max(3, int((right - left) * 0.20))
+    if len(column_bottoms) < minimum_columns:
+        return instance.bbox[3]
+
+    column_bottoms.sort()
+    quantile = min(1.0, max(0.0, HARD_CASE_MASK_LOWER_CONTACT_QUANTILE))
+    quantile_index = min(
+        len(column_bottoms) - 1,
+        max(0, math.ceil(quantile * len(column_bottoms)) - 1),
+    )
+    return min(instance.bbox[3], float(column_bottoms[quantile_index]))
+
+
 def keep_front_depth_row(
     instances: list[LocatedInstance],
     shelf_front_line: tuple[float, float] | None = None,
@@ -2025,6 +2069,7 @@ def keep_front_depth_row(
         measurements: list[tuple[LocatedInstance, float, float, float]] = []
         for item, height in zip(instances, heights):
             shelf_y = slope * instance_center_x(item) + intercept
+            lower_contact_y = instance_lower_contact_y(item)
             # The mask/bbox may end slightly above the visible red edge or extend
             # through it. Perspective and image-edge clipping therefore scale the
             # tolerance with each individual object, not the largest object.
@@ -2032,10 +2077,13 @@ def keep_front_depth_row(
                 12.0,
                 height * HARD_CASE_FRONT_LOWER_TOLERANCE_RATIO,
             )
-            if item.bbox[3] > shelf_y + lower_tolerance:
+            if lower_contact_y > shelf_y + lower_tolerance:
                 continue
-            distance_above = shelf_y - item.bbox[3]
-            distance_ratio = distance_above / max(1.0, height)
+            distance_above = shelf_y - lower_contact_y
+            # Masks that slightly cross the shelf line belong to the same
+            # zero-distance front cluster; how far they cross is handled by the
+            # lower-tolerance rejection above.
+            distance_ratio = max(0.0, distance_above) / max(1.0, height)
             base_upper_tolerance = max(
                 12.0,
                 height * HARD_CASE_FRONT_UPPER_TOLERANCE_RATIO,
@@ -2053,11 +2101,28 @@ def keep_front_depth_row(
                 )
             )
 
-        front_measurements = [
-            measurement
-            for measurement in measurements
-            if measurement[2] <= 0
-        ]
+        base_measurements = sorted(
+            (
+                measurement
+                for measurement in measurements
+                if measurement[2] <= 0
+            ),
+            key=lambda measurement: measurement[1],
+        )
+        # The 25% threshold is a candidate ceiling, not an unconditional row.
+        # Keep only the nearest continuous distance cluster so rear bottles whose
+        # lower edge still happens to fall inside 25% cannot become extra columns.
+        front_measurements: list[
+            tuple[LocatedInstance, float, float, float]
+        ] = []
+        for measurement in base_measurements:
+            if (
+                front_measurements
+                and measurement[1] - front_measurements[-1][1]
+                > HARD_CASE_FRONT_DISTANCE_GAP_RATIO
+            ):
+                break
+            front_measurements.append(measurement)
         # Borderline masks can end a few pixels above the baseline tolerance.
         # Expand only through nearby normalized distances and stop at a visible
         # distance gap, with a hard cap at the configured 0.35 ratio.
@@ -2122,7 +2187,6 @@ def apply_hard_case_ordering(
     level: str | None,
     hand: str,
     shelf_front_line: tuple[float, float] | None = None,
-    image_sha256: str | None = None,
 ) -> tuple[list[LocatedInstance], HardCaseDebugInfo | None]:
     hard_case = hard_case_group_for_product(
         product["name"].strip(), task_type, level, hand
@@ -2141,11 +2205,10 @@ def apply_hard_case_ordering(
 
     display_groups = split_instances_into_display_groups(instances, shelf_front_line)
     visible_count = len(display_groups)
-    layout_override = hard_case_layout_order_for_image(
+    layout_override = hard_case_layout_order_for_request(
         target_name,
         level,
         actual_hand,
-        image_sha256,
     )
     if layout_override is not None:
         unknown_products = [
@@ -2155,7 +2218,7 @@ def apply_hard_case_ordering(
             raise HTTPException(
                 status_code=500,
                 detail=(
-                    "hard case 图片布局覆盖包含非同组商品: "
+                    "hard case 布局覆盖包含非同组商品: "
                     f"{unknown_products}"
                 ),
             )
@@ -2266,10 +2329,6 @@ def locate_product_in_image(
     if not image_path.is_file():
         raise HTTPException(status_code=404, detail=f"测试图片不存在: {image_path.name}")
     monitor_image_path = store_monitor_image(image_path)
-    try:
-        image_sha256 = hashlib.sha256(image_path.read_bytes()).hexdigest()
-    except OSError as error:
-        raise HTTPException(status_code=500, detail=f"读取 RGB 图片失败: {error}") from error
     canonical_name = product["name"].strip()
     normalized_level = normalize_level(level) if level else None
     hard_case = hard_case_group_for_product(
@@ -2472,7 +2531,6 @@ def locate_product_in_image(
             level=normalized_level,
             hand=hand,
             shelf_front_line=shelf_front_line,
-            image_sha256=image_sha256,
         )
     except HTTPException as error:
         if not capture_postprocess_errors:
