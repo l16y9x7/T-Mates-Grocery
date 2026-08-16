@@ -11,9 +11,10 @@ from __future__ import annotations
 import base64
 import binascii
 import io
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Literal, Sequence, cast
 
 import cv2
 import numpy as np
@@ -21,6 +22,11 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if __package__ and __package__.startswith("perception."):
+    from ...camera_capture import (
+        CameraCaptureError,
+        capture_head_rgbd,
+        inspection_temporary_directory,
+    )
     from ...initial_scan import InitialScanError, load_initial_scan
     from ...row_detection import (
         PoseType,
@@ -29,6 +35,11 @@ if __package__ and __package__.startswith("perception."):
         detect_rows,
     )
 else:
+    from camera_capture import (
+        CameraCaptureError,
+        capture_head_rgbd,
+        inspection_temporary_directory,
+    )
     from initial_scan import InitialScanError, load_initial_scan
     from row_detection import (
         PoseType,
@@ -54,6 +65,7 @@ from .reference_mask import (
 
 
 TaskType = Literal["SHORTAGE", "MISPLACED"]
+ShelfLevel = Literal["L1", "L2", "L3", "L4", "L5"]
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_DEPTH_BYTES = 40 * 1024 * 1024
 DEFAULT_CURRENT_IMAGE_NAME = "current_rgb.jpg"
@@ -129,8 +141,28 @@ class PlaceReferenceMaskRequest(BaseModel):
         return value
 
 
-class PlaceLocateRequest(PlaceReferenceMaskRequest):
-    """Inputs needed for Task0 mask recovery and camera-frame registration."""
+class PlaceLocateRequest(BaseModel):
+    """A place target whose current RGB-D input is captured at runtime."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_type: TaskType
+    location_id: str = Field(min_length=1)
+    pose_type: PoseType
+    reference_item_area: float | None = Field(default=None, gt=0)
+    product_name: str = Field(min_length=1)
+
+    @field_validator("product_name", "location_id")
+    @classmethod
+    def normalize_nonempty_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+
+class PlaceLocateDebugRequest(PlaceReferenceMaskRequest):
+    """Explicit RGB-D inputs retained for offline tests and diagnostics."""
 
 
 class PlaceLocateResponse(BaseModel):
@@ -141,6 +173,7 @@ class PlaceLocateResponse(BaseModel):
     mask: str
     image_path: str
     rotate_matrix: list[list[float]]
+    level: ShelfLevel
 
     @field_validator("rotate_matrix")
     @classmethod
@@ -544,6 +577,36 @@ class PreparedReferenceMask:
     sam3: ReferenceMaskResult | None
 
 
+def resolve_shelf_level(
+    pose_type: PoseType,
+    row: ShelfRow | None,
+    location_id: str,
+) -> ShelfLevel:
+    """Map the detected row in an UPPER/LOWER view to physical level L1-L5."""
+
+    location_match = re.search(r"(?:^|_)L([1-5])(?:_|$)", location_id.upper())
+    if location_match is not None:
+        level_number = int(location_match.group(1))
+        if (
+            pose_type == "SHELF_VIEW_UPPER"
+            and level_number in {1, 2}
+        ) or (
+            pose_type == "SHELF_VIEW_LOWER"
+            and level_number in {3, 4, 5}
+        ):
+            return cast(ShelfLevel, f"L{level_number}")
+
+    if row is not None:
+        if pose_type == "SHELF_VIEW_UPPER" and row.index in {1, 2}:
+            return cast(ShelfLevel, f"L{row.index}")
+        if pose_type == "SHELF_VIEW_LOWER" and row.index in {1, 2, 3}:
+            return cast(ShelfLevel, f"L{row.index + 2}")
+
+    raise PoseTransferError(
+        "cannot determine physical shelf level from pose_type and detected row"
+    )
+
+
 def prepare_reference_mask(
     request: PlaceReferenceMaskRequest,
     reference_image: np.ndarray,
@@ -603,7 +666,7 @@ def prepare_reference_mask(
 
 
 def build_debug_response(
-    request: PlaceLocateRequest,
+    request: PlaceLocateDebugRequest,
     reference_image: np.ndarray,
     current_image: np.ndarray,
     reference_depth_mm: np.ndarray,
@@ -629,6 +692,11 @@ def build_debug_response(
     reference_mask = prepared.reference_mask
     reference_sam3 = prepared.sam3
     reference_product_bbox = mask_bbox_xyxy(reference_mask)
+    level = resolve_shelf_level(
+        request.pose_type,
+        matched_row,
+        request.location_id,
+    )
     reference_height, reference_width = reference_image.shape[:2]
     current_height, current_width = current_image.shape[:2]
     return PlaceLocateDebugResponse(
@@ -637,6 +705,7 @@ def build_debug_response(
         mask=encode_png_base64(reference_mask),
         image_path=baseline_path,
         rotate_matrix=registration.current_from_reference.tolist(),
+        level=level,
         task_type=request.task_type,
         location_id=request.location_id,
         inspection_target_id=inspection_target_id,
@@ -791,7 +860,9 @@ def locate_reference_mask_debug(
         ) from error
 
 
-def locate_place_debug(request: PlaceLocateRequest) -> PlaceLocateDebugResponse:
+def locate_place_debug(
+    request: PlaceLocateDebugRequest,
+) -> PlaceLocateDebugResponse:
     try:
         initial_scan = load_initial_scan(request.location_id, request.pose_type)
     except InitialScanError as error:
@@ -845,13 +916,40 @@ def locate_place_debug(request: PlaceLocateRequest) -> PlaceLocateDebugResponse:
 
 @router.post("/perception/place/locate", response_model=PlaceLocateResponse)
 def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
-    debug = locate_place_debug(request)
+    try:
+        with inspection_temporary_directory() as temporary_directory:
+            current = capture_head_rgbd(temporary_directory)
+            debug_request = PlaceLocateDebugRequest(
+                task_type=request.task_type,
+                product_name=request.product_name,
+                location_id=request.location_id,
+                pose_type=request.pose_type,
+                current_image_name=current.rgb_path.name,
+                current_image_base64=base64.b64encode(
+                    current.rgb_path.read_bytes()
+                ).decode("ascii"),
+                current_depth_image_base64=base64.b64encode(
+                    current.depth_path.read_bytes()
+                ).decode("ascii"),
+            )
+            debug = locate_place_debug(debug_request)
+    except CameraCaptureError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"获取当前 head camera RGB-D 失败: {error}",
+        ) from error
+    except OSError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"创建或读取定位临时目录失败: {error}",
+        ) from error
     return PlaceLocateResponse(
         product_name=debug.product_name,
         bbox=debug.bbox,
         mask=debug.mask,
         image_path=debug.image_path,
         rotate_matrix=debug.rotate_matrix,
+        level=debug.level,
     )
 
 
@@ -859,7 +957,9 @@ def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
     "/perception/place/locate/debug",
     response_model=PlaceLocateDebugResponse,
 )
-def locate_place_debug_api(request: PlaceLocateRequest) -> PlaceLocateDebugResponse:
+def locate_place_debug_api(
+    request: PlaceLocateDebugRequest,
+) -> PlaceLocateDebugResponse:
     return locate_place_debug(request)
 
 

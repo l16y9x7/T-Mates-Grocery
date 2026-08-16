@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspection · Shortage Batch Review</title>
-    <link rel="stylesheet" href="/static/qwen_review.css?v=9" />
+    <link rel="stylesheet" href="/static/qwen_review.css?v=10" />
   </head>
   <body>
     <main>
@@ -12,7 +12,7 @@
         <div>
           <p class="eyebrow">INSPECTION · SHORTAGE BATCH · QWEN3-VL</p>
           <h1>Shortage Batch Review</h1>
-          <p>查看本批自采缺货数据的初始图、当前图、检测结果，以及实际发送给 Qwen 的 Prompt 和图片。</p>
+        <p>查看缺货批测数据的基准图、当前图、检测结果，以及实际发送给 Qwen 的 Prompt 和图片。</p>
         </div>
         <nav aria-label="调试页面导航">
           <a href="/qwen-debug">Qwen / SAM3 Debug</a>
@@ -66,12 +66,19 @@
       <section class="shortage-batch-card card" aria-labelledby="shortageBatchTitle">
         <div class="section-heading">
           <div>
-            <p class="section-label">SELF-COLLECT · SHORTAGE BATCH</p>
+            <p id="shortageBatchSectionLabel" class="section-label">SELF-COLLECT · SHORTAGE BATCH</p>
             <h2 id="shortageBatchTitle">自采缺货批测结果</h2>
           </div>
           <span id="shortageBatchStatus" class="status">正在读取批测汇总……</span>
         </div>
         <div class="shortage-batch-toolbar">
+          <label>
+            <span>数据集</span>
+            <select id="shortageBatchDatasetSelect">
+              <option value="self_collect">自采缺货批测</option>
+              <option value="real_shortage">真实数据测试</option>
+            </select>
+          </label>
           <label>
             <span>巡检分组</span>
             <select id="shortageBatchGroupSelect"></select>
@@ -84,19 +91,20 @@
             <div><dt>状态</dt><dd id="shortageBatchRecordStatus">—</dd></div>
             <div><dt>异常数</dt><dd id="shortageBatchFindingCount">—</dd></div>
             <div><dt>识别商品</dt><dd id="shortageBatchProducts">—</dd></div>
+            <div><dt>真实值</dt><dd id="shortageBatchExpectedProducts">—</dd></div>
             <div><dt>耗时</dt><dd id="shortageBatchElapsed">—</dd></div>
           </dl>
         </div>
         <div class="source-grid shortage-batch-images">
           <figure id="shortageBatchBaselineFigure">
-            <figcaption><strong>Baseline RGB</strong><small>缺货前 task0 初始扫描图</small></figcaption>
+            <figcaption><strong>Baseline RGB</strong><small>缺货前基准图</small></figcaption>
             <div class="source-image-wrap">
               <img id="shortageBatchBaselineImage" alt="缺货前初始扫描图" />
               <span class="image-unavailable">暂无初始图</span>
             </div>
           </figure>
           <figure id="shortageBatchSourceFigure">
-            <figcaption><strong>Current RGB</strong><small>自采缺货原图</small></figcaption>
+            <figcaption><strong>Current RGB</strong><small>当前缺货原图</small></figcaption>
             <div class="source-image-wrap">
               <img id="shortageBatchSourceImage" alt="自采缺货原图" />
               <span class="image-unavailable">暂无原图</span>
@@ -147,6 +155,6 @@
         </section>
       </section>
     </main>
-    <script src="/static/qwen_review.js?v=14"></script>
+    <script src="/static/qwen_review.js?v=16"></script>
   </body>
 </html>

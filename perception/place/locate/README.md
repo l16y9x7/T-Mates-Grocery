@@ -8,7 +8,8 @@
 ## 当前接口契约
 
 `/perception/inspect` 负责判断异常货架与商品名称；本接口固定从
-`agent/output/task0` 读取正常场景 RGB-D，请求只上传当前场景 RGB-D。接口在 Task0
+`agent/output/task0` 读取正常场景 RGB-D，并像 `/perception/inspect` 一样从头部相机
+获取当前场景 RGB-D。接口在 Task0
 原图中生成目标商品 bbox/mask，并计算从 Task0 reference 相机到当前相机的 `4×4`
 刚体变换；商品 6D 位姿由下游位姿估计接口负责计算。
 
@@ -16,12 +17,8 @@
 {
   "task_type": "SHORTAGE",
   "product_name": "可口可乐罐装",
-  "location_id": "H1_F_L2_C01",
-  "current_image_base64": "<当前场景 RGB>",
-  "current_depth_image_base64": "<当前场景 NPY/PNG/RAW 深度>",
-  "pose_type": "SHELF_VIEW_UPPER",
-  "current_image_name": "current_rgb.jpg",
-  "region_index": 1
+  "location_id": "H1_F_L_INSPECT",
+  "pose_type": "SHELF_VIEW_UPPER"
 }
 ```
 
@@ -36,9 +33,8 @@ agent/output/task0/H1_B_L_INSPECT_LOWER/
 └── meta.json
 ```
 
-`SHELF_VIEW_UPPER` 对应 `_UPPER`，`SHELF_VIEW_LOWER` 对应 `_LOWER`。省略
-`pose_type` 时，商品层 L1/L2 自动使用 UPPER，L3/L4/L5 自动使用 LOWER；若直接传
-巡检导航点则必须提供 `pose_type`。可用 `INITIAL_SCAN_ROOT` 覆盖 task0 根目录，使用
+`SHELF_VIEW_UPPER` 对应 `_UPPER`，`SHELF_VIEW_LOWER` 对应 `_LOWER`，该字段与
+inspection 一样为必填。可用 `INITIAL_SCAN_ROOT` 覆盖 task0 根目录，使用
 `PRODUCT_HAND_OPTIONS_PATH` 覆盖货位映射文件。
 
 Task0 和当前缺货检测固定使用 `head_color_optical_frame`，请求不再接收相机内参。
@@ -63,6 +59,7 @@ distortion_model = plumb_bob
   "bbox": [310, 220, 430, 650],
   "mask": "<Task0 原图同尺寸的 PNG base64>",
   "image_path": "agent/output/task0/H1_F_L_INSPECT_UPPER/rgb.jpg",
+  "level": "L2",
   "rotate_matrix": [
     [1, 0, 0, 25],
     [0, 1, 0, -28],
@@ -71,6 +68,10 @@ distortion_model = plumb_bob
   ]
 }
 ```
+
+`level` 来自目标 bbox 对应的货架行：UPPER 的第 1/2 行映射为 `L1/L2`，LOWER 的
+第 1/2/3 行映射为 `L3/L4/L5`。若 `location_id` 本身包含明确的 `L1`—`L5`，则优先
+使用该层号并校验它与 `pose_type` 一致。
 
 `bbox` 为 Task0 原图像素坐标 `[x1,y1,x2,y2]`，由最终全图商品 mask 计算，不再
 归一化到 `[1,1000]`。`mask` 与 `image_path` 对应的 Task0 RGB 完全同尺寸、同坐标系。
@@ -88,7 +89,7 @@ point_current = rotate_matrix @ point_reference
 `SHELF_VIEW_LOWER`。接口复用顶层 `perception/row_detection`，将 reference mask
 限制到目标商品所在货架层；无法可靠检测行时自动回退到未裁层的 change mask。
 
-`POST /perception/place/locate/debug` 使用相同请求，并额外返回缺货差异 bbox、
+`POST /perception/place/locate/debug` 保留显式传入当前 RGB-D 的诊断请求，并额外返回缺货差异 bbox、
 reference mask 来源、SAM3 crop/bbox、匹配的 `row_index/row_bbox`、RGB-D 配准质量
 指标，以及实际使用的 `inspection_target_id/baseline_path`。存在多个异常区域时，
 `region_index` 按从上到下、同行从左到右的 1-based 顺序选择；也可以传

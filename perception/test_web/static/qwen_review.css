@@ -62,7 +62,8 @@ button:disabled { cursor: wait; opacity: .55; }
 .initial-scan-details { margin-top: 14px; max-height: 190px; color: #b8f7df; font-size: 12px; }
 
 .shortage-batch-card { padding: 18px; margin-bottom: 18px; border-top: 3px solid #f43f5e; }
-.shortage-batch-toolbar { display: grid; grid-template-columns: minmax(240px, .7fr) minmax(300px, 1fr) minmax(620px, 1.6fr); gap: 14px; align-items: end; margin-bottom: 15px; }
+.shortage-batch-toolbar { display: grid; grid-template-columns: minmax(190px, .55fr) minmax(240px, .7fr) minmax(300px, 1fr); gap: 14px; align-items: end; margin-bottom: 15px; }
+.shortage-batch-metrics { grid-column: 1 / -1; grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .shortage-batch-metrics > div { border-color: #3f2d3a; background: #140b12; }
 .shortage-batch-metrics dd { color: #fecdd3; }
 

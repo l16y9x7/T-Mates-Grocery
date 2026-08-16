@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import base64
 import io
+import tempfile
 import unittest
+from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import cv2
@@ -29,7 +32,7 @@ def encode_depth(depth: np.ndarray) -> str:
 
 
 class PlaceLocateApiTest(unittest.TestCase):
-    def make_request(self) -> api.PlaceLocateRequest:
+    def make_request(self) -> api.PlaceLocateDebugRequest:
         height, width = 240, 320
         generator = np.random.default_rng(7)
         background = generator.integers(
@@ -49,10 +52,11 @@ class PlaceLocateApiTest(unittest.TestCase):
         current_depth = np.full((height, width), 1200, dtype=np.uint16)
         self.reference_image = reference
         self.reference_depth = reference_depth.astype(np.float32)
-        return api.PlaceLocateRequest(
+        return api.PlaceLocateDebugRequest(
             task_type="SHORTAGE",
             product_name="测试商品",
             location_id="H1_F_L2_C01",
+            pose_type="SHELF_VIEW_UPPER",
             current_image_base64=encode_rgb(current),
             current_depth_image_base64=encode_depth(current_depth),
             reference_bbox=[115, 65, 90, 120],
@@ -87,6 +91,7 @@ class PlaceLocateApiTest(unittest.TestCase):
             result = api.locate_place_debug(request)
 
         self.assertEqual(result.product_name, "测试商品")
+        self.assertEqual(result.level, "L2")
         self.assertEqual(result.location_id, "H1_F_L2_C01")
         self.assertEqual(result.inspection_target_id, "H1_F_L_INSPECT")
         self.assertTrue(result.baseline_path.endswith("rgb.jpg"))
@@ -168,6 +173,7 @@ class PlaceLocateApiTest(unittest.TestCase):
             mask="mask",
             image_path="task0/rgb.jpg",
             rotate_matrix=np.eye(4).tolist(),
+            level="L2",
             task_type="SHORTAGE",
             location_id="H1_F",
             inspection_target_id="H1_F_L_INSPECT",
@@ -186,8 +192,29 @@ class PlaceLocateApiTest(unittest.TestCase):
                 reprojection_rmse_px=0.5,
             ),
         )
-        with patch.object(api, "locate_place_debug", return_value=debug):
-            response = api.locate_place(self.make_request())
+        with tempfile.TemporaryDirectory() as directory:
+            capture_root = Path(directory)
+            rgb_path = capture_root / "rgb.jpg"
+            depth_path = capture_root / "depth_mm.npy"
+            rgb_path.write_bytes(b"rgb")
+            depth_path.write_bytes(b"depth")
+            captured = SimpleNamespace(rgb_path=rgb_path, depth_path=depth_path)
+            public_request = api.PlaceLocateRequest(
+                task_type="SHORTAGE",
+                product_name="测试商品",
+                location_id="H1_F_L_INSPECT",
+                pose_type="SHELF_VIEW_UPPER",
+            )
+            with (
+                patch.object(
+                    api,
+                    "inspection_temporary_directory",
+                    return_value=nullcontext(directory),
+                ),
+                patch.object(api, "capture_head_rgbd", return_value=captured),
+                patch.object(api, "locate_place_debug", return_value=debug) as locate,
+            ):
+                response = api.locate_place(public_request)
 
         self.assertEqual(
             response.model_dump(),
@@ -197,29 +224,29 @@ class PlaceLocateApiTest(unittest.TestCase):
                 "mask": "mask",
                 "image_path": "task0/rgb.jpg",
                 "rotate_matrix": np.eye(4).tolist(),
+                "level": "L2",
             },
         )
+        captured_request = locate.call_args.args[0]
+        self.assertIsInstance(captured_request, api.PlaceLocateDebugRequest)
+        self.assertEqual(captured_request.location_id, "H1_F_L_INSPECT")
+        self.assertEqual(captured_request.product_name, "测试商品")
 
-    def test_request_requires_current_rgbd_and_reads_baseline_from_task0(self) -> None:
+    def test_public_request_matches_inspect_and_captures_current_rgbd(self) -> None:
         required = set(api.PlaceLocateRequest.model_json_schema()["required"])
-        self.assertTrue(
-            {
-                "current_image_base64",
-                "current_depth_image_base64",
-            }.issubset(required)
+        self.assertEqual(
+            required,
+            {"task_type", "location_id", "pose_type", "product_name"},
         )
-        self.assertNotIn("reference_pose", required)
-        self.assertNotIn("baseline_image_base64", required)
-        self.assertNotIn("baseline_depth_image_base64", required)
         properties = api.PlaceLocateRequest.model_json_schema()["properties"]
-        self.assertNotIn("reference_pose", properties)
-        self.assertNotIn("camera_intrinsics", properties)
-        self.assertNotIn("current_camera_intrinsics", properties)
+        self.assertIn("reference_item_area", properties)
+        self.assertNotIn("current_image_base64", properties)
+        self.assertNotIn("current_depth_image_base64", properties)
         self.assertNotIn("baseline_image_base64", properties)
         self.assertNotIn("baseline_depth_image_base64", properties)
 
         reference_required = set(
-            api.PlaceReferenceMaskRequest.model_json_schema()["required"]
+            api.PlaceLocateDebugRequest.model_json_schema()["required"]
         )
         self.assertIn("current_image_base64", reference_required)
         self.assertIn("current_depth_image_base64", reference_required)
@@ -240,8 +267,26 @@ class PlaceLocateApiTest(unittest.TestCase):
         self.assertAlmostEqual(half.cx, native.cx / 2)
         self.assertAlmostEqual(half.cy, native.cy / 2)
 
+    def test_detected_row_maps_to_physical_shelf_level(self) -> None:
+        upper_row = ShelfRow(index=2, bbox=(0, 100, 1280, 200), lower_rail_index=1)
+        lower_row = ShelfRow(index=3, bbox=(0, 400, 1280, 200), lower_rail_index=None)
+
+        self.assertEqual(
+            api.resolve_shelf_level("SHELF_VIEW_UPPER", upper_row, "H1_F_L_INSPECT"),
+            "L2",
+        )
+        self.assertEqual(
+            api.resolve_shelf_level("SHELF_VIEW_LOWER", lower_row, "H1_F_L_INSPECT"),
+            "L5",
+        )
+
     def test_request_rejects_unknown_fields(self) -> None:
-        payload = self.make_request().model_dump()
+        payload = api.PlaceLocateRequest(
+            task_type="SHORTAGE",
+            product_name="测试商品",
+            location_id="H1_F_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+        ).model_dump()
         payload["reference_pose"] = {"matrix": np.eye(4).tolist()}
         with self.assertRaises(ValidationError):
             api.PlaceLocateRequest.model_validate(payload)

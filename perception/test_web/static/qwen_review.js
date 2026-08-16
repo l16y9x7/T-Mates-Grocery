@@ -1,9 +1,11 @@
 const initialScanSelect = document.querySelector("#initialScanSelect");
+const shortageBatchDatasetSelect = document.querySelector("#shortageBatchDatasetSelect");
 const shortageBatchGroupSelect = document.querySelector("#shortageBatchGroupSelect");
 const shortageBatchRecordSelect = document.querySelector("#shortageBatchRecordSelect");
 
 let initialScans = [];
 let shortageBatchSamples = [];
+let shortageBatchRequestId = 0;
 
 async function api(url, options = {}) {
   const response = await fetch(url, options);
@@ -208,6 +210,7 @@ async function generateReferenceMask(sample, finding, controls) {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
+        dataset: sample.dataset || shortageBatchDatasetSelect.value,
         group: sample.group,
         record: sample.record,
         region_index: finding.region_index,
@@ -367,6 +370,7 @@ async function retryShortageQwen(sample, finding, controls) {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
+        dataset: sample.dataset || shortageBatchDatasetSelect.value,
         group: sample.group,
         record: sample.record,
         region_index: finding.region_index,
@@ -464,9 +468,16 @@ function renderShortageBatchRecord() {
   if (!sample) return;
   const findings = Array.isArray(sample.findings) ? sample.findings : [];
   const productNames = findings.map((finding) => finding.product_name).filter(Boolean);
+  const expectedFindings = Array.isArray(sample.expected?.findings)
+    ? sample.expected.findings
+    : [];
+  const expectedNames = expectedFindings
+    .map((finding) => finding.product_name)
+    .filter(Boolean);
   document.querySelector("#shortageBatchRecordStatus").textContent = sample.status || "—";
   document.querySelector("#shortageBatchFindingCount").textContent = String(findings.length);
   document.querySelector("#shortageBatchProducts").textContent = productNames.join("、") || "未识别";
+  document.querySelector("#shortageBatchExpectedProducts").textContent = expectedNames.join("、") || "—";
   document.querySelector("#shortageBatchElapsed").textContent = formatMilliseconds(sample.elapsed_ms);
   setSourceImage("shortageBatchBaselineImage", "shortageBatchBaselineFigure", sample.baseline_rgb_url);
   setSourceImage("shortageBatchSourceImage", "shortageBatchSourceFigure", sample.source_rgb_url);
@@ -492,7 +503,11 @@ function renderShortageBatchRecord() {
     : ["error", "recognition_error"].includes(sample.status) ? "error" : "";
   status(
     "#shortageBatchStatus",
-    `${sample.group}/${sample.record} · ${sample.status}${errorMessage ? ` · ${errorMessage}` : ""}`,
+    `${sample.group}/${sample.record} · ${sample.status}`
+      + (sample.regression
+        ? ` · 检测${sample.regression.detection_pass ? "✓" : "×"} / 识别${sample.regression.recognition_pass ? "✓" : "×"}`
+        : "")
+      + (errorMessage ? ` · ${errorMessage}` : ""),
     statusKind,
   );
 }
@@ -525,17 +540,32 @@ function populateShortageBatchGroups() {
 }
 
 async function initializeShortageBatch() {
+  const requestId = ++shortageBatchRequestId;
+  const dataset = shortageBatchDatasetSelect.value;
+  shortageBatchGroupSelect.disabled = true;
+  shortageBatchRecordSelect.disabled = true;
+  status("#shortageBatchStatus", "正在读取批测汇总……");
   try {
-    const payload = await api("/api/qwen-review/shortage-batch");
+    const payload = await api(
+      `/api/qwen-review/shortage-batch?dataset=${encodeURIComponent(dataset)}`,
+    );
+    if (requestId !== shortageBatchRequestId) return;
     shortageBatchSamples = payload.samples || [];
+    document.querySelector("#shortageBatchTitle").textContent = `${payload.dataset_label || "缺货批测"}结果`;
+    document.querySelector("#shortageBatchSectionLabel").textContent = payload.dataset === "real_shortage"
+      ? "REAL DATA · SHORTAGE REGRESSION"
+      : "SELF-COLLECT · SHORTAGE BATCH";
     if (!shortageBatchSamples.length) {
       status("#shortageBatchStatus", "尚无批测结果，请先运行 inspect/batch_shortage.py");
-      shortageBatchGroupSelect.disabled = true;
-      shortageBatchRecordSelect.disabled = true;
+      shortageBatchGroupSelect.replaceChildren();
+      shortageBatchRecordSelect.replaceChildren();
       return;
     }
+    shortageBatchGroupSelect.disabled = false;
+    shortageBatchRecordSelect.disabled = false;
     populateShortageBatchGroups();
   } catch (error) {
+    if (requestId !== shortageBatchRequestId) return;
     status("#shortageBatchStatus", error.message, "error");
     shortageBatchGroupSelect.disabled = true;
     shortageBatchRecordSelect.disabled = true;
@@ -543,6 +573,7 @@ async function initializeShortageBatch() {
 }
 
 initialScanSelect.addEventListener("change", renderInitialScan);
+shortageBatchDatasetSelect.addEventListener("change", initializeShortageBatch);
 shortageBatchGroupSelect.addEventListener("change", populateShortageBatchRecords);
 shortageBatchRecordSelect.addEventListener("change", renderShortageBatchRecord);
 initializeInitialScans();

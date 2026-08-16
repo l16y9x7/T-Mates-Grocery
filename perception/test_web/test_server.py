@@ -200,6 +200,9 @@ class PromptMappingTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('id="shortageBatchGroupSelect"', review_html)
+        self.assertIn('id="shortageBatchDatasetSelect"', review_html)
+        self.assertIn('value="real_shortage">真实数据测试', review_html)
+        self.assertIn('id="shortageBatchExpectedProducts"', review_html)
         self.assertIn('id="shortageBatchBaselineImage"', review_html)
         self.assertIn('id="shortageBatchRowImage"', review_html)
         self.assertIn('id="shortageBatchPromptList"', review_html)
@@ -212,6 +215,7 @@ class PromptMappingTest(unittest.TestCase):
         self.assertIn("Qwen 模型原始返回", review_js)
         self.assertNotIn("/api/qwen-review/samples", review_js)
         self.assertIn("/api/qwen-review/shortage-batch", review_js)
+        self.assertIn("dataset=${encodeURIComponent(dataset)}", review_js)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -367,6 +371,59 @@ class PromptMappingTest(unittest.TestCase):
             sample["baseline_rgb_url"],
         )
         self.assertEqual(Path(file_response.path), mask_path)
+
+    def test_qwen_review_lists_real_shortage_regression_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            group = "H1_F_L_INSPECT_UPPER"
+            record = "record_20260816_160659_204194"
+            record_root = root / group / record
+            result_root = record_root / "shortage_inspection"
+            result_root.mkdir(parents=True)
+            (record_root / "rgb.jpg").write_bytes(b"current")
+            (record_root / "baseline_rgb.jpg").write_bytes(b"baseline")
+            (result_root / "overlay.jpg").write_bytes(b"overlay")
+            (root / "shortage_inspection_batch_results.json").write_text(
+                json.dumps(
+                    {
+                        "total_records": 1,
+                        "completed_records": 1,
+                        "status_counts": {"no_anomaly": 1},
+                        "results": [
+                            {
+                                "group": group,
+                                "record": record,
+                                "status": "no_anomaly",
+                                "source_rgb": f"{group}/{record}/rgb.jpg",
+                                "findings": [],
+                                "expected": {"findings": []},
+                                "artifacts": {
+                                    "overlay": (
+                                        f"{group}/{record}/shortage_inspection/overlay.jpg"
+                                    )
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(server, "REAL_SHORTAGE_BATCH_ROOT", root):
+                payload = server.list_shortage_batch_results("real_shortage")
+                file_response = server.get_shortage_batch_file(
+                    f"{group}/{record}/rgb.jpg",
+                    "real_shortage",
+                )
+
+        self.assertEqual(payload["dataset"], "real_shortage")
+        self.assertEqual(payload["dataset_label"], "真实数据测试")
+        self.assertEqual(len(payload["samples"]), 1)
+        sample = payload["samples"][0]
+        self.assertEqual(sample["dataset"], "real_shortage")
+        self.assertIn("dataset=real_shortage", sample["source_rgb_url"])
+        self.assertIn("baseline_rgb.jpg", sample["baseline_rgb_url"])
+        self.assertEqual(Path(file_response.path), record_root / "rgb.jpg")
 
     def test_shortage_batch_qwen_retry_uses_edited_prompt_and_returns_raw(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

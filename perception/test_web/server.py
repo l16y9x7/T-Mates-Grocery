@@ -83,6 +83,17 @@ SHORTAGE_BATCH_ROOT = DATA_ROOT / "2026-08-16-self-collect-shortage-grouped"
 SHORTAGE_BATCH_SUMMARY_PATH = (
     SHORTAGE_BATCH_ROOT / "shortage_inspection_batch_results.json"
 )
+REAL_SHORTAGE_BATCH_ROOT = DATA_ROOT / "real_shortage_regression"
+SHORTAGE_BATCH_DATASETS = {
+    "self_collect": {
+        "label": "自采缺货批测",
+        "root": SHORTAGE_BATCH_ROOT,
+    },
+    "real_shortage": {
+        "label": "真实数据测试",
+        "root": REAL_SHORTAGE_BATCH_ROOT,
+    },
+}
 SHORTAGE_DEBUG_INDEX_CACHE_KEY: tuple[str, int] | None = None
 SHORTAGE_DEBUG_INDEX_CACHE: dict[
     tuple[str, str, tuple[tuple[int, ...], ...]],
@@ -138,6 +149,7 @@ class SavedQwenInferRequest(BaseModel):
 
 
 class ShortageBatchQwenRetryRequest(BaseModel):
+    dataset: str = "self_collect"
     group: str
     record: str
     region_index: int = Field(ge=1)
@@ -146,6 +158,7 @@ class ShortageBatchQwenRetryRequest(BaseModel):
 
 
 class ShortageReferenceMaskRequest(BaseModel):
+    dataset: str = "self_collect"
     group: str
     record: str
     region_index: int = Field(ge=1)
@@ -350,24 +363,67 @@ def get_initial_scan_row_overlay(scan_name: str) -> FileResponse:
     return FileResponse(path, media_type="image/jpeg")
 
 
-def shortage_batch_file_url(relative_path: object, version: int) -> str | None:
+def resolve_shortage_batch_dataset(dataset: str) -> tuple[Path, Path, str]:
+    """Resolve one review dataset without allowing arbitrary filesystem roots."""
+
+    normalized = dataset.strip().lower()
+    if normalized == "self_collect":
+        # Keep these aliases so local tests and deployments can override the
+        # long-running self-collect dataset independently.
+        return SHORTAGE_BATCH_ROOT, SHORTAGE_BATCH_SUMMARY_PATH, "自采缺货批测"
+    if normalized == "real_shortage":
+        root = REAL_SHORTAGE_BATCH_ROOT
+        return root, root / "shortage_inspection_batch_results.json", "真实数据测试"
+    config = SHORTAGE_BATCH_DATASETS.get(normalized)
+    if config is None:
+        raise HTTPException(status_code=400, detail=f"不支持的 shortage 数据集: {dataset}")
+    root = Path(config["root"])
+    return root, root / "shortage_inspection_batch_results.json", str(config["label"])
+
+
+def shortage_batch_file_url(
+    relative_path: object,
+    version: int,
+    *,
+    batch_root: Path | None = None,
+    dataset: str = "self_collect",
+) -> str | None:
+    batch_root = SHORTAGE_BATCH_ROOT if batch_root is None else batch_root
     if not isinstance(relative_path, str) or not relative_path.strip():
         return None
-    path = resolve_descendant(SHORTAGE_BATCH_ROOT, relative_path)
+    path = resolve_descendant(batch_root, relative_path)
     if not path.is_file():
         return None
-    normalized = path.relative_to(SHORTAGE_BATCH_ROOT.resolve()).as_posix()
+    normalized = path.relative_to(batch_root.resolve()).as_posix()
     return (
         f"/api/qwen-review/shortage-batch/file/{quote(normalized, safe='/')}"
-        f"?v={version}"
+        f"?dataset={quote(dataset, safe='')}&v={version}"
     )
 
 
-def shortage_batch_baseline_url(group: object) -> str | None:
+def shortage_batch_baseline_url(
+    group: object,
+    record: object = None,
+    version: int = 0,
+    *,
+    batch_root: Path | None = None,
+    dataset: str = "self_collect",
+) -> str | None:
     """Return the fixed task0 RGB paired with a shortage collection group."""
 
     if not isinstance(group, str):
         return None
+    batch_root = SHORTAGE_BATCH_ROOT if batch_root is None else batch_root
+    if isinstance(record, str):
+        local_baseline = batch_root / group / record / "baseline_rgb.jpg"
+        if local_baseline.is_file():
+            relative_path = local_baseline.relative_to(batch_root.resolve()).as_posix()
+            return shortage_batch_file_url(
+                relative_path,
+                version or local_baseline.stat().st_mtime_ns,
+                batch_root=batch_root,
+                dataset=dataset,
+            )
     try:
         baseline_path = resolve_initial_scan_for_web(group) / "rgb.jpg"
     except HTTPException:
@@ -402,13 +458,16 @@ def shortage_prompt_key(
     return location_id, pose_type, normalized_bboxes
 
 
-def load_shortage_debug_index() -> dict[
+def load_shortage_debug_index(
+    batch_root: Path | None = None,
+) -> dict[
     tuple[str, str, tuple[tuple[int, ...], ...]],
     tuple[dict[str, object], ...],
 ]:
     """Index saved Qwen prompts and ordered image inputs for batch review."""
 
-    debug_root = SHORTAGE_BATCH_ROOT / "qwen_debug"
+    batch_root = SHORTAGE_BATCH_ROOT if batch_root is None else batch_root
+    debug_root = batch_root / "qwen_debug"
     if not debug_root.is_dir():
         return {}
     global SHORTAGE_DEBUG_INDEX_CACHE_KEY, SHORTAGE_DEBUG_INDEX_CACHE
@@ -549,18 +608,27 @@ def resolve_shortage_sku_image(sku_id: str) -> Path:
 def shortage_qwen_images(
     debug_region: dict[str, object],
     version: int,
+    *,
+    batch_root: Path | None = None,
+    dataset: str = "self_collect",
 ) -> list[dict[str, object]]:
+    batch_root = SHORTAGE_BATCH_ROOT if batch_root is None else batch_root
     images: list[dict[str, object]] = []
     region_image = debug_region.get("region_image")
     if isinstance(region_image, Path) and region_image.is_file():
-        relative_path = region_image.relative_to(SHORTAGE_BATCH_ROOT.resolve())
+        relative_path = region_image.relative_to(batch_root.resolve())
         images.append(
             {
                 "image_index": 1,
                 "kind": "reference_region",
                 "label": "缺货前 reference 局部图",
                 "description": "缺货 bbox 对应的原商品区域",
-                "url": shortage_batch_file_url(relative_path.as_posix(), version),
+                "url": shortage_batch_file_url(
+                    relative_path.as_posix(),
+                    version,
+                    batch_root=batch_root,
+                    dataset=dataset,
+                ),
             }
         )
     candidates = debug_region.get("candidates", [])
@@ -569,19 +637,53 @@ def shortage_qwen_images(
         candidates = []
     if not isinstance(exact_candidate_images, list):
         exact_candidate_images = []
+    valid_exact_images = [
+        image
+        for image in exact_candidate_images
+        if isinstance(image, Path) and image.is_file()
+    ]
+    if valid_exact_images:
+        candidate_names = [
+            f"{index}: {candidate.get('name') or '未知候选'}"
+            for index, candidate in enumerate(candidates, start=1)
+            if isinstance(candidate, dict)
+        ]
+        for exact_index, exact_image in enumerate(valid_exact_images, start=1):
+            relative_path = exact_image.relative_to(batch_root.resolve())
+            is_sheet = len(valid_exact_images) == 1 and len(candidates) > 1
+            candidate = (
+                candidates[exact_index - 1]
+                if exact_index <= len(candidates)
+                and isinstance(candidates[exact_index - 1], dict)
+                else {}
+            )
+            images.append(
+                {
+                    "image_index": exact_index + 1,
+                    "kind": "candidate_sheet" if is_sheet else "candidate",
+                    "label": (
+                        "候选 SKU 编号拼图"
+                        if is_sheet
+                        else candidate.get("name") or "候选 SKU 图"
+                    ),
+                    "description": (
+                        " · ".join(candidate_names)
+                        if is_sheet
+                        else candidate.get("sku_id") or ""
+                    ),
+                    "url": shortage_batch_file_url(
+                        relative_path.as_posix(),
+                        version,
+                        batch_root=batch_root,
+                        dataset=dataset,
+                    ),
+                }
+            )
+        return images
     for candidate_index, candidate in enumerate(candidates, start=1):
         if not isinstance(candidate, dict):
             continue
-        exact_image = (
-            exact_candidate_images[candidate_index - 1]
-            if candidate_index <= len(exact_candidate_images)
-            else None
-        )
-        if isinstance(exact_image, Path) and exact_image.is_file():
-            relative_path = exact_image.relative_to(SHORTAGE_BATCH_ROOT.resolve())
-            image_url = shortage_batch_file_url(relative_path.as_posix(), version)
-        else:
-            image_url = shortage_sku_image_url(candidate.get("sku_id"))
+        image_url = shortage_sku_image_url(candidate.get("sku_id"))
         images.append(
             {
                 "image_index": candidate_index + 1,
@@ -605,6 +707,14 @@ def shortage_qwen_image_paths(debug_region: dict[str, object]) -> list[Path]:
         candidates = []
     if not isinstance(exact_candidate_images, list):
         exact_candidate_images = []
+    valid_exact_images = [
+        image
+        for image in exact_candidate_images
+        if isinstance(image, Path) and image.is_file()
+    ]
+    if valid_exact_images:
+        image_paths.extend(valid_exact_images)
+        return image_paths
     for candidate_index, candidate in enumerate(candidates):
         if not isinstance(candidate, dict):
             continue
@@ -623,10 +733,15 @@ def shortage_qwen_image_paths(debug_region: dict[str, object]) -> list[Path]:
     return image_paths
 
 
-def shortage_batch_result(group: str, record: str) -> dict:
-    if not SHORTAGE_BATCH_SUMMARY_PATH.is_file():
+def shortage_batch_result(
+    group: str,
+    record: str,
+    dataset: str = "self_collect",
+) -> dict:
+    _, summary_path, _ = resolve_shortage_batch_dataset(dataset)
+    if not summary_path.is_file():
         raise HTTPException(status_code=404, detail="shortage 批测汇总不存在")
-    summary = load_json_file(SHORTAGE_BATCH_SUMMARY_PATH, "shortage 批测汇总")
+    summary = load_json_file(summary_path, "shortage 批测汇总")
     result = next(
         (
             item
@@ -656,10 +771,14 @@ def shortage_batch_finding(result: dict, region_index: int) -> dict:
     return finding
 
 
-def decode_shortage_mask(relative_path: object) -> np.ndarray:
+def decode_shortage_mask(
+    relative_path: object,
+    batch_root: Path | None = None,
+) -> np.ndarray:
     if not isinstance(relative_path, str):
         raise HTTPException(status_code=422, detail="shortage finding 缺少 mask 文件")
-    path = resolve_descendant(SHORTAGE_BATCH_ROOT, relative_path)
+    batch_root = SHORTAGE_BATCH_ROOT if batch_root is None else batch_root
+    path = resolve_descendant(batch_root, relative_path)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="shortage finding mask 不存在")
     try:
@@ -754,7 +873,11 @@ def render_reference_mask_overlay(
     return overlay
 
 
-def shortage_debug_region(result: dict, region_index: int) -> dict[str, object]:
+def shortage_debug_region(
+    result: dict,
+    region_index: int,
+    batch_root: Path | None = None,
+) -> dict[str, object]:
     findings = [
         finding
         for finding in result.get("findings", [])
@@ -767,7 +890,7 @@ def shortage_debug_region(result: dict, region_index: int) -> dict[str, object]:
         result.get("pose_type"),
         [finding.get("bbox") for finding in findings],
     )
-    regions = load_shortage_debug_index().get(key, ())
+    regions = load_shortage_debug_index(batch_root).get(key, ())
     if not 0 < region_index <= len(regions):
         raise HTTPException(status_code=404, detail="找不到该 finding 的 Qwen 调试输入")
     return regions[region_index - 1]
@@ -776,6 +899,7 @@ def shortage_debug_region(result: dict, region_index: int) -> dict[str, object]:
 def shortage_retry_result_path(
     result: dict,
     region_index: int,
+    batch_root: Path | None = None,
 ) -> Path:
     group = result.get("group")
     record = result.get("record")
@@ -785,7 +909,8 @@ def shortage_retry_result_path(
         f"{group}/{record}/shortage_inspection/"
         f"qwen_retry_region_{region_index:02d}.json"
     )
-    return resolve_descendant(SHORTAGE_BATCH_ROOT, relative_path)
+    batch_root = SHORTAGE_BATCH_ROOT if batch_root is None else batch_root
+    return resolve_descendant(batch_root, relative_path)
 
 
 def build_shortage_retry_messages(
@@ -814,9 +939,12 @@ def build_shortage_retry_messages(
 
 
 @app.get("/api/qwen-review/shortage-batch")
-def list_shortage_batch_results() -> dict:
-    if not SHORTAGE_BATCH_SUMMARY_PATH.is_file():
+def list_shortage_batch_results(dataset: str = "self_collect") -> dict:
+    batch_root, summary_path, dataset_label = resolve_shortage_batch_dataset(dataset)
+    if not summary_path.is_file():
         return {
+            "dataset": dataset,
+            "dataset_label": dataset_label,
             "summary": {
                 "total_records": 0,
                 "completed_records": 0,
@@ -824,8 +952,8 @@ def list_shortage_batch_results() -> dict:
             },
             "samples": [],
         }
-    summary = load_json_file(SHORTAGE_BATCH_SUMMARY_PATH, "shortage 批测汇总")
-    version = SHORTAGE_BATCH_SUMMARY_PATH.stat().st_mtime_ns
+    summary = load_json_file(summary_path, "shortage 批测汇总")
+    version = summary_path.stat().st_mtime_ns
     samples = []
     raw_results = summary.get("results", [])
     if not isinstance(raw_results, list):
@@ -838,7 +966,7 @@ def list_shortage_batch_results() -> dict:
         )
         for raw_result in raw_results
     )
-    debug_index = load_shortage_debug_index() if has_findings else {}
+    debug_index = load_shortage_debug_index(batch_root) if has_findings else {}
     for raw_result in raw_results:
         if not isinstance(raw_result, dict):
             continue
@@ -864,6 +992,8 @@ def list_shortage_batch_results() -> dict:
             finding["mask_url"] = shortage_batch_file_url(
                 finding.get("mask"),
                 version,
+                batch_root=batch_root,
+                dataset=dataset,
             )
             region_index = finding.get("region_index")
             debug_region = (
@@ -879,7 +1009,12 @@ def list_shortage_batch_results() -> dict:
             ):
                 finding["qwen_prompt"] = debug_region["prompt"]
             finding["qwen_images"] = (
-                shortage_qwen_images(debug_region, version)
+                shortage_qwen_images(
+                    debug_region,
+                    version,
+                    batch_root=batch_root,
+                    dataset=dataset,
+                )
                 if isinstance(debug_region, dict)
                 else []
             )
@@ -894,7 +1029,7 @@ def list_shortage_batch_results() -> dict:
                 else None
             )
             retry_path = (
-                shortage_retry_result_path(result, region_index)
+                shortage_retry_result_path(result, region_index, batch_root)
                 if isinstance(region_index, int)
                 else None
             )
@@ -908,29 +1043,46 @@ def list_shortage_batch_results() -> dict:
         result["source_rgb_url"] = shortage_batch_file_url(
             result.get("source_rgb"),
             version,
+            batch_root=batch_root,
+            dataset=dataset,
         )
         result["baseline_rgb_url"] = shortage_batch_baseline_url(
             result.get("group"),
+            result.get("record"),
+            version,
+            batch_root=batch_root,
+            dataset=dataset,
         )
         result["aligned_current_url"] = shortage_batch_file_url(
             artifacts.get("aligned_current"),
             version,
+            batch_root=batch_root,
+            dataset=dataset,
         )
         result["combined_mask_url"] = shortage_batch_file_url(
             artifacts.get("combined_mask"),
             version,
+            batch_root=batch_root,
+            dataset=dataset,
         )
         result["overlay_url"] = shortage_batch_file_url(
             artifacts.get("overlay"),
             version,
+            batch_root=batch_root,
+            dataset=dataset,
         )
         result["row_detection_url"] = shortage_batch_file_url(
             artifacts.get("row_detection"),
             version,
+            batch_root=batch_root,
+            dataset=dataset,
         )
+        result["dataset"] = dataset
         samples.append(result)
     samples.sort(key=lambda item: (str(item.get("group")), str(item.get("record"))))
     return {
+        "dataset": dataset,
+        "dataset_label": dataset_label,
         "summary": {
             key: summary.get(key)
             for key in (
@@ -951,8 +1103,9 @@ def retry_shortage_batch_qwen(request: ShortageBatchQwenRetryRequest) -> dict:
     prompt = request.prompt.strip()
     if not prompt:
         raise HTTPException(status_code=400, detail="Prompt 不能为空")
-    result = shortage_batch_result(request.group, request.record)
-    debug_region = shortage_debug_region(result, request.region_index)
+    batch_root, _, _ = resolve_shortage_batch_dataset(request.dataset)
+    result = shortage_batch_result(request.group, request.record, request.dataset)
+    debug_region = shortage_debug_region(result, request.region_index, batch_root)
     image_paths = shortage_qwen_image_paths(debug_region)
     if not image_paths:
         raise HTTPException(status_code=404, detail="找不到该 finding 的 Qwen 输入图片")
@@ -980,6 +1133,7 @@ def retry_shortage_batch_qwen(request: ShortageBatchQwenRetryRequest) -> dict:
         parse_error = str(error)
     response_ready_at = time.perf_counter()
     retry_result = {
+        "dataset": request.dataset,
         "group": request.group,
         "record": request.record,
         "region_index": request.region_index,
@@ -1000,7 +1154,7 @@ def retry_shortage_batch_qwen(request: ShortageBatchQwenRetryRequest) -> dict:
         "created_at": datetime.now(UTC).isoformat(),
     }
     write_json_atomic(
-        shortage_retry_result_path(result, request.region_index),
+        shortage_retry_result_path(result, request.region_index, batch_root),
         retry_result,
         "Qwen shortage 重试结果",
     )
@@ -1014,7 +1168,8 @@ def generate_shortage_reference_mask(
     """Generate a Task0-aligned product mask from one reviewed shortage finding."""
 
     started_at = time.perf_counter()
-    result = shortage_batch_result(request.group, request.record)
+    batch_root, _, _ = resolve_shortage_batch_dataset(request.dataset)
+    result = shortage_batch_result(request.group, request.record, request.dataset)
     finding = shortage_batch_finding(result, request.region_index)
     product_name = finding.get("product_name")
     if not isinstance(product_name, str) or not product_name.strip():
@@ -1044,7 +1199,7 @@ def generate_shortage_reference_mask(
     except InitialScanError as error:
         raise HTTPException(status_code=422, detail=f"读取 Task0 完整图失败: {error}") from error
 
-    component_mask = decode_shortage_mask(finding.get("mask"))
+    component_mask = decode_shortage_mask(finding.get("mask"), batch_root)
     if component_mask.shape != initial_scan.rgb.shape[:2]:
         raise HTTPException(
             status_code=422,
@@ -1075,6 +1230,7 @@ def generate_shortage_reference_mask(
         generated.selected_bbox,
     )
     return {
+        "dataset": request.dataset,
         "group": request.group,
         "record": request.record,
         "region_index": request.region_index,
@@ -1100,8 +1256,12 @@ def generate_shortage_reference_mask(
 
 
 @app.get("/api/qwen-review/shortage-batch/file/{relative_path:path}")
-def get_shortage_batch_file(relative_path: str) -> FileResponse:
-    path = resolve_descendant(SHORTAGE_BATCH_ROOT, relative_path)
+def get_shortage_batch_file(
+    relative_path: str,
+    dataset: str = "self_collect",
+) -> FileResponse:
+    batch_root, _, _ = resolve_shortage_batch_dataset(dataset)
+    path = resolve_descendant(batch_root, relative_path)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="shortage 批测文件不存在")
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
