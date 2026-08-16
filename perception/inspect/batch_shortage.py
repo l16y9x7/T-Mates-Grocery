@@ -128,6 +128,22 @@ H2_FRONT_LEFT_UPPER_DEPTH_SLOTS = (
 
 
 def load_inspect_api() -> ModuleType:
+    inspect_main_path = (INSPECT_ROOT / "main.py").resolve()
+    # The live API imports this module lazily when a SHORTAGE request carries
+    # depth.  Reuse that already-loaded inspect module so its Pydantic models
+    # and dataclasses stay identical instead of loading a second copy of
+    # inspect/main.py under the batch-only module name.
+    for loaded in tuple(sys.modules.values()):
+        loaded_path = getattr(loaded, "__file__", None)
+        if loaded_path is None:
+            continue
+        try:
+            is_inspect_main = Path(loaded_path).resolve() == inspect_main_path
+        except (OSError, TypeError, ValueError):
+            continue
+        if is_inspect_main and hasattr(loaded, "inspect_images_with_artifacts"):
+            return loaded
+
     module_name = "perception_shortage_batch_inspect_api"
     existing = sys.modules.get(module_name)
     if isinstance(existing, ModuleType):
@@ -1148,6 +1164,71 @@ def _build_shelf_roi_mask(
     return mask
 
 
+def filter_findings_to_shelf_range(
+    findings: list[Any],
+    rows: list[Any],
+    rails: list[Any],
+    *,
+    image_width: int,
+    pose_type: str,
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    """Reject RGB candidates before fusion when they lie outside the shelf.
+
+    Row detection provides both the vertical shelf row and the usable rail
+    span.  Applying those constraints before depth fusion prevents people,
+    tables, and neighbouring bays from creating an RGB finding that can block
+    a real depth-only shortage later in the pipeline.
+    """
+
+    if not findings or not rows:
+        return list(findings), []
+
+    kept: list[Any] = []
+    rejected: list[dict[str, Any]] = []
+    for finding in findings:
+        bbox = [int(value) for value in finding.bbox]
+        row = _find_candidate_row(bbox, rows)
+        row_overlap = (
+            _candidate_row_overlap_ratio(bbox, row) if row is not None else 0.0
+        )
+        shelf_span = (
+            _effective_row_shelf_span(
+                row,
+                rails,
+                image_width=image_width,
+                pose_type=pose_type,
+            )
+            if row is not None
+            else None
+        )
+        shelf_overlap = _horizontal_overlap_ratio(bbox, shelf_span)
+        reasons: list[str] = []
+        if row is None or row_overlap < MIN_CANDIDATE_ROW_OVERLAP_RATIO:
+            reasons.append("candidate lies outside the detected shelf rows")
+        if (
+            shelf_overlap is not None
+            and shelf_overlap < MIN_OUTWARD_SHELF_OVERLAP_RATIO
+        ):
+            reasons.append("candidate lies outside the detected shelf span")
+        if reasons:
+            rejected.append(
+                {
+                    "bbox": bbox,
+                    "row_overlap_ratio": round(row_overlap, 4),
+                    "shelf_span": list(shelf_span) if shelf_span is not None else None,
+                    "shelf_overlap_ratio": (
+                        round(shelf_overlap, 4)
+                        if shelf_overlap is not None
+                        else None
+                    ),
+                    "reasons": reasons,
+                }
+            )
+            continue
+        kept.append(finding)
+    return kept, rejected
+
+
 def _horizontal_overlap_ratio(
     bbox: list[int],
     span: tuple[int, int] | None,
@@ -1990,13 +2071,30 @@ def filter_execution_with_depth(
     )
     photometric_mask = cv2.bitwise_and(execution.review_mask, shelf_roi_mask)
     depth_change_mask = cv2.bitwise_and(raw_depth_change_mask, shelf_roi_mask)
-    working_execution = replace(execution, review_mask=photometric_mask)
+    shelf_findings, shelf_range_rejections = filter_findings_to_shelf_range(
+        list(execution.response.findings),
+        detected_rows,
+        detected_rails,
+        image_width=review_shape[1],
+        pose_type=str(execution.response.pose_type),
+    )
+    shelf_response = execution.response.model_copy(
+        update={
+            "findings": shelf_findings,
+            "has_anomaly": bool(shelf_findings),
+        }
+    )
+    working_execution = replace(
+        execution,
+        response=shelf_response,
+        review_mask=photometric_mask,
+    )
     kept_pairs, accepted_input_count = refine_findings_with_signed_depth(
         photometric_mask,
         depth_change_mask,
         baseline_aligned,
         current_aligned,
-        list(execution.response.findings),
+        shelf_findings,
     )
     # A large, RGB-supported depth hole can be the real shortage even when the
     # global RGB detector was distracted by a different shelf row.  Only let a
@@ -2027,10 +2125,51 @@ def filter_execution_with_depth(
         >= MIN_DOMINANT_DEPTH_PROMOTION_RGB_RATIO
     ]
     kept_pairs.extend(promotions)
+
+    # For front views, a removed front item often exposes an identical item
+    # behind it.  RGB can therefore look almost unchanged while the aligned
+    # depth contains a complete, farther product silhouette.  Recover that
+    # silhouette before any RGB fallback and let it replace overlapping RGB
+    # fragments; non-overlapping, depth-supported findings remain available
+    # for genuine multi-shortage scenes.
+    location_id = str(execution.response.location_id).upper()
+    if "_F_" in location_id and baseline_image is not None:
+        recovered = recover_closed_depth_candidate(
+            execution=working_execution,
+            baseline_image=baseline_image,
+            depth_change_mask=depth_change_mask,
+            baseline_depth_mm=baseline_aligned,
+            current_depth_mm=current_aligned,
+            rows=detected_rows,
+            rails=detected_rails,
+        )
+        if recovered is not None:
+            recovery_pairs, recovery_rejections = (
+                filter_shelf_interference_candidates(
+                    [recovered],
+                    execution=working_execution,
+                    baseline_image=baseline_image,
+                    baseline_depth_mm=baseline_aligned,
+                    current_depth_mm=current_aligned,
+                    rows=detected_rows,
+                    rails=detected_rails,
+                )
+            )
+            shelf_range_rejections.extend(recovery_rejections)
+            if recovery_pairs:
+                recovered_bbox = list(recovery_pairs[0][0].bbox)
+                kept_pairs = [
+                    pair
+                    for pair in kept_pairs
+                    if _bbox_iou(list(pair[0].bbox), recovered_bbox)
+                    < DEPTH_PROMOTION_DUPLICATE_IOU
+                ]
+                kept_pairs.extend(recovery_pairs)
+
     low_contrast_promotion_count = 0
     if (
         not kept_pairs
-        and not execution.response.findings
+        and not shelf_findings
         and baseline_image is not None
     ):
         low_contrast_promotion = promote_low_contrast_depth_component(
@@ -2070,7 +2209,6 @@ def filter_execution_with_depth(
         kept_pairs = [fixed_layout_promotion]
         fixed_layout_depth_promotion_count = 1
     rgb_fallback_count = 0
-    location_id = str(execution.response.location_id).upper()
     allow_rgb_fallback = (
         "_F_" in location_id or "_INSPECT" not in location_id
     )
@@ -2103,37 +2241,6 @@ def filter_execution_with_depth(
             if fallback_pairs:
                 accepted_input_count = 1
                 rgb_fallback_count = 1
-    closed_depth_recovery_count = 0
-    if (
-        not kept_pairs
-        and "_F_" in location_id
-        and not execution.response.findings
-    ):
-        recovered = recover_closed_depth_candidate(
-            execution=working_execution,
-            baseline_image=baseline_image,
-            depth_change_mask=depth_change_mask,
-            baseline_depth_mm=baseline_aligned,
-            current_depth_mm=current_aligned,
-            rows=detected_rows,
-            rails=detected_rails,
-        )
-        if recovered is not None:
-            recovery_pairs, recovery_rejections = (
-                filter_shelf_interference_candidates(
-                    [recovered],
-                    execution=working_execution,
-                    baseline_image=baseline_image,
-                    baseline_depth_mm=baseline_aligned,
-                    current_depth_mm=current_aligned,
-                    rows=detected_rows,
-                    rails=detected_rails,
-                )
-            )
-            kept_pairs.extend(recovery_pairs)
-            shelf_interference_rejections.extend(recovery_rejections)
-            if recovery_pairs:
-                closed_depth_recovery_count = 1
     accepted_refined_count = sum(
         1 for _, support, _ in kept_pairs if bool(support.get("refined"))
     )
@@ -2147,6 +2254,11 @@ def filter_execution_with_depth(
     )
     accepted_rgb_fallback_count = sum(
         1 for _, support, _ in kept_pairs if bool(support.get("rgb_fallback"))
+    )
+    accepted_closed_depth_recovery_count = sum(
+        1
+        for _, support, _ in kept_pairs
+        if bool(support.get("closed_depth_recovery"))
     )
     kept_pairs.sort(key=lambda pair: (pair[0].bbox[1], pair[0].bbox[0]))
     kept_findings = [finding for finding, _, _ in kept_pairs]
@@ -2190,7 +2302,11 @@ def filter_execution_with_depth(
                 shelf_interference_rejections
             ),
             "shelf_interference_rejections": shelf_interference_rejections,
-            "closed_depth_recovery_findings": closed_depth_recovery_count,
+            "shelf_range_rejected_findings": len(shelf_range_rejections),
+            "shelf_range_rejections": shelf_range_rejections,
+            "closed_depth_recovery_findings": (
+                accepted_closed_depth_recovery_count
+            ),
             "fixed_layout_depth_promoted_findings": (
                 fixed_layout_depth_promotion_count
             ),
