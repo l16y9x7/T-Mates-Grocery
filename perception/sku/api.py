@@ -25,11 +25,14 @@ from config import SERVICE_BIND_HOST  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 DEFAULT_CATALOG_PATH = ROOT / "products.json"
+DEFAULT_INSPECTION_CANDIDATES_PATH = ROOT / "inspection_candidates.json"
 IMAGES_ROOT = (ROOT / "images_new").resolve()
 LOCATION_PATTERN = re.compile(
     r"^H(?P<shelf>[12])_(?P<face>[FB])_L(?P<level>[1-5])_C(?P<column>\d{2})$"
 )
+INSPECTION_TARGET_PATTERN = re.compile(r"^H[12]_[FB]_[LR]_INSPECT$")
 CandidatePoseType = Literal["", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
+InspectionPoseType = Literal["SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
 
 
 class HealthResponse(BaseModel):
@@ -46,6 +49,11 @@ class ProductResponse(BaseModel):
 class CandidateSkuRequest(BaseModel):
     location_id: str
     pose_type: CandidatePoseType
+
+
+class InspectionCandidateSkuRequest(BaseModel):
+    location_id: str
+    pose_type: InspectionPoseType
 
 
 class ErrorResponse(BaseModel):
@@ -74,6 +82,7 @@ class SkuCatalog:
         self._by_name_alias: dict[str, dict[str, Any]] = {}
         self._by_sku: dict[str, dict[str, Any]] = {}
         self._by_location: dict[str, dict[str, Any]] = {}
+        self._inspection_candidate_rows: dict[str, dict[int, tuple[str, ...]]] = {}
 
         for product in products:
             if not isinstance(product, dict):
@@ -150,6 +159,69 @@ class SkuCatalog:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return cls(payload, path.resolve().parent)
 
+    def load_inspection_candidates(self, path: Path) -> None:
+        """Load explicit per-view, per-shelf-level candidates for inspection."""
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        targets = payload.get("inspection_targets")
+        if not isinstance(targets, dict) or not targets:
+            raise ValueError(
+                "inspection_candidates.json inspection_targets must be a non-empty object"
+            )
+
+        loaded: dict[str, dict[int, tuple[str, ...]]] = {}
+        for raw_target, target_payload in targets.items():
+            if not isinstance(raw_target, str):
+                raise ValueError("inspection target ID must be a string")
+            target = raw_target.strip().upper()
+            if INSPECTION_TARGET_PATTERN.fullmatch(target) is None:
+                raise ValueError(f"invalid inspection target ID: {raw_target!r}")
+            if not isinstance(target_payload, dict):
+                raise ValueError(f"inspection target {target} must be an object")
+            raw_rows = target_payload.get("rows")
+            if not isinstance(raw_rows, dict):
+                raise ValueError(f"inspection target {target} is missing rows")
+
+            rows: dict[int, tuple[str, ...]] = {}
+            for level in range(1, 6):
+                raw_candidates = raw_rows.get(str(level))
+                if not isinstance(raw_candidates, list):
+                    raise ValueError(
+                        f"inspection target {target} row {level} must be a list"
+                    )
+                sku_ids: list[str] = []
+                seen_skus: set[str] = set()
+                for candidate in raw_candidates:
+                    if not isinstance(candidate, dict):
+                        raise ValueError(
+                            f"inspection target {target} row {level} contains an invalid candidate"
+                        )
+                    sku_id = candidate.get("sku_id")
+                    name = candidate.get("name")
+                    if not isinstance(sku_id, str) or not sku_id.strip():
+                        raise ValueError(
+                            f"inspection target {target} row {level} candidate is missing sku_id"
+                        )
+                    normalized_sku = sku_id.strip().upper()
+                    product = self._by_sku.get(normalized_sku)
+                    if product is None:
+                        raise ValueError(
+                            f"inspection target {target} row {level} references unknown SKU {normalized_sku}"
+                        )
+                    if name != product["name"]:
+                        raise ValueError(
+                            f"inspection target {target} row {level} name does not match {normalized_sku}"
+                        )
+                    if normalized_sku in seen_skus:
+                        raise ValueError(
+                            f"inspection target {target} row {level} duplicates {normalized_sku}"
+                        )
+                    seen_skus.add(normalized_sku)
+                    sku_ids.append(normalized_sku)
+                rows[level] = tuple(sku_ids)
+            loaded[target] = rows
+        self._inspection_candidate_rows = loaded
+
     def product_for_sku(self, sku: str) -> dict[str, Any] | None:
         return self._copy_product(self._by_sku.get(sku.strip().upper()))
 
@@ -214,6 +286,28 @@ class SkuCatalog:
             rows.append(row)
         return rows
 
+    def inspection_candidate_products(
+        self,
+        location_id: str,
+        pose_type: InspectionPoseType,
+    ) -> list[list[dict[str, Any]]] | None:
+        """Return the manually configured candidates for one inspection view."""
+
+        target = location_id.strip().upper()
+        if INSPECTION_TARGET_PATTERN.fullmatch(target) is None:
+            raise ValueError("invalid inspection location_id")
+        configured_rows = self._inspection_candidate_rows.get(target)
+        if configured_rows is None:
+            return None
+        levels = (1, 2) if pose_type == "SHELF_VIEW_UPPER" else (3, 4, 5)
+        return [
+            [
+                self._copy_product(self._by_sku[sku_id])
+                for sku_id in configured_rows[level]
+            ]
+            for level in levels
+        ]
+
     def images_for_name(self, name: str) -> list[str] | None:
         normalized_name = name.strip()
         product = self._by_name.get(normalized_name)
@@ -248,8 +342,12 @@ class SkuCatalog:
         }
 
 
-def create_app(catalog_path: Path = DEFAULT_CATALOG_PATH) -> FastAPI:
+def create_app(
+    catalog_path: Path = DEFAULT_CATALOG_PATH,
+    inspection_candidates_path: Path = DEFAULT_INSPECTION_CANDIDATES_PATH,
+) -> FastAPI:
     catalog = SkuCatalog.load(catalog_path)
+    catalog.load_inspection_candidates(inspection_candidates_path)
     app = FastAPI(
         title="感知模块 SKU 查询服务",
         version="2.0.0",
@@ -349,6 +447,28 @@ def create_app(catalog_path: Path = DEFAULT_CATALOG_PATH) -> FastAPI:
             for row in rows
         ]
 
+    @app.get(
+        "/sku/get_inspection_candidate_SKU",
+        response_model=list[list[ProductResponse]],
+        responses=ERROR_RESPONSES,
+    )
+    def get_inspection_candidate_sku(
+        request: InspectionCandidateSkuRequest = Body(...),
+    ) -> list[list[ProductResponse]]:
+        try:
+            rows = catalog.inspection_candidate_products(
+                request.location_id,
+                request.pose_type,
+            )
+        except ValueError as error:
+            raise ApiError(400, "INVALID_LOCATION_ID") from error
+        if rows is None:
+            raise ApiError(404, "LOCATION_NOT_FOUND")
+        return [
+            [ProductResponse(**product) for product in row if product is not None]
+            for row in rows
+        ]
+
     @app.get("/sku/get_all_names", response_model=list[str])
     def get_all_names() -> list[str]:
         return catalog.all_names()
@@ -386,9 +506,18 @@ def main() -> None:
     parser.add_argument("--host", default=SERVICE_BIND_HOST)
     parser.add_argument("--port", type=int, default=25540)
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG_PATH)
+    parser.add_argument(
+        "--inspection-candidates",
+        type=Path,
+        default=DEFAULT_INSPECTION_CANDIDATES_PATH,
+    )
     args = parser.parse_args()
 
-    uvicorn.run(create_app(args.catalog), host=args.host, port=args.port)
+    uvicorn.run(
+        create_app(args.catalog, args.inspection_candidates),
+        host=args.host,
+        port=args.port,
+    )
 
 
 if __name__ == "__main__":

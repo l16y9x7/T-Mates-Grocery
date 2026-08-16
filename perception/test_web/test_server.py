@@ -924,10 +924,6 @@ CANDIDATE 2: 旧商品B;
         self.assertEqual(write_mock.call_args.args[1], result)
 
     def test_full_inspect_run_times_real_pipeline_entry(self) -> None:
-        class FakeInspectRequest:
-            def __init__(self, **values: object) -> None:
-                self.values = values
-
         class FakeFinding:
             def model_dump(self, *, mode: str) -> dict:
                 self.mode = mode
@@ -938,8 +934,8 @@ CANDIDATE 2: 旧商品B;
                 self.findings = findings
 
         fake_inspect_api = Mock()
-        fake_inspect_api.InspectRequest = FakeInspectRequest
-        fake_inspect_api.inspect_shelf.return_value = FakeInspectResponse(
+        fake_inspect_api.decode_image.side_effect = ["baseline-array", "current-array"]
+        fake_inspect_api.inspect_supplied_images.return_value = FakeInspectResponse(
             [FakeFinding()]
         )
         manifest = {
@@ -968,12 +964,14 @@ CANDIDATE 2: 旧商品B;
                     server.FullInspectRunRequest(dataset="shortage", pair_number=1)
                 )
 
-        inspect_request = fake_inspect_api.inspect_shelf.call_args.args[0]
-        self.assertEqual(inspect_request.values["task_type"], "SHORTAGE")
-        self.assertEqual(inspect_request.values["location_id"], "H2_B_L3_C01")
-        self.assertEqual(inspect_request.values["pose_type"], "SHELF_VIEW_LOWER")
+        inspect_request = fake_inspect_api.inspect_supplied_images.call_args.kwargs
+        self.assertEqual(inspect_request["task_type"], "SHORTAGE")
+        self.assertEqual(inspect_request["location_id"], "H2_B_L3_C01")
+        self.assertEqual(inspect_request["pose_type"], "SHELF_VIEW_LOWER")
+        self.assertEqual(inspect_request["baseline"], "baseline-array")
+        self.assertEqual(inspect_request["current"], "current-array")
         self.assertEqual(
-            base64.b64decode(inspect_request.values["baseline_image_base64"]),
+            base64.b64decode(fake_inspect_api.decode_image.call_args_list[0].args[0]),
             b"baseline",
         )
         self.assertEqual(result["inspect_elapsed_ms"], 750.0)

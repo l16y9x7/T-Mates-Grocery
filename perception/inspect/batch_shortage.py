@@ -23,7 +23,7 @@ PERCEPTION_ROOT = INSPECT_ROOT.parent
 if str(PERCEPTION_ROOT) not in sys.path:
     sys.path.insert(0, str(PERCEPTION_ROOT))
 
-from initial_scan import InitialScan, load_initial_scan, load_slot_target_mapping  # noqa: E402
+from initial_scan import InitialScan, load_initial_scan  # noqa: E402
 
 
 DEFAULT_DATA_ROOT = (
@@ -136,27 +136,6 @@ def parse_group_name(group_name: str) -> tuple[str, str]:
     return match.group("target"), f"SHELF_VIEW_{match.group('pose')}"
 
 
-def representative_location_id(
-    inspection_target_id: str,
-    pose_type: str,
-    slot_mapping: dict[str, str],
-) -> str:
-    """Choose a real slot accepted by the SKU candidate service."""
-
-    level = 1 if pose_type == "SHELF_VIEW_UPPER" else 3
-    marker = f"_L{level}_"
-    slots = sorted(
-        slot
-        for slot, target in slot_mapping.items()
-        if target == inspection_target_id and marker in slot
-    )
-    if not slots:
-        raise RuntimeError(
-            f"{inspection_target_id} 没有可用于 {pose_type} 的 SKU 查询货位"
-        )
-    return slots[0]
-
-
 def discover_records(
     data_root: Path,
     *,
@@ -165,7 +144,6 @@ def discover_records(
 ) -> list[dict[str, Any]]:
     if not data_root.is_dir():
         raise RuntimeError(f"批测数据目录不存在: {data_root}")
-    slot_mapping = load_slot_target_mapping()
     records: list[dict[str, Any]] = []
     for group_directory in sorted(data_root.iterdir(), key=lambda path: path.name):
         if not group_directory.is_dir() or GROUP_PATTERN.fullmatch(group_directory.name) is None:
@@ -173,7 +151,6 @@ def discover_records(
         if groups is not None and group_directory.name not in groups:
             continue
         target_id, pose_type = parse_group_name(group_directory.name)
-        location_id = representative_location_id(target_id, pose_type, slot_mapping)
         for record_directory in sorted(group_directory.iterdir(), key=lambda path: path.name):
             if not record_directory.is_dir() or RECORD_PATTERN.fullmatch(record_directory.name) is None:
                 continue
@@ -185,7 +162,7 @@ def discover_records(
                     "record": record_directory.name,
                     "record_directory": record_directory,
                     "inspection_target_id": target_id,
-                    "location_id": location_id,
+                    "location_id": target_id,
                     "pose_type": pose_type,
                 }
             )

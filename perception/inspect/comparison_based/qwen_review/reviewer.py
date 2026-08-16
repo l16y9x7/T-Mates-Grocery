@@ -36,6 +36,7 @@ from .visual_retrieval import (  # noqa: E402
 TaskType = Literal["SHORTAGE", "MISPLACED"]
 MisplacedStage = Literal["misplaced_product", "expected_product"]
 PoseType = Literal["", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
+INSPECTION_TARGET_PATTERN = re.compile(r"^H[12]_[FB]_[LR]_INSPECT$")
 TARGET_SIZE = (1280, 720)
 SKU_TIMEOUT_SECONDS = 8.0
 QWEN_TIMEOUT_SECONDS = float(os.getenv("QWEN_REQUEST_TIMEOUT_SECONDS", "30"))
@@ -598,11 +599,17 @@ class QwenReviewer:
         location_id: str,
         pose_type: PoseType,
     ) -> list[list[dict[str, str]]]:
+        normalized_location = location_id.strip().upper()
+        endpoint = (
+            "/sku/get_inspection_candidate_SKU"
+            if INSPECTION_TARGET_PATTERN.fullmatch(normalized_location)
+            else "/sku/get_candidate_SKU"
+        )
         response = self._request(
             "GET",
-            f"{self.sku_base_url}/sku/get_candidate_SKU",
+            f"{self.sku_base_url}{endpoint}",
             stage="candidate_lookup",
-            json={"location_id": location_id, "pose_type": pose_type},
+            json={"location_id": normalized_location, "pose_type": pose_type},
             timeout=self.sku_timeout,
         )
         try:

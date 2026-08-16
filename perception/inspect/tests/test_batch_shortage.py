@@ -19,7 +19,7 @@ SPEC.loader.exec_module(batch)
 
 
 class ShortageBatchTest(unittest.TestCase):
-    def test_discovers_grouped_records_and_resolves_sku_location(self) -> None:
+    def test_discovers_grouped_records_and_uses_inspection_target_location(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             record = (
@@ -34,7 +34,7 @@ class ShortageBatchTest(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0]["inspection_target_id"], "H1_B_R_INSPECT")
         self.assertEqual(records[0]["pose_type"], "SHELF_VIEW_UPPER")
-        self.assertEqual(records[0]["location_id"], "H1_B_L1_C04")
+        self.assertEqual(records[0]["location_id"], "H1_B_R_INSPECT")
 
     def test_clipped_region_mask_keeps_only_bbox_pixels(self) -> None:
         mask = np.full((20, 30), 255, dtype=np.uint8)

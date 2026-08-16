@@ -150,6 +150,53 @@ class SkuApiTest(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         self.assertTrue(all(rows))
 
+    def test_get_inspection_candidates_are_grouped_by_visible_rows(self) -> None:
+        left = self.client.request(
+            "GET",
+            "/sku/get_inspection_candidate_SKU",
+            json={
+                "location_id": "H1_B_L_INSPECT",
+                "pose_type": "SHELF_VIEW_LOWER",
+            },
+        )
+        right = self.client.request(
+            "GET",
+            "/sku/get_inspection_candidate_SKU",
+            json={
+                "location_id": "H1_B_R_INSPECT",
+                "pose_type": "SHELF_VIEW_LOWER",
+            },
+        )
+
+        self.assertEqual(left.status_code, 200)
+        self.assertEqual(right.status_code, 200)
+        left_rows = left.json()
+        right_rows = right.json()
+        self.assertEqual(len(left_rows), 3)
+        self.assertEqual(len(right_rows), 3)
+        for row in left_rows + right_rows:
+            self.assertIsInstance(row, list)
+            self.assertTrue(
+                all(
+                    isinstance(product.get("sku_id"), str)
+                    and isinstance(product.get("name"), str)
+                    for product in row
+                )
+            )
+
+    def test_get_inspection_candidates_rejects_product_slot(self) -> None:
+        response = self.client.request(
+            "GET",
+            "/sku/get_inspection_candidate_SKU",
+            json={
+                "location_id": "H1_B_L3_C01",
+                "pose_type": "SHELF_VIEW_LOWER",
+            },
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"error_code": "INVALID_LOCATION_ID"})
+
     def test_get_candidate_sku_rejects_invalid_location(self) -> None:
         response = self.client.request(
             "GET",
@@ -192,6 +239,7 @@ class SkuApiTest(unittest.TestCase):
         self.assertIn("/sku/get_image", paths)
         self.assertIn("/sku/get_all_names", paths)
         self.assertIn("/sku/get_candidate_SKU", paths)
+        self.assertIn("/sku/get_inspection_candidate_SKU", paths)
 
 
 if __name__ == "__main__":

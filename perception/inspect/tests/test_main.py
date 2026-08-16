@@ -5,6 +5,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import cv2
@@ -81,13 +82,11 @@ class InspectMainTest(unittest.TestCase):
         self.assertEqual(response.findings, [])
         self.assertEqual(response.algorithms[0].difference_mode, "chroma")
 
-    def test_route_accepts_plain_base64_and_data_url(self) -> None:
+    def test_route_loads_task0_and_captures_live_head_rgbd(self) -> None:
         request = inspect_api.InspectRequest(
             task_type="SHORTAGE",
-            location_id=" H1_F ",
+            location_id=" H1_F_L_INSPECT ",
             pose_type="SHELF_VIEW_LOWER",
-            baseline_image_base64=encode_image(self.baseline, data_url=True),
-            current_image_base64=encode_image(self.current),
             reference_item_area=8000,
         )
 
@@ -103,7 +102,25 @@ class InspectMainTest(unittest.TestCase):
             candidate_names=("测试商品",),
         )
         reviewer = _FakeReviewer(reviewed)
+        capture_directories: list[Path] = []
+
+        def capture(directory: str | Path) -> SimpleNamespace:
+            capture_directory = Path(directory)
+            capture_directories.append(capture_directory)
+            self.assertTrue(capture_directory.is_dir())
+            return SimpleNamespace(
+                directory=capture_directory,
+                rgb=self.current,
+                depth_mm=np.full(self.current.shape[:2], 1200, dtype=np.uint16),
+            )
+
         with (
+            patch.object(
+                inspect_api,
+                "load_initial_scan",
+                return_value=SimpleNamespace(rgb=self.baseline),
+            ) as load_initial_scan,
+            patch.object(inspect_api, "capture_head_rgbd", side_effect=capture) as capture_rgbd,
             patch.object(
                 inspect_api,
                 "QwenReviewer",
@@ -117,7 +134,14 @@ class InspectMainTest(unittest.TestCase):
         ):
             response = inspect_api.inspect_shelf(request)
 
-        self.assertEqual(request.location_id, "H1_F")
+        self.assertEqual(request.location_id, "H1_F_L_INSPECT")
+        load_initial_scan.assert_called_once_with(
+            "H1_F_L_INSPECT",
+            "SHELF_VIEW_LOWER",
+        )
+        capture_rgbd.assert_called_once()
+        self.assertEqual(len(capture_directories), 1)
+        self.assertFalse(capture_directories[0].exists())
         self.assertEqual(len(response.findings), 1)
         self.assertEqual(
             response.findings[0].shortage_product_name,
@@ -217,19 +241,31 @@ class InspectMainTest(unittest.TestCase):
         self.assertEqual(constraints[0].row_index, 3)
 
     def test_no_change_route_returns_empty_findings(self) -> None:
-        encoded = encode_image(self.baseline)
         request = inspect_api.InspectRequest(
             task_type="SHORTAGE",
-            location_id="H1_F",
+            location_id="H1_F_L_INSPECT",
             pose_type="SHELF_VIEW_LOWER",
-            baseline_image_base64=encoded,
-            current_image_base64=encoded,
         )
 
-        self.assertEqual(
-            inspect_api.inspect_shelf(request).model_dump(),
-            {"findings": []},
-        )
+        with (
+            patch.object(
+                inspect_api,
+                "load_initial_scan",
+                return_value=SimpleNamespace(rgb=self.baseline),
+            ),
+            patch.object(
+                inspect_api,
+                "capture_head_rgbd",
+                return_value=SimpleNamespace(
+                    directory=Path("temporary"),
+                    rgb=self.baseline.copy(),
+                    depth_mm=np.full(self.baseline.shape[:2], 1200, dtype=np.uint16),
+                ),
+            ),
+        ):
+            response = inspect_api.inspect_shelf(request)
+
+        self.assertEqual(response.model_dump(), {"findings": []})
 
     def test_misplaced_public_shape_is_stable(self) -> None:
         reviewed = [
@@ -283,10 +319,13 @@ class InspectMainTest(unittest.TestCase):
 
     def test_openapi_requires_pose_type(self) -> None:
         schema = inspect_api.app.openapi()
-        required = schema["components"]["schemas"]["InspectRequest"]["required"]
+        request_schema = schema["components"]["schemas"]["InspectRequest"]
+        required = request_schema["required"]
         self.assertIn("pose_type", required)
+        self.assertNotIn("baseline_image_base64", request_schema["properties"])
+        self.assertNotIn("current_image_base64", request_schema["properties"])
 
-    def test_request_rejects_depth_fields_belonging_to_place_locate(self) -> None:
+    def test_request_rejects_runtime_rgb_and_depth_fields(self) -> None:
         with self.assertRaises(ValidationError):
             inspect_api.InspectRequest(
                 task_type="SHORTAGE",

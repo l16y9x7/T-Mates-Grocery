@@ -23,6 +23,12 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if __package__ and __package__.startswith("perception."):
+    from ..camera_capture import (
+        CameraCaptureError,
+        capture_head_rgbd,
+        inspection_temporary_directory,
+    )
+    from ..initial_scan import InitialScanError, load_initial_scan
     from .comparison_based import ComparisonConfig, detect_shortage
     from .comparison_based.qwen_review import (
         DEFAULT_DEBUG_ROOT,
@@ -41,6 +47,11 @@ else:
         sys.path.insert(0, str(PERCEPTION_ROOT))
     if str(INSPECT_ROOT) not in sys.path:
         sys.path.insert(0, str(INSPECT_ROOT))
+    from camera_capture import (
+        CameraCaptureError,
+        capture_head_rgbd,
+        inspection_temporary_directory,
+    )
     from comparison_based import ComparisonConfig, detect_shortage
     from comparison_based.qwen_review import (
         DEFAULT_DEBUG_ROOT,
@@ -51,6 +62,7 @@ else:
         ReviewRowConstraint,
         ReviewedFinding,
     )
+    from initial_scan import InitialScanError, load_initial_scan
     from row_detection import RowDetectionConfig, RowDetectionResult, detect_rows
 
 
@@ -74,15 +86,13 @@ router = APIRouter()
 
 
 class InspectRequest(BaseModel):
-    """Two shelf images and the inspection task to run."""
+    """A shelf inspection task whose RGB-D inputs are resolved at runtime."""
 
     model_config = ConfigDict(extra="forbid")
 
     task_type: TaskType
     location_id: str = Field(min_length=1)
     pose_type: PoseType
-    baseline_image_base64: str = Field(min_length=1)
-    current_image_base64: str = Field(min_length=1)
     reference_item_area: float | None = Field(default=None, gt=0)
 
     @field_validator("location_id")
@@ -450,18 +460,63 @@ def review_inspection_execution(
 
 @router.post("/perception/inspect", response_model=InspectApiResponse)
 def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
-    """Compare a full-shelf reference image with the current shelf image."""
+    """Load task0 reference RGB-D and compare it with a live head-camera capture."""
 
-    baseline = decode_image(request.baseline_image_base64, "baseline_image_base64")
-    current = decode_image(request.current_image_base64, "current_image_base64")
+    try:
+        baseline = load_initial_scan(request.location_id, request.pose_type)
+    except InitialScanError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"读取 task0 初始 RGB-D 失败: {error}",
+        ) from error
+
+    try:
+        with inspection_temporary_directory() as temporary_directory:
+            current = capture_head_rgbd(temporary_directory)
+            logger.info(
+                "Inspection RGB-D captured: directory=%s valid_depth_pixels=%s",
+                current.directory,
+                int(np.count_nonzero(current.depth_mm > 0)),
+            )
+            return inspect_supplied_images(
+                task_type=request.task_type,
+                location_id=request.location_id,
+                pose_type=request.pose_type,
+                baseline=baseline.rgb,
+                current=current.rgb,
+                reference_item_area=request.reference_item_area,
+            )
+    except CameraCaptureError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"获取当前 head camera RGB-D 失败: {error}",
+        ) from error
+    except OSError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"创建巡检临时目录失败: {error}",
+        ) from error
+
+
+def inspect_supplied_images(
+    *,
+    task_type: TaskType,
+    location_id: str,
+    pose_type: PoseType,
+    baseline: np.ndarray,
+    current: np.ndarray,
+    reference_item_area: float | None = None,
+) -> InspectApiResponse:
+    """Run the public result pipeline on caller-supplied images for offline tests."""
+
     try:
         execution = inspect_images_with_artifacts(
-            request.task_type,
+            task_type,
             baseline,
             current,
-            location_id=request.location_id,
-            pose_type=request.pose_type,
-            reference_item_area=request.reference_item_area,
+            location_id=location_id,
+            pose_type=pose_type,
+            reference_item_area=reference_item_area,
         )
     except RuntimeError as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
@@ -471,9 +526,9 @@ def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
     try:
         review = review_inspection_execution(
             execution,
-            task_type=request.task_type,
-            location_id=request.location_id,
-            pose_type=request.pose_type,
+            task_type=task_type,
+            location_id=location_id,
+            pose_type=pose_type,
             baseline=baseline,
         )
     except QwenReviewError as error:
@@ -485,7 +540,7 @@ def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
                 "message": str(error),
             },
         ) from error
-    return build_product_findings(request.task_type, review.findings)
+    return build_product_findings(task_type, review.findings)
 
 
 def build_product_findings(

@@ -74,7 +74,9 @@ class FakeSession:
 
     def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
         self.calls.append((method, url, kwargs))
-        if url.endswith("/sku/get_candidate_SKU"):
+        if url.endswith("/sku/get_candidate_SKU") or url.endswith(
+            "/sku/get_inspection_candidate_SKU"
+        ):
             return FakeResponse(payload=self.candidate_rows)
         if url.endswith("/sku/get_image"):
             name = kwargs["params"]["name"]
@@ -195,6 +197,43 @@ class QwenReviewerTest(unittest.TestCase):
         system_prompt = qwen_payload["messages"][0]["content"]
         self.assertIn("shortage_product_name", system_prompt)
         self.assertNotIn("misplaced_product_name", system_prompt)
+
+    def test_inspection_target_uses_view_candidate_endpoint(self) -> None:
+        session = FakeSession(
+            json.dumps(
+                {
+                    "shortage_product_name": "绿色奥利奥",
+                    "confidence": 0.94,
+                },
+                ensure_ascii=False,
+            )
+        )
+        reviewer = QwenReviewer(
+            sku_base_url="http://sku",
+            qwen_url="http://qwen/v1",
+            session=session,
+        )
+
+        reviewer.review(
+            task_type="SHORTAGE",
+            location_id="h1_f_l_inspect",
+            pose_type="SHELF_VIEW_UPPER",
+            current=self.current,
+            baseline=self.baseline,
+            bboxes=[[300, 300, 101, 221]],
+        )
+
+        candidate_call = session.calls[0]
+        self.assertTrue(
+            candidate_call[1].endswith("/sku/get_inspection_candidate_SKU")
+        )
+        self.assertEqual(
+            candidate_call[2]["json"],
+            {
+                "location_id": "H1_F_L_INSPECT",
+                "pose_type": "SHELF_VIEW_UPPER",
+            },
+        )
 
     def test_oversized_candidate_image_is_downscaled(self) -> None:
         image = np.full((1536, 2048, 3), (50, 120, 220), dtype=np.uint8)

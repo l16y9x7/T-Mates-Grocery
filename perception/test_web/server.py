@@ -1255,16 +1255,16 @@ def run_full_inspect(request: FullInspectRunRequest) -> dict:
         current_base64 = base64.b64encode(current_path.read_bytes()).decode("ascii")
     except OSError as error:
         raise HTTPException(status_code=500, detail=f"读取巡检样例图失败: {error}") from error
+    baseline = INSPECT_API.decode_image(baseline_base64, "baseline")
+    current = INSPECT_API.decode_image(current_base64, "current")
 
     inspect_started_at = time.perf_counter()
-    inspect_response = INSPECT_API.inspect_shelf(
-        INSPECT_API.InspectRequest(
-            task_type=task_type,
-            location_id=location_id,
-            pose_type=pose_type,
-            baseline_image_base64=baseline_base64,
-            current_image_base64=current_base64,
-        )
+    inspect_response = INSPECT_API.inspect_supplied_images(
+        task_type=task_type,
+        location_id=location_id,
+        pose_type=pose_type,
+        baseline=baseline,
+        current=current,
     )
     inspect_finished_at = time.perf_counter()
     inspect_findings = (

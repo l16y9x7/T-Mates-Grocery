@@ -16,22 +16,25 @@ Content-Type: application/json
 ```json
 {
   "task_type": "SHORTAGE",
-  "location_id": "H1_F",
+  "location_id": "H1_F_L_INSPECT",
   "pose_type": "SHELF_VIEW_UPPER",
-  "baseline_image_base64": "<满货基准图的 base64 或 data URL>",
-  "current_image_base64": "<当前巡检图的 base64 或 data URL>",
   "reference_item_area": 12000
 }
 ```
 
 - `task_type` 支持 `SHORTAGE` 和 `MISPLACED`。
-- `location_id` 是当前巡检点位 ID，必填；后续用于查询该位置允许出现的商品。
+- `location_id` 是当前巡检点位 ID，必填。传入 `H1_B_L_INSPECT`、
+  `H1_B_R_INSPECT` 这类巡检导航点时，会使用 SKU 服务中对应 Left/Right
+  视角的候选配置；传入具体商品货位时保留原有候选查询逻辑。
 - `pose_type` 必填，支持 `""`、`SHELF_VIEW_UPPER` 和 `SHELF_VIEW_LOWER`，与
   `location_id` 一起用于查询当前画面候选 SKU。
 - `reference_item_area` 可省略。
-- 图片输入和现有对比算法阈值参数保持不变。
-- 本接口不接收深度：它只确定异常货架和商品语义。正常/当前两组深度留给后续
-  `/perception/place/locate`，用于把原商品 mask 三维重投影到当前头部相机视角。
+- HTTP 接口不接收 RGB 或深度字段。初始 RGB-D 固定读取
+  `agent/output/task0/<location_id>_UPPER|LOWER/`；当前 RGB-D 从 head camera
+  快照接口获取。
+- 当前帧会在一次请求期间保存为临时目录中的 `rgb.jpg`、`depth_mm.npy` 和
+  `meta.json`。可通过 `INSPECT_TEMP_DIR` 指定临时目录根路径；请求结束后自动清理。
+- 离线批测和 Python 测试入口继续允许直接传入 NumPy RGB/深度数据，不会访问相机。
 
 `SHORTAGE` 响应统一使用 `findings`；没有缺货时返回
 `{"findings": []}`，检测到缺货区域时返回：
@@ -57,8 +60,9 @@ Content-Type: application/json
 }
 ```
 
-对比算法先定位 bbox，随后 Qwen 审核器使用 `location_id + pose_type` 获取候选商品，
-再通过 `/sku/get_image` 获取标准图。Qwen 只能返回候选集合中的标准商品名；无法确认、
+对比算法先定位 bbox，随后 Qwen 审核器使用 `location_id + pose_type` 获取候选商品；
+巡检导航点调用 `/sku/get_inspection_candidate_SKU`，具体商品货位继续调用
+`/sku/get_candidate_SKU`，再通过 `/sku/get_image` 获取标准图。Qwen 只能返回候选集合中的标准商品名；无法确认、
 候选外名称、重复区域以及实际商品与标准商品相同的放错结果都会被拒绝或过滤。
 
 主接口会直接调用公共模块 `perception/row_detection` 的 `detect_rows()` 检测基准图中的

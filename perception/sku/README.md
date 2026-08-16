@@ -5,6 +5,7 @@
 ## 文件说明
 
 - `products.json`：每个 SKU 一条记录。
+- `inspection_candidates.json`：按巡检点和货架层维护 Qwen 可见候选；Left/Right 可独立删减。
 - `images_new/`：保存商品 JPG 参考图片；`products.json` 中的 `images/...` 保持为 API 资源路径。
 - `build_catalog.py`：从标准摆放清单重新生成 `products.json`。
 - `extract_images.py`：从标准摆放 DOCX 按商品单元格及裁剪参数提取参考图片。
@@ -82,6 +83,7 @@ python api.py --port 8080
 | `GET` | `/sku/get_image` | `name` | 商品图片相对路径列表 |
 | `GET` | `/sku/get_all_names` | 无 | 所有商品名称列表 |
 | `GET` | `/sku/get_candidate_SKU` | JSON 请求体：`location_id`、`pose_type` | 按货架层分组的候选 SKU |
+| `GET` | `/sku/get_inspection_candidate_SKU` | JSON 请求体：巡检点 `location_id`、`pose_type` | 按巡检视角和货架层分组的候选 SKU |
 | `GET` | `/images/...` | 无 | 获取图片文件 |
 | `GET` | `/docs` | 无 | FastAPI 自动接口文档 |
 
@@ -154,6 +156,23 @@ Content-Type: application/json
 - `""`：只返回 `location_id` 所在层；
 - `"SHELF_VIEW_UPPER"`：返回 `L1`、`L2`；
 - `"SHELF_VIEW_LOWER"`：返回 `L3`、`L4`、`L5`。
+
+巡检流程使用独立的视角候选接口：
+
+```http
+GET /sku/get_inspection_candidate_SKU
+Content-Type: application/json
+
+{
+  "location_id": "H1_B_L_INSPECT",
+  "pose_type": "SHELF_VIEW_LOWER"
+}
+```
+
+候选来自 `inspection_candidates.json`。其中 `rows.1` 到 `rows.5` 对应
+`L1` 到 `L5`；接口根据 `pose_type` 返回上面两层或下面三层。初始文件在
+Left/Right 中都放入了对应货架面的完整候选，现场确认视野后可直接删除不在该
+视角内的候选对象。修改文件后需要重启 SKU 服务。
 
 响应外层数组按层从上到下排列，每层商品按照货位列号从左到右排列；同一商品占据
 多个相邻货位时只返回一次。每项包含商品标准名称、参考图片和货位，可以直接作为
