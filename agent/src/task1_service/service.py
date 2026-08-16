@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -56,6 +57,8 @@ class Task1Orchestrator:
         logger = _Task1Log(self.settings, task_run_id, request)
         self.client.set_trace_callback(logger.interface_event)
         navigation_state: dict[str, str | None] = {"target_id": None}
+        held_items: dict[Hand, str] = {}
+        action_failures: list[dict[str, str]] = []
         step = "健康检查"
         try:
             logger.event("operation", "started")
@@ -88,10 +91,10 @@ class Task1Orchestrator:
             for name in product_names:
                 logger.event("SKU货位转换", "started", product_name=name)
                 sku = await self.client.search_by_name(name)
-                if len(sku.locations) != 1:
+                if not sku.locations:
                     raise Task1ServiceError(
                         "AMBIGUOUS_PRODUCT_SLOT",
-                        f"SKU {name} must resolve to exactly one location",
+                        f"SKU {name} must resolve to at least one location",
                         status_code=422,
                     )
                 slot_id = sku.locations[0]
@@ -132,16 +135,83 @@ class Task1Orchestrator:
 
             if targets[0].hand != targets[1].hand:
                 for index, target in enumerate(targets):
-                    await self._pick_target(target, index, task_run_id, logger, navigation_state)
-                await self._prepare_delivery(task_run_id, logger, navigation_state=navigation_state)
-                for index, target in enumerate(targets):
-                    await self._place_target(target, index, task_run_id, logger)
+                    step = "商品抓取"
+                    await self._pick_target(
+                        target,
+                        index,
+                        task_run_id,
+                        logger,
+                        navigation_state,
+                        held_items,
+                        action_failures,
+                    )
+                if held_items:
+                    step = "交付台准备"
+                    await self._prepare_delivery(
+                        task_run_id, logger, navigation_state=navigation_state
+                    )
+                    for index, target in enumerate(targets):
+                        step = "商品放置"
+                        await self._place_target(
+                            target,
+                            index,
+                            task_run_id,
+                            logger,
+                            held_items,
+                            action_failures,
+                        )
+                else:
+                    logger.event(
+                        "交付台准备",
+                        "skipped",
+                        reason="no_picked_items",
+                    )
             else:
                 # 单手能力受限时，始终保持该手一次只持有一件商品。
                 for index, target in enumerate(targets):
-                    await self._pick_target(target, index, task_run_id, logger, navigation_state)
+                    step = "商品抓取"
+                    picked = await self._pick_target(
+                        target,
+                        index,
+                        task_run_id,
+                        logger,
+                        navigation_state,
+                        held_items,
+                        action_failures,
+                    )
+                    if not picked:
+                        logger.event(
+                            "交付台准备",
+                            "skipped",
+                            product_name=target.product_name,
+                            reason="pick_not_succeeded",
+                        )
+                        logger.event(
+                            "放置",
+                            "skipped",
+                            product_name=target.product_name,
+                            hand=target.hand.value,
+                            reason="pick_not_succeeded",
+                        )
+                        continue
+                    step = "交付台准备"
                     await self._prepare_delivery(task_run_id, logger, index, navigation_state)
-                    await self._place_target(target, index, task_run_id, logger)
+                    step = "商品放置"
+                    await self._place_target(
+                        target,
+                        index,
+                        task_run_id,
+                        logger,
+                        held_items,
+                        action_failures,
+                    )
+
+            if action_failures:
+                step = "抓放失败汇总"
+                raise Task1ServiceError(
+                    "TASK_ACTIONS_FAILED",
+                    f"{len(action_failures)} pick/place actions failed after nudge recovery",
+                )
 
             step = "任务判定区导航"
             logger.event("任务判定区导航", "started", target_id=self.settings.task_boundary)
@@ -153,7 +223,6 @@ class Task1Orchestrator:
             )
             logger.event("任务判定区导航", "succeeded", target_id=self.settings.task_boundary)
 
-            held_items: dict[Hand, str] = {}
             result = Task1Result(
                 task_run_id=task_run_id,
                 task_type="SORTING",
@@ -165,16 +234,72 @@ class Task1Orchestrator:
             logger.event("operation", "succeeded", picked_count=2, placed_count=2)
             return result
         except Exception as exc:
+            original_step = step
             if isinstance(exc, Task1ServiceError):
-                exc.step = step
+                exc.step = original_step
+            try:
+                navigation_state["target_id"] = None
+                logger.event(
+                    "失败回开始点",
+                    "started",
+                    target_id=self.settings.start_target_id,
+                    original_step=original_step,
+                    original_error_code=getattr(exc, "code", type(exc).__name__),
+                )
+                await self._navigate(
+                    self.settings.start_target_id,
+                    f"{task_run_id}:task1.failure.start.navigate",
+                    logger,
+                    navigation_state,
+                )
+                logger.event(
+                    "失败回开始点",
+                    "succeeded",
+                    target_id=self.settings.start_target_id,
+                    original_step=original_step,
+                )
+            except Exception as recovery_exc:
+                logger.event(
+                    "失败回开始点",
+                    "failed",
+                    target_id=self.settings.start_target_id,
+                    original_step=original_step,
+                    error_code=getattr(recovery_exc, "code", type(recovery_exc).__name__),
+                    message=str(recovery_exc),
+                )
+                recovery_error = Task1ServiceError(
+                    "FAILURE_RECOVERY_FAILED",
+                    f"task failed at {original_step}; navigation back to start also failed: {recovery_exc}",
+                    failed_interface=getattr(recovery_exc, "failed_interface", None),
+                    url=getattr(recovery_exc, "url", None),
+                )
+                recovery_error.step = "失败回开始点"
+                logger.event(
+                    "operation",
+                    "failed",
+                    step=recovery_error.step,
+                    error_code=recovery_error.code,
+                    message=recovery_error.message,
+                    original_step=original_step,
+                    original_error_code=getattr(exc, "code", type(exc).__name__),
+                    original_message=str(exc),
+                )
+                LOGGER.exception(
+                    "任务一失败且无法返回开始点 step=%s key=%s",
+                    original_step,
+                    task_run_id,
+                )
+                raise recovery_error from recovery_exc
             logger.event(
                 "operation",
                 "failed",
-                step=step,
+                step=original_step,
                 error_code=getattr(exc, "code", type(exc).__name__),
                 message=str(exc),
+                failed_interface=getattr(exc, "failed_interface", None),
+                url=getattr(exc, "url", None),
             )
-            LOGGER.exception("任务一流程失败 step=%s key=%s", step, task_run_id)
+            LOGGER.exception("任务一流程失败 step=%s key=%s", original_step, task_run_id)
             raise
         finally:
             self.client.set_trace_callback(None)
@@ -209,7 +334,20 @@ class Task1Orchestrator:
         task_run_id: str,
         logger: _Task1Log,
         navigation_state: dict[str, str | None],
-    ) -> None:
+        held_items: dict[Hand, str],
+        action_failures: list[dict[str, str]],
+    ) -> bool:
+        if target.hand in held_items:
+            failure = {
+                "operation": "pick",
+                "product_name": target.product_name,
+                "hand": target.hand.value,
+                "error_code": "HAND_OCCUPIED",
+                "message": f"{target.hand.value} hand already holds an item",
+            }
+            action_failures.append(failure)
+            logger.event("抓取", "skipped", **failure)
+            return False
         logger.event("商品导航", "started", product_name=target.product_name, target_id=target.target_id)
         await self._navigate(
             target.target_id,
@@ -221,10 +359,22 @@ class Task1Orchestrator:
         logger.event("抓取位姿", "started", product_name=target.product_name, pose_type="SHELF_PICK_READY", shelf_level=target.shelf_level)
         await self.client.prepare_pose("SHELF_PICK_READY", f"{task_run_id}:task1.pick.{index}.pose", shelf_level=target.shelf_level)
         logger.event("抓取位姿", "succeeded", product_name=target.product_name, shelf_level=target.shelf_level)
-        logger.event("抓取", "started", product_name=target.product_name, hand=target.hand.value)
-        await self.client.pick(target.product_name, target.hand, f"{task_run_id}:task1.pick.{index}.pick")
-        target.picked = True
-        logger.event("抓取", "succeeded", product_name=target.product_name, hand=target.hand.value)
+        succeeded = await self._run_action_with_recovery(
+            operation="pick",
+            event_name="抓取",
+            product_name=target.product_name,
+            hand=target.hand,
+            action_key=f"{task_run_id}:task1.pick.{index}.pick",
+            action=lambda key: self.client.pick(
+                target.product_name, target.hand, target.shelf_level, key
+            ),
+            logger=logger,
+            action_failures=action_failures,
+        )
+        if succeeded:
+            target.picked = True
+            held_items[target.hand] = target.product_name
+        return succeeded
 
     async def _prepare_delivery(
         self,
@@ -248,11 +398,218 @@ class Task1Orchestrator:
         await self.client.prepare_pose("DELIVERY_TABLE_PLACE_READY", f"{task_run_id}:task1.{suffix}.pose")
         logger.event("放置位姿", "succeeded", pose_type="DELIVERY_TABLE_PLACE_READY")
 
-    async def _place_target(self, target: TargetItem, index: int, task_run_id: str, logger: _Task1Log) -> None:
-        logger.event("放置", "started", product_name=target.product_name, hand=target.hand.value)
-        await self.client.place(target.product_name, target.hand, f"{task_run_id}:task1.place.{index}.place")
-        target.placed = True
-        logger.event("放置", "succeeded", product_name=target.product_name, hand=target.hand.value)
+    async def _place_target(
+        self,
+        target: TargetItem,
+        index: int,
+        task_run_id: str,
+        logger: _Task1Log,
+        held_items: dict[Hand, str],
+        action_failures: list[dict[str, str]],
+    ) -> bool:
+        if not target.picked or held_items.get(target.hand) != target.product_name:
+            logger.event(
+                "放置",
+                "skipped",
+                product_name=target.product_name,
+                hand=target.hand.value,
+                reason="pick_not_succeeded",
+            )
+            return False
+        succeeded = await self._run_action_with_recovery(
+            operation="place",
+            event_name="放置",
+            product_name=target.product_name,
+            hand=target.hand,
+            action_key=f"{task_run_id}:task1.place.{index}.place",
+            action=lambda key: self.client.place(target.product_name, target.hand, key),
+            logger=logger,
+            action_failures=action_failures,
+        )
+        if succeeded:
+            target.placed = True
+            held_items.pop(target.hand, None)
+        return succeeded
+
+    async def _run_action_with_recovery(
+        self,
+        *,
+        operation: str,
+        event_name: str,
+        product_name: str,
+        hand: Hand,
+        action_key: str,
+        action: Callable[[str], Awaitable[None]],
+        logger: _Task1Log,
+        action_failures: list[dict[str, str]],
+    ) -> bool:
+        logger.event(
+            event_name,
+            "started",
+            product_name=product_name,
+            hand=hand.value,
+            attempt=1,
+        )
+        initial_error: Task1ServiceError | None = None
+        try:
+            await action(action_key)
+        except Task1ServiceError as exc:
+            initial_error = exc
+            logger.event(
+                event_name,
+                "failed",
+                product_name=product_name,
+                hand=hand.value,
+                attempt=1,
+                error_code=exc.code,
+                message=exc.message,
+                failed_interface=exc.failed_interface,
+                url=exc.url,
+            )
+        else:
+            logger.event(
+                event_name,
+                "succeeded",
+                product_name=product_name,
+                hand=hand.value,
+                attempt=1,
+            )
+            return True
+
+        assert initial_error is not None
+        final_error = initial_error
+        retry_succeeded = False
+        logger.event(
+            "抓放失败微调",
+            "started",
+            operation=operation,
+            product_name=product_name,
+            hand=hand.value,
+            direction="back",
+        )
+        try:
+            await self.client.nudge_back(f"{action_key}:recovery.approach")
+        except Task1ServiceError as nudge_error:
+            final_error = nudge_error
+            logger.event(
+                "抓放失败微调",
+                "failed",
+                operation=operation,
+                product_name=product_name,
+                hand=hand.value,
+                direction="back",
+                error_code=nudge_error.code,
+                message=nudge_error.message,
+            )
+        else:
+            logger.event(
+                "抓放失败微调",
+                "succeeded",
+                operation=operation,
+                product_name=product_name,
+                hand=hand.value,
+                direction="back",
+            )
+            logger.event(
+                event_name,
+                "started",
+                product_name=product_name,
+                hand=hand.value,
+                attempt=2,
+            )
+            try:
+                await action(f"{action_key}:recovery.retry")
+            except Task1ServiceError as retry_error:
+                final_error = retry_error
+                logger.event(
+                    event_name,
+                    "failed",
+                    product_name=product_name,
+                    hand=hand.value,
+                    attempt=2,
+                    error_code=retry_error.code,
+                    message=retry_error.message,
+                    failed_interface=retry_error.failed_interface,
+                    url=retry_error.url,
+                )
+            else:
+                retry_succeeded = True
+                logger.event(
+                    event_name,
+                    "succeeded",
+                    product_name=product_name,
+                    hand=hand.value,
+                    attempt=2,
+                    recovered=True,
+                )
+
+        await self._return_from_nudge(
+            operation, product_name, hand, action_key, logger
+        )
+        if retry_succeeded:
+            return True
+        action_failures.append(
+            {
+                "operation": operation,
+                "product_name": product_name,
+                "hand": hand.value,
+                "error_code": final_error.code,
+                "message": final_error.message,
+            }
+        )
+        return False
+
+    async def _return_from_nudge(
+        self,
+        operation: str,
+        product_name: str,
+        hand: Hand,
+        action_key: str,
+        logger: _Task1Log,
+    ) -> None:
+        last_error: Task1ServiceError | None = None
+        for attempt in (1, 2):
+            logger.event(
+                "微调回原点",
+                "started",
+                operation=operation,
+                product_name=product_name,
+                hand=hand.value,
+                attempt=attempt,
+            )
+            try:
+                await self.client.nudge_return(
+                    f"{action_key}:recovery.return.{attempt}"
+                )
+            except Task1ServiceError as exc:
+                last_error = exc
+                logger.event(
+                    "微调回原点",
+                    "failed",
+                    operation=operation,
+                    product_name=product_name,
+                    hand=hand.value,
+                    attempt=attempt,
+                    error_code=exc.code,
+                    message=exc.message,
+                )
+                continue
+            logger.event(
+                "微调回原点",
+                "succeeded",
+                operation=operation,
+                product_name=product_name,
+                hand=hand.value,
+                attempt=attempt,
+            )
+            return
+        assert last_error is not None
+        raise Task1ServiceError(
+            "NUDGE_RETURN_FAILED",
+            f"navigation nudge return failed twice; robot position is unknown: {last_error.message}",
+            failed_interface=last_error.failed_interface,
+            url=last_error.url,
+        ) from last_error
 
     async def _navigate(
         self,

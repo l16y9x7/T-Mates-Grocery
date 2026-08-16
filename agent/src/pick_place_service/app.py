@@ -39,9 +39,14 @@ def create_app(
 
     @app.exception_handler(ServiceError)
     async def service_error_handler(_: Request, exc: ServiceError) -> JSONResponse:
+        content = {"error_code": exc.code, "message": exc.message}
+        if exc.failed_interface:
+            content["failed_interface"] = exc.failed_interface
+        if exc.url:
+            content["url"] = exc.url
         return JSONResponse(
             status_code=exc.status_code,
-            content={"error_code": exc.code, "message": exc.message},
+            content=content,
         )
 
     @app.get("/health", response_model=HealthResponse)
@@ -50,6 +55,14 @@ def create_app(
         if isinstance(orchestrator.subagents, SubagentClient) and not await orchestrator.subagents.health():
             return JSONResponse(status_code=503, content={"status": "ERROR"})
         return HealthResponse(status="READY")
+
+    @app.get("/status")
+    async def status() -> dict[str, int | str]:
+        active_operations = await cache.active_count()
+        return {
+            "status": "BUSY" if active_operations else "READY",
+            "active_operations": active_operations,
+        }
 
     async def run_operation(
         request: PickPlaceRequest,

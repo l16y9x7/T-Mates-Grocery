@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from task2_service.models import (
     ActionResponse,
+    CameraListResponse,
     Hand,
     HealthResponse,
     InspectionResponse,
@@ -25,6 +26,7 @@ HEALTH_PATHS = {
     "perception": "/perception/health",
     "pose": "/pose/health",
     "pick_place": "/health",
+    "camera": "/camera/health",
 }
 
 
@@ -55,6 +57,8 @@ class Task2Client:
         services = tuple(HEALTH_PATHS)
         results = await asyncio.gather(*(self._check_health(service) for service in services))
         not_ready = [service for service, ready in zip(services, results) if not ready]
+        if not not_ready and not await self._head_color_ready():
+            not_ready.append("camera.head.color")
         if not_ready:
             raise Task2ServiceError(
                 "CAPABILITY_NOT_READY",
@@ -78,6 +82,24 @@ class Task2Client:
             self.settings.timeouts.navigation_seconds,
         )
 
+    async def nudge_back(self, idempotency_key: str) -> None:
+        await self._physical_action(
+            "navigation",
+            "/navigation/nudge",
+            {"action": "approach", "direction": "back"},
+            idempotency_key,
+            self.settings.timeouts.navigation_seconds,
+        )
+
+    async def nudge_return(self, idempotency_key: str) -> None:
+        await self._physical_action(
+            "navigation",
+            "/navigation/nudge",
+            {"action": "return"},
+            idempotency_key,
+            self.settings.timeouts.navigation_seconds,
+        )
+
     async def prepare_pose(self, pose_type: str, idempotency_key: str) -> None:
         await self._physical_action(
             "pose",
@@ -87,12 +109,20 @@ class Task2Client:
             self.settings.timeouts.pose_seconds,
         )
 
-    async def inspect(self) -> list[str]:
+    async def inspect(
+        self,
+        location_id: str,
+        pose_type: str,
+    ) -> list[str]:
         response = await self._request(
             "perception",
             "POST",
             "/perception/inspect",
-            json={"task_type": TaskType.SHORTAGE.value},
+            json={
+                "task_type": TaskType.SHORTAGE.value,
+                "location_id": location_id,
+                "pose_type": pose_type,
+            },
             timeout_seconds=self.settings.timeouts.inspection_seconds,
         )
         try:
@@ -102,8 +132,8 @@ class Task2Client:
                 "INVALID_RESPONSE", "inspection response must contain findings"
             ) from exc
         names: list[str] = []
-        for raw_name in result.findings:
-            name = raw_name.strip()
+        for finding in result.findings:
+            name = finding.shortage_product_name.strip()
             if not name:
                 raise Task2ServiceError(
                     "INVALID_FINDINGS",
@@ -159,6 +189,24 @@ class Task2Client:
                 "INVALID_RESPONSE", f"invalid health response from {service}"
             ) from exc
 
+    async def _head_color_ready(self) -> bool:
+        response = await self._request(
+            "camera",
+            "GET",
+            "/camera/list",
+            timeout_seconds=self.settings.timeouts.health_seconds,
+        )
+        try:
+            cameras = CameraListResponse.model_validate(response.json()).cameras
+        except (ValueError, ValidationError) as exc:
+            raise Task2ServiceError(
+                "INVALID_RESPONSE", "invalid camera list response"
+            ) from exc
+        head = next((camera for camera in cameras if camera.id == self.settings.camera), None)
+        if head is None or not head.online:
+            return False
+        return any(stream.type == "color" and stream.online for stream in head.streams)
+
     async def _physical_action(
         self,
         service: str,
@@ -190,6 +238,7 @@ class Task2Client:
         path: str,
         *,
         json: dict[str, Any] | None = None,
+        params: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
         timeout_seconds: float,
         result_unknown_on_exhaustion: bool = False,
@@ -198,7 +247,7 @@ class Task2Client:
         timeout = httpx.Timeout(
             connect=self.settings.timeouts.connect_seconds,
             read=timeout_seconds,
-            write=10.0,
+            write=max(10.0, min(timeout_seconds, 60.0)),
             pool=5.0,
         )
         for attempt in range(2):
@@ -208,6 +257,7 @@ class Task2Client:
                         method,
                         url,
                         json=json,
+                        params=params,
                         headers=headers,
                         timeout=timeout,
                     )
@@ -218,6 +268,7 @@ class Task2Client:
                     path=path,
                     url=url,
                     headers=headers,
+                    query=params,
                     body=json,
                     error=str(exc),
                     attempt=attempt + 1,
@@ -248,6 +299,7 @@ class Task2Client:
                     path=path,
                     url=url,
                     headers=headers,
+                    query=params,
                     body=json,
                     response=response,
                     attempt=attempt + 1,
@@ -261,6 +313,7 @@ class Task2Client:
                 path=path,
                 url=url,
                 headers=headers,
+                query=params,
                 body=json,
                 response=response,
                 attempt=attempt + 1,
@@ -276,6 +329,7 @@ class Task2Client:
         path: str,
         url: str,
         headers: dict[str, str] | None,
+        query: dict[str, str] | None,
         body: dict[str, Any] | None,
         response: httpx.Response | None = None,
         error: str | None = None,
@@ -289,10 +343,15 @@ class Task2Client:
         if response is not None:
             status_code = response.status_code
             response_headers = dict(response.headers)
-            try:
-                response_body = response.json()
-            except (ValueError, json.JSONDecodeError):
-                response_body = response.text
+            content_type = response.headers.get("content-type", "")
+            if "json" in content_type:
+                try:
+                    response_body = response.json()
+                except (ValueError, json.JSONDecodeError):
+                    response_body = response.text
+            else:
+                response_body = f"<binary:{len(response.content)} bytes>"
+        traced_body = dict(body) if body is not None else None
         self.trace_callback(
             {
                 "interface": f"{service}{path}",
@@ -300,7 +359,8 @@ class Task2Client:
                 "method": method,
                 "url": url,
                 "headers": headers or {},
-                "body": body,
+                "query": query or {},
+                "body": traced_body,
                 "attempt": attempt,
                 "status_code": status_code,
                 "response_headers": response_headers,

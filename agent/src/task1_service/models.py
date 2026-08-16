@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -95,6 +95,7 @@ class Task1Settings(BaseModel):
     receipt_viewpoint: str = Field(min_length=1, default="receipt_viewpoint")
     delivery_place: str = Field(min_length=1, default="delivery_place")
     task_boundary: str = Field(min_length=1, default="task_boundary")
+    start_target_id: str = Field(min_length=1, default="start")
     product_hand_options_file: str | None = Field(default=None, min_length=1)
     product_hand_options: dict[str, list[Hand]] = Field(default_factory=dict)
     product_target_ids: dict[str, str] = Field(default_factory=dict)
@@ -129,6 +130,14 @@ class Task1Settings(BaseModel):
         with config_path.open("r", encoding="utf-8") as config_file:
             raw_config = yaml.safe_load(config_file)
 
+        return cls.from_mapping(raw_config, config_path.parent)
+
+    @classmethod
+    def from_mapping(
+        cls, raw_config: dict[str, Any], base_dir: str | Path
+    ) -> "Task1Settings":
+        raw_config = dict(raw_config)
+
         options_file = raw_config.get("product_hand_options_file")
         if options_file:
             if raw_config.get("product_hand_options"):
@@ -137,7 +146,7 @@ class Task1Settings(BaseModel):
                 )
             options_path = Path(options_file)
             if not options_path.is_absolute():
-                options_path = config_path.parent / options_path
+                options_path = Path(base_dir) / options_path
             with options_path.open("r", encoding="utf-8") as options_stream:
                 options_config = ProductHandOptionsFile.model_validate(
                     yaml.safe_load(options_stream)
@@ -163,7 +172,7 @@ class Task1Request(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     status: Literal["STARTING", "READY", "ERROR"]
 
@@ -223,9 +232,20 @@ class Task1Result(BaseModel):
 class Task1ServiceError(Exception):
     """统一转换为 HTTP 错误响应的业务异常。"""
 
-    def __init__(self, code: str, message: str, *, status_code: int = 502, step: str | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status_code: int = 502,
+        step: str | None = None,
+        failed_interface: str | None = None,
+        url: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
         self.step = step
+        self.failed_interface = failed_interface
+        self.url = url

@@ -4,25 +4,118 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1514" />
-    <title>取放流程控制台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260814-2" />
+    <title>机器人任务控制台</title>
+    <link rel="stylesheet" href="/static/styles.css?v=20260816-1" />
   </head>
   <body>
     <main class="shell">
       <header class="topbar">
-        <div class="brand"><span class="brand-mark">+</span><span>PICK / PLACE</span></div>
+        <div class="brand"><span class="brand-mark">+</span><span>ROBOT TASKS</span></div>
         <div class="connection"><span class="pulse" id="pulse"></span><span id="connectionText">接口待命</span></div>
       </header>
 
       <section class="intro">
         <p class="eyebrow">ROBOT OPERATION CONSOLE</p>
-        <h1>取放流程控制台</h1>
-        <p class="lede">输入商品名称，启动一次真实取放任务并查看每个下游接口的实时状态。</p>
+        <h1>机器人任务控制台</h1>
+        <p class="lede">统一启动 Task0-3，并查看编排流程和下游接口的实时状态。</p>
       </section>
 
-      <section class="workspace">
+      <section class="system-panel" aria-labelledby="systemPanelTitle">
+        <div class="panel-heading"><span id="systemPanelTitle">运行配置</span><span class="panel-index">SYS</span></div>
+        <div class="system-config">
+          <div class="robot-ip-current">
+            <span>当前机器人 IP</span>
+            <strong id="currentRobotIp">-</strong>
+            <small id="robotIpRuntimeStatus">读取中</small>
+          </div>
+          <form id="robotIpForm" class="robot-ip-form">
+            <label class="field" for="robotIpInput">
+              <span>机器人 IPv4</span>
+              <input id="robotIpInput" name="robot_ip" inputmode="decimal" autocomplete="off" required />
+            </label>
+            <button id="robotIpSubmitButton" class="secondary-button" type="submit">应用并重启</button>
+          </form>
+        </div>
+        <p id="robotIpMessage" class="system-message" role="status" aria-live="polite"></p>
+      </section>
+
+      <section class="task-workspace">
+        <form id="taskForm" class="control-panel">
+          <div class="panel-heading"><span>任务编排</span><span class="panel-index">01</span></div>
+          <fieldset class="field task-selector">
+            <legend>选择任务</legend>
+            <div class="segmented segmented-four">
+              <label><input type="radio" name="task_id" value="0" checked /><span>Task 0</span></label>
+              <label><input type="radio" name="task_id" value="1" /><span>Task 1</span></label>
+              <label><input type="radio" name="task_id" value="2" /><span>Task 2</span></label>
+              <label><input type="radio" name="task_id" value="3" /><span>Task 3</span></label>
+            </div>
+          </fieldset>
+          <div class="task-summary">
+            <strong id="taskTitle">采集准备</strong>
+            <span id="taskDescription">采集货架巡检点的头部 RGB-D 基准数据</span>
+          </div>
+          <button id="taskSubmitButton" class="submit-button" type="submit"><span class="button-icon">→</span><span>开始 Task 0</span></button>
+          <p id="taskErrorMessage" class="error-message" role="alert" hidden></p>
+          <div class="task-meta">
+            <span>任务键</span><strong id="taskOperationKey">-</strong>
+          </div>
+        </form>
+
+        <section class="visual-panel task-visual-panel" aria-live="polite">
+          <div class="panel-heading"><span>任务实时流程</span><span class="panel-heading-meta"><strong id="taskElapsedTime" class="elapsed-timer">00:00:00</strong><span class="panel-index">02</span></span></div>
+          <div id="taskLiveStatus" class="live-status">
+            <span class="live-status-label">当前状态</span><strong>等待启动</strong>
+          </div>
+          <div id="taskProgress" class="task-progress" hidden>
+            <div><span>采集进度</span><strong id="taskProgressText">0 / -</strong></div>
+            <div id="taskProgressTrack" class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+              <span id="taskProgressBar"></span>
+            </div>
+          </div>
+          <div id="taskTimeline" class="timeline" hidden></div>
+          <section id="taskCaptures" class="capture-results" hidden>
+            <div class="capture-results-heading"><span>采集目录</span><strong id="taskCaptureCount">0 组</strong></div>
+            <ul id="taskCaptureList" class="capture-list"></ul>
+          </section>
+          <section id="taskVisual" class="operation-visual" hidden>
+            <div class="operation-visual-heading"><span>感知结果</span><span id="taskVisualStatus">等待图像</span></div>
+            <div class="operation-visual-grid">
+              <div class="image-stage"><canvas id="taskVisualCanvas" width="640" height="480"></canvas><span class="image-caption">RGB · MASK · BBOX</span></div>
+              <div class="pose-summary">
+                <div class="pose-summary-heading"><span>6D 位姿</span><span id="taskPoseStatus">等待位姿估计</span></div>
+                <div id="taskPoseValues" class="pose-values"><span class="pose-empty">位姿估计完成后显示</span></div>
+                <div id="taskPoseMeta" class="pose-meta"></div>
+              </div>
+            </div>
+          </section>
+          <section id="taskDetails" class="capture-results" hidden>
+            <div class="capture-results-heading"><span id="taskDetailsTitle">任务详情</span><strong id="taskDetailsCount">-</strong></div>
+            <ul id="taskDetailsList" class="capture-list"></ul>
+          </section>
+          <div id="taskResultCard" class="result-card" hidden>
+            <div><span>最终响应</span><strong id="taskResultStatus">-</strong></div>
+            <pre id="taskResultBody">-</pre>
+          </div>
+          <div id="taskErrorDetails" class="error-details" hidden>
+            <div class="error-details-heading"><span>错误详情</span><strong>任务已停止</strong></div>
+            <pre id="taskErrorBody">-</pre>
+          </div>
+        </section>
+      </section>
+
+      <section class="pick-place-section" aria-labelledby="pickPlaceHeading">
+        <div class="pick-place-modebar">
+          <div class="panel-heading pick-place-heading"><span id="pickPlaceHeading">抓取与放置</span><span class="panel-index">03</span></div>
+          <div class="operation-mode-switch" role="group" aria-label="操作类型">
+            <button class="operation-mode-button active" type="button" aria-pressed="true" aria-controls="pickWorkspace" data-operation-mode="pick">抓取</button>
+            <button class="operation-mode-button" type="button" aria-pressed="false" aria-controls="placeWorkspace" data-operation-mode="place">放置</button>
+          </div>
+        </div>
+
+        <section id="pickWorkspace" class="workspace pick-place-view" role="tabpanel" aria-label="抓取">
         <form id="pickForm" class="control-panel">
-          <div class="panel-heading"><span>任务参数</span><span class="panel-index">01</span></div>
+          <div class="panel-heading"><span>抓取参数</span></div>
           <label class="field">
             <span>任务类型</span>
             <select id="taskType" name="task_type">
@@ -50,12 +143,7 @@
         </form>
 
         <section class="visual-panel" aria-live="polite">
-          <div class="panel-heading"><span>实时流程</span><span class="panel-index">02</span></div>
-          <div id="emptyState" class="empty-state">
-            <div class="empty-cross">+</div>
-            <p>等待一次取放任务</p>
-            <span>执行日志将在此处实时出现</span>
-          </div>
+          <div class="panel-heading"><span>抓取实时流程</span><span class="panel-heading-meta"><strong id="pickElapsedTime" class="elapsed-timer">00:00:00</strong></span></div>
           <div id="timeline" class="timeline" hidden></div>
           <section id="pickVisual" class="operation-visual" hidden>
             <div class="operation-visual-heading"><span>感知结果</span><span id="pickVisualStatus">等待图像</span></div>
@@ -73,11 +161,11 @@
             <pre id="resultBody">-</pre>
           </div>
         </section>
-      </section>
+        </section>
 
-      <section class="workspace place-workspace">
+        <section id="placeWorkspace" class="workspace pick-place-view" role="tabpanel" aria-label="放置" hidden>
         <form id="placeForm" class="control-panel">
-          <div class="panel-heading"><span>放置参数</span><span class="panel-index">03</span></div>
+          <div class="panel-heading"><span>放置参数</span></div>
           <label class="field">
             <span>任务类型</span>
             <select id="placeTaskType" name="task_type">
@@ -105,12 +193,7 @@
         </form>
 
         <section class="visual-panel" aria-live="polite">
-          <div class="panel-heading"><span>放置实时流程</span><span class="panel-index">04</span></div>
-          <div id="placeEmptyState" class="empty-state">
-            <div class="empty-cross">+</div>
-            <p>等待一次放置任务</p>
-            <span>定位、取图、位姿、释放和校验日志将在此处实时出现</span>
-          </div>
+          <div class="panel-heading"><span>放置实时流程</span><span class="panel-heading-meta"><strong id="placeElapsedTime" class="elapsed-timer">00:00:00</strong></span></div>
           <div id="placeTimeline" class="timeline" hidden></div>
           <section id="placeVisual" class="operation-visual" hidden>
             <div class="operation-visual-heading"><span>感知结果</span><span id="placeVisualStatus">等待图像</span></div>
@@ -128,54 +211,11 @@
             <pre id="placeResultBody">-</pre>
           </div>
         </section>
-      </section>
-
-      <section class="task1-workspace">
-        <form id="task1Form" class="control-panel">
-          <div class="panel-heading"><span>任务一 · 小票到抓取</span><span class="panel-index">05</span></div>
-          <p class="task1-summary">识别小票商品，按货位手能力完成导航、抓取、交付台放置和任务收尾。</p>
-          <button id="task1SubmitButton" class="submit-button" type="submit"><span class="button-icon">→</span><span>开始任务一</span></button>
-          <p id="task1ErrorMessage" class="error-message" role="alert" hidden></p>
-          <div class="task-meta">
-            <span>任务键</span><strong id="task1OperationKey">-</strong>
-          </div>
-        </form>
-
-        <section class="visual-panel task1-visual-panel" aria-live="polite">
-          <div class="panel-heading"><span>任务一实时流程</span><span class="panel-index">06</span></div>
-          <div id="task1EmptyState" class="empty-state">
-            <div class="empty-cross">+</div>
-            <p>等待一次任务一测试</p>
-            <span>导航、位姿、识别、SKU 转换和抓取日志将在此处实时出现</span>
-          </div>
-          <div id="task1LiveStatus" class="live-status" aria-live="polite">
-            <span class="live-status-label">当前状态</span><strong>等待启动</strong>
-          </div>
-          <div id="task1Timeline" class="timeline" hidden></div>
-          <section id="task1Visual" class="operation-visual" hidden>
-            <div class="operation-visual-heading"><span>感知结果</span><span id="task1VisualStatus">等待图像</span></div>
-            <div class="operation-visual-grid">
-              <div class="image-stage"><canvas id="task1VisualCanvas" width="640" height="480"></canvas><span class="image-caption">RGB · MASK · BBOX</span></div>
-              <div class="pose-summary">
-                <div class="pose-summary-heading"><span>6D 位姿</span><span id="task1PoseStatus">等待位姿估计</span></div>
-                <div id="task1PoseValues" class="pose-values"><span class="pose-empty">位姿估计完成后显示</span></div>
-                <div id="task1PoseMeta" class="pose-meta"></div>
-              </div>
-            </div>
-          </section>
-          <div id="task1ResultCard" class="result-card" hidden>
-            <div><span>最终响应</span><strong id="task1ResultStatus">-</strong></div>
-            <pre id="task1ResultBody">-</pre>
-          </div>
-          <div id="task1ErrorDetails" class="error-details" hidden>
-            <div class="error-details-heading"><span>错误详情</span><strong>任务已停止</strong></div>
-            <pre id="task1ErrorBody">-</pre>
-          </div>
         </section>
       </section>
 
       <section class="receipt-panel" aria-live="polite">
-        <div class="panel-heading"><span>小票识别</span><span class="panel-index">07</span></div>
+        <div class="panel-heading"><span>小票识别</span><span class="panel-index">04</span></div>
         <div class="receipt-layout">
           <div>
             <p class="receipt-summary">识别当前小票中的商品名称</p>
@@ -193,7 +233,7 @@
       </section>
 
       <section class="robot-panel">
-        <div class="panel-heading"><span>机器人移动控制</span><span class="panel-index">08</span></div>
+        <div class="panel-heading"><span>机器人控制</span><span class="panel-index">05</span></div>
         <div class="robot-grid">
           <form id="poseForm" class="robot-form">
             <div class="robot-form-title">位姿准备</div>
@@ -258,6 +298,19 @@
             <p class="field-hint">选择固定点位，或切换“自定义 target_id”输入导航地图中的其他站点。</p>
             <button class="secondary-button" type="submit"><span class="button-icon">→</span><span>开始导航</span></button>
           </form>
+
+          <form id="gripperForm" class="robot-form">
+            <div class="robot-form-title">夹爪松手</div>
+            <fieldset class="field hand-field">
+              <legend>选择手臂</legend>
+              <div class="segmented">
+                <label><input type="radio" name="gripper_hand" value="LEFT" checked /><span>左手 LEFT</span></label>
+                <label><input type="radio" name="gripper_hand" value="RIGHT" /><span>右手 RIGHT</span></label>
+              </div>
+            </fieldset>
+            <p class="field-hint">打开指定手的夹爪，释放当前持有物。</p>
+            <button id="gripperSubmitButton" class="secondary-button" type="submit"><span class="button-icon">↗</span><span>执行松手</span></button>
+          </form>
         </div>
         <div class="robot-actions">
           <button id="healthButton" class="ghost-button" type="button"><span>检查导航 / 位姿健康状态</span></button>
@@ -265,8 +318,19 @@
         </div>
         <pre id="robotOutput" class="robot-output" aria-live="polite">尚未发起机器人控制请求</pre>
       </section>
-      <footer><span>8086 PICK/PLACE ORCHESTRATOR</span><span id="footerUrl">-</span></footer>
+      <dialog id="forceRestartDialog" class="restart-dialog">
+        <form method="dialog">
+          <div class="dialog-heading">任务正在执行</div>
+          <p>强制重启会中断编排服务，机器人可能继续运动或保持持物状态。</p>
+          <pre id="activeOperationsSummary">-</pre>
+          <div class="dialog-actions">
+            <button class="ghost-button" value="cancel">取消</button>
+            <button class="danger-button" value="force">确认强制重启</button>
+          </div>
+        </form>
+      </dialog>
+      <footer><span>8108 UNIFIED TASK SERVICE</span><span id="footerUrl">-</span></footer>
     </main>
-    <script src="/static/app.js?v=20260814-2" defer></script>
+    <script src="/static/app.js?v=20260816-1" defer></script>
   </body>
 </html>

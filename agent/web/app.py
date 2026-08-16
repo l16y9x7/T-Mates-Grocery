@@ -1,29 +1,45 @@
-"""机器人流程网页代理：启动取放和任务一服务并通过 SSE 转发流程事件。"""
+"""统一任务与取放控制台路由，并通过 SSE 转发流程事件。"""
 
 from __future__ import annotations
 
 import asyncio
 import base64
+from ipaddress import IPv4Address
 import json
 import mimetypes
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Callable, Literal
 from uuid import uuid4
 
 import httpx
+import yaml
 from fastapi import FastAPI, HTTPException, Header
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from .settings import LOCATE_IMAGE_ROOTS, LOG_ROOT, SETTINGS
+from task_service.coordinator import TaskCoordinator, TaskServiceError
+from pick_place_service.models import PickPlaceSettings
+from task_service.settings import TaskServiceSettings
+
+from .settings import LOCATE_IMAGE_ROOTS, LOG_ROOT, SETTINGS, UNIFIED_SETTINGS
 
 WEB_ROOT = Path(__file__).resolve().parent
 SERVICES = SETTINGS.services
 DEFAULT_TIMEOUT = SETTINGS.request_timeout_seconds
+RUNTIME_SETTINGS = UNIFIED_SETTINGS
+RUNTIME_CONFIG_PATH = UNIFIED_SETTINGS.config_path
+ROBOT_IP = str(UNIFIED_SETTINGS.robot.ip)
+PICK_PLACE_STATUS_URL = UNIFIED_SETTINGS.pick_place_status_url
+PROJECT_ROOT = WEB_ROOT.parent
 
 
 class LocateRequest(BaseModel):
@@ -57,8 +73,8 @@ class PickRequest(BaseModel):
         return value
 
 
-class Task1Request(BaseModel):
-    """任务一独立服务请求。"""
+class UnifiedTaskRequest(BaseModel):
+    """Task0-Task3 currently share an empty request body."""
 
     model_config = {"extra": "forbid"}
 
@@ -90,16 +106,30 @@ class NavigationRequest(BaseModel):
         return value or None
 
 
+class GripperOpenRequest(BaseModel):
+    """请求机器人打开指定手的夹爪。"""
+
+    model_config = {"extra": "forbid"}
+
+    hand: Literal["LEFT", "RIGHT"]
+
+
 class ReceiptParseRequest(BaseModel):
     """小票识别请求目前没有业务字段，保留空 JSON body 的契约。"""
 
     pass
 
 
+class RobotIpUpdateRequest(BaseModel):
+    robot_ip: IPv4Address
+    force_restart: bool = False
+
+
 @dataclass
 class PickTask:
     task_id: str
     operation_key: str
+    workflow: str = "pick_place"
     task: asyncio.Task[None] | None = None
     finished: bool = False
     result: dict[str, object] | None = None
@@ -109,6 +139,174 @@ class PickTask:
 app = FastAPI(title="Pick/Place Web Console", version="1.0")
 app.mount("/static", StaticFiles(directory=WEB_ROOT / "static"), name="static")
 TASKS: dict[str, PickTask] = {}
+COORDINATOR_GETTER: Callable[[], TaskCoordinator] | None = None
+CONFIG_UPDATE_LOCK = asyncio.Lock()
+
+
+def configure_runtime(
+    settings: TaskServiceSettings,
+    coordinator_getter: Callable[[], TaskCoordinator],
+) -> None:
+    global SERVICES, DEFAULT_TIMEOUT, LOG_ROOT, LOCATE_IMAGE_ROOTS, COORDINATOR_GETTER
+    global RUNTIME_SETTINGS, RUNTIME_CONFIG_PATH, ROBOT_IP, PICK_PLACE_STATUS_URL
+    RUNTIME_SETTINGS = settings
+    RUNTIME_CONFIG_PATH = settings.config_path
+    ROBOT_IP = str(settings.robot.ip)
+    PICK_PLACE_STATUS_URL = settings.pick_place_status_url
+    SERVICES = settings.web.services
+    DEFAULT_TIMEOUT = settings.web.request_timeout_seconds
+    LOG_ROOT = settings.web.paths.log_dir
+    LOCATE_IMAGE_ROOTS = tuple(settings.web.paths.locate_image_roots)
+    COORDINATOR_GETTER = coordinator_getter
+
+
+def _coordinator() -> TaskCoordinator:
+    if COORDINATOR_GETTER is None:
+        raise HTTPException(status_code=503, detail="统一任务服务尚未初始化")
+    return COORDINATOR_GETTER()
+
+
+def _read_pid(path: Path) -> int | None:
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return int(value) if value.isdigit() else None
+
+
+def _pid_is_running(pid: int | None) -> bool:
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _managed_pid_owns_current_process(managed_pid: int | None) -> bool:
+    if not _pid_is_running(managed_pid):
+        return False
+    current = os.getpid()
+    for _ in range(20):
+        if current == managed_pid:
+            return True
+        try:
+            stat = Path(f"/proc/{current}/stat").read_text(encoding="utf-8")
+            current = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return False
+        if current <= 1:
+            return current == managed_pid
+    return False
+
+
+def _restart_preflight() -> tuple[bool, str | None]:
+    task_pid = _read_pid(PROJECT_ROOT / "run" / "tasks.pid")
+    pick_place_pid = _read_pid(PROJECT_ROOT / "run" / "pick-place.pid")
+    if not _managed_pid_owns_current_process(task_pid):
+        return False, "8108 不是由 scripts/tasks.sh 管理的当前进程"
+    if not _pid_is_running(pick_place_pid):
+        return False, "8086 不是由 scripts/pick-place.sh 管理的运行进程"
+    restart_script = PROJECT_ROOT / "scripts" / "restart-runtime.sh"
+    if not restart_script.is_file() or not os.access(restart_script, os.X_OK):
+        return False, "统一重启脚本不存在或不可执行"
+    return True, None
+
+
+async def _active_operations() -> dict[str, object]:
+    web_operations = [
+        {
+            "workflow": state.workflow,
+            "operation_key": state.operation_key,
+        }
+        for state in TASKS.values()
+        if not state.finished
+    ]
+    active: dict[str, object] = {
+        "task_id": _coordinator().active_task_id,
+        "web_operations": web_operations,
+        "pick_place_active_operations": 0,
+        "pick_place_status_unknown": False,
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(PICK_PLACE_STATUS_URL, timeout=1.5)
+            response.raise_for_status()
+            body = response.json()
+        count = body.get("active_operations", 0) if isinstance(body, dict) else 0
+        active["pick_place_active_operations"] = count if isinstance(count, int) else 0
+    except (httpx.HTTPError, TimeoutError, ValueError):
+        active["pick_place_status_unknown"] = True
+    return active
+
+
+def _has_active_operations(active: dict[str, object]) -> bool:
+    return bool(
+        active["task_id"]
+        or active["web_operations"]
+        or active["pick_place_active_operations"]
+        or active["pick_place_status_unknown"]
+    )
+
+
+def _write_robot_ip(robot_ip: str) -> Path:
+    config_path = RUNTIME_CONFIG_PATH
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or not isinstance(raw.get("robot"), dict):
+        raise RuntimeError("运行配置缺少 robot 节点")
+    raw["robot"]["ip"] = robot_ip
+    original_mode = config_path.stat().st_mode
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=config_path.parent,
+            prefix=f".{config_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as stream:
+            yaml.safe_dump(raw, stream, allow_unicode=True, sort_keys=False)
+            temporary_path = Path(stream.name)
+        temporary_path.chmod(original_mode)
+        TaskServiceSettings.load(temporary_path)
+        PickPlaceSettings.load(temporary_path)
+        backup_path = config_path.with_suffix(config_path.suffix + ".bak")
+        shutil.copy2(config_path, backup_path)
+        os.replace(temporary_path, config_path)
+        return backup_path
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def _schedule_runtime_restart() -> None:
+    log_dir = LOG_ROOT / "process"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"runtime-restart-{datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+    restart_script = PROJECT_ROOT / "scripts" / "restart-runtime.sh"
+    environment = os.environ.copy()
+    environment["RUNTIME_CONFIG_FILE"] = str(RUNTIME_CONFIG_PATH)
+    with log_path.open("ab") as output:
+        subprocess.Popen(
+            [str(restart_script)],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+
+
+@app.exception_handler(TaskServiceError)
+async def task_service_error_handler(_, exc: TaskServiceError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error_code": exc.code, "message": exc.message},
+    )
 
 
 def _local_image_data(image_path: str) -> str | None:
@@ -143,12 +341,12 @@ def _find_log_dir(operation_key: str) -> Path | None:
     return sorted(candidates, key=lambda path: path.name)[-1] if candidates else None
 
 
-def _find_task1_pick_log_dir(operation_key: str) -> Path | None:
-    """Find the newest 8086 child operation created by a task-one run."""
+def _find_task_pick_log_dir(operation_key: str, task_id: str) -> Path | None:
+    """Find the newest 8086 child pick operation created by a task run."""
 
     if not LOG_ROOT.exists():
         return None
-    prefix = f"-{_safe_key(operation_key)}_task1.pick."
+    prefix = f"-{_safe_key(operation_key)}_task{task_id}.pick."
     candidates = [
         path
         for path in LOG_ROOT.iterdir()
@@ -330,54 +528,113 @@ async def _run_pick_place(task_state: PickTask, request: PickRequest, target_url
         task_state.finished = True
 
 
-async def _run_task1(task_state: PickTask, request: Task1Request) -> None:
+async def _finish_unified_task(
+    task_state: PickTask, execution: asyncio.Task[object]
+) -> None:
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                SERVICES.task1_url,
-                json=request.model_dump(mode="json"),
-                headers={"Idempotency-Key": task_state.operation_key},
-                timeout=DEFAULT_TIMEOUT,
-            )
-        try:
-            body: object = response.json()
-        except (ValueError, json.JSONDecodeError):
-            body = response.text
+        result = await execution
+        body = result.model_dump(mode="json") if isinstance(result, BaseModel) else result
         task_state.result = {
-            "status_code": response.status_code,
-            "ok": response.is_success,
+            "status_code": 200,
+            "ok": True,
             "body": body,
         }
-    except (httpx.HTTPError, TimeoutError) as exc:
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        content: dict[str, object] = {
+            "error_code": getattr(exc, "code", "TASK_EXECUTION_ERROR"),
+            "message": getattr(exc, "message", str(exc)),
+        }
+        if getattr(exc, "step", None):
+            content["failed_step"] = exc.step
+        if getattr(exc, "failed_interface", None):
+            content["failed_interface"] = exc.failed_interface
+        if getattr(exc, "url", None):
+            content["url"] = exc.url
         task_state.result = {
-            "status_code": 502,
+            "status_code": getattr(exc, "status_code", 500),
             "ok": False,
-            "body": {
-                "error_code": "TASK1_PROXY_ERROR",
-                "message": str(exc),
-                "failed_step": "任务一服务请求",
-            },
+            "body": content,
         }
     finally:
         task_state.finished = True
 
 
 @app.get("/", include_in_schema=False)
-async def index() -> FileResponse:
-    return FileResponse(WEB_ROOT / "static" / "index.html")
+async def index() -> HTMLResponse:
+    return HTMLResponse(
+        (WEB_ROOT / "static" / "index.html").read_text(encoding="utf-8"),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/config")
-async def config() -> dict[str, str]:
+async def config() -> dict[str, object]:
+    restart_supported, restart_reason = _restart_preflight()
     return {
         "pick_url": SERVICES.pick_url,
         "place_url": SERVICES.place_url,
-        "task1_url": SERVICES.task1_url,
+        "tasks_url": "/tasks/{task_id}/run",
         "navigation_url": SERVICES.navigation_url,
         "pose_url": SERVICES.pose_url,
         "perception_url": SERVICES.perception_url,
         "log_dir": str(LOG_ROOT),
+        "robot_ip": ROBOT_IP,
+        "restart_supported": restart_supported,
+        "restart_unavailable_reason": restart_reason,
     }
+
+
+@app.put("/api/system/robot-ip")
+async def update_robot_ip(request: RobotIpUpdateRequest) -> JSONResponse:
+    async with CONFIG_UPDATE_LOCK:
+        restart_supported, restart_reason = _restart_preflight()
+        if not restart_supported:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error_code": "RESTART_UNAVAILABLE",
+                    "message": restart_reason,
+                },
+            )
+
+        active = await _active_operations()
+        if _has_active_operations(active) and not request.force_restart:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "error_code": "OPERATIONS_IN_PROGRESS",
+                    "message": "有任务正在执行，强制重启可能让机器人保持运动或持物状态",
+                    "requires_force": True,
+                    "active": active,
+                },
+            )
+
+        backup_path: Path | None = None
+        try:
+            backup_path = _write_robot_ip(str(request.robot_ip))
+            _schedule_runtime_restart()
+        except Exception as exc:
+            if backup_path is not None and backup_path.exists():
+                shutil.copy2(backup_path, RUNTIME_CONFIG_PATH)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error_code": "CONFIG_UPDATE_FAILED",
+                    "message": str(exc),
+                },
+            )
+
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "RESTARTING",
+                "robot_ip": str(request.robot_ip),
+                "services": ["pick-place:8086", "tasks:8108"],
+                "forced": request.force_restart,
+            },
+        )
 
 
 async def _robot_request(
@@ -481,6 +738,23 @@ async def robot_navigate(
         payload,
         "navigation",
         request.idempotency_key or idempotency_key,
+    )
+
+
+@app.post("/api/robot/gripper/open")
+async def gripper_open(
+    request: GripperOpenRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> JSONResponse:
+    """代理机器人夹爪松手接口。"""
+
+    return await _robot_request(
+        "POST",
+        SERVICES.pose_url,
+        "/manipulation/gripper/open",
+        request.model_dump(mode="json"),
+        "gripper_open",
+        idempotency_key,
     )
 
 
@@ -604,34 +878,50 @@ async def place_visual(task_id: str) -> dict[str, object]:
     return _operation_visual(_find_log_dir(state.operation_key))
 
 
-@app.post("/api/task1/start")
-async def start_task1(request: Task1Request) -> dict[str, str]:
-    task_id = uuid4().hex
-    operation_key = f"web-task1-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{task_id[:10]}"
-    state = PickTask(task_id=task_id, operation_key=operation_key)
-    state.task = asyncio.create_task(_run_task1(state, request))
-    TASKS[task_id] = state
+@app.post("/api/tasks/{task_id}/start")
+async def start_unified_task(
+    task_id: str, request: UnifiedTaskRequest
+) -> dict[str, str]:
+    run_id = uuid4().hex
+    operation_key = (
+        f"web-task{task_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{run_id[:10]}"
+    )
+    execution = await _coordinator().start_background(
+        task_id, request.model_dump(mode="json"), operation_key
+    )
+    state = PickTask(
+        task_id=run_id,
+        operation_key=operation_key,
+        workflow=f"task{task_id}",
+    )
+    state.task = asyncio.create_task(_finish_unified_task(state, execution))
+    TASKS[run_id] = state
     return {
+        "run_id": run_id,
         "task_id": task_id,
         "operation_key": operation_key,
-        "events_url": f"/api/task1/{task_id}/events",
+        "events_url": f"/api/task-runs/{run_id}/events",
+        "visual_url": f"/api/task-runs/{run_id}/visual",
     }
 
 
-@app.get("/api/task1/{task_id}/events")
-async def task1_events(task_id: str) -> StreamingResponse:
-    state = TASKS.get(task_id)
+@app.get("/api/task-runs/{run_id}/events")
+async def unified_task_events(run_id: str) -> StreamingResponse:
+    state = TASKS.get(run_id)
     if state is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
     return _events_response(state)
 
 
-@app.get("/api/task1/{task_id}/visual")
-async def task1_visual(task_id: str) -> dict[str, object]:
-    state = TASKS.get(task_id)
+@app.get("/api/task-runs/{run_id}/visual")
+async def unified_task_visual(run_id: str) -> dict[str, object]:
+    state = TASKS.get(run_id)
     if state is None:
         raise HTTPException(status_code=404, detail="任务不存在或已过期")
-    log_dir = _find_task1_pick_log_dir(state.operation_key) or _find_log_dir(state.operation_key)
+    task_id = state.workflow.removeprefix("task")
+    log_dir = _find_log_dir(state.operation_key)
+    if task_id in {"1", "2", "3"}:
+        log_dir = _find_task_pick_log_dir(state.operation_key, task_id) or log_dir
     return _operation_visual(log_dir)
 
 

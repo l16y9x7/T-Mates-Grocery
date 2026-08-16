@@ -1,6 +1,8 @@
-# Robot Games Agent
+# Robot Games Task Services
 
-本项目是机器人零售比赛的 LangGraph 编排程序。主 Agent 通过 HTTP 调用导航、感知、姿态、商品库和 8086 取放服务，运行 `SORTING`、`SHORTAGE`、`MISPLACED` 三类任务。
+本项目提供机器人零售比赛的统一任务编排服务、8086 取放编排服务和局域网调试页面。
+Task0、Task1、Task2、Task3 由同一个 FastAPI 进程提供，旧的主 Agent 和 LangGraph
+工作流已退役。
 
 ## 环境安装
 
@@ -10,115 +12,92 @@
 scripts/setup.sh
 ```
 
-## 启动 8086 取放服务
+## 服务入口
 
-8086 是独立服务，负责一次完整的 `/pick` 或 `/place` 子流程。它需要能访问 8083 视觉理解、8084 抓放和 8085 相机服务。
+| 服务 | 默认地址 | 入口 | 用途 |
+|---|---|---|---|
+| 统一任务服务 | `127.0.0.1:8108` | `POST /tasks/{0|1|2|3}/run` | 运行 Task0-3 |
+| Web | `127.0.0.1:8108` | `GET /` | 统一任务、取放和机器人接口控制台 |
+| pick-place | `127.0.0.1:8086` | `POST /pick`、`POST /place` | 完成单次定位、取图、位姿估计和抓放 |
 
-启动脚本默认在后台运行，并保存服务日志：
+四个任务请求体均为 `{}`，支持可选请求头 `Idempotency-Key`。`GET /health` 返回
+四个任务的聚合健康状态；任一 Task0-3 正在执行时，启动其他任务会返回 HTTP
+`409 TASK_IN_PROGRESS`。
+
+完整流程、真实端口及请求响应见
+[`doc/任务流程与pick-place真实端口接口清单.md`](doc/任务流程与pick-place真实端口接口清单.md)。
+
+## 启动
 
 ```bash
 scripts/pick-place.sh start
-scripts/pick-place.sh stop
-scripts/pick-place.sh restart
+scripts/tasks.sh start
 ```
 
-网页也默认在后台启动：
+浏览器打开 `http://127.0.0.1:8108/`。停止或重启时把 `start` 替换为 `stop` 或
+`restart`。统一任务服务的 PID 保存在 `run/tasks.pid`，进程输出保存在
+`log/process/tasks-*.log`，每次任务的接口和事件记录保存在
+`log/<时间>-<任务键>/`。
 
-```bash
-scripts/web.sh start
-scripts/web.sh stop
-scripts/web.sh restart
-```
-
-后台进程 PID 保存在 `run/`，服务输出日志保存在 `log/process/`，每次取放任务的详细接口记录仍保存在 `log/<时间>-<幂等键>/`。
-
-默认监听 `0.0.0.0:8086`。生产环境先按现场修改 `config/pick-place.yaml`，再启动服务；主 Agent 的配置必须将 `services.pick_place` 指向该服务地址。
-
-## 启动商品定位工作台
-
-`web/` 提供一个局域网可访问的定位结果页面。它由服务器代理正式感知接口，并在原图上叠加 `bbox` 和 `mask`，所以连接同一服务器的电脑不需要直接访问内网感知接口或服务器文件路径。
-
-```bash
-scripts/web.sh start
-```
-
-然后在其他电脑打开 `http://服务器IP:8090`。端口可通过 `LOCATE_WEB_PORT` 修改，正式定位接口可通过 `LOCATE_FORMAL_API_URL` 修改。详细说明见 [`web/README.md`](web/README.md)。
-
-## 运行任务
-
-```bash
-scripts/run-task.sh SORTING
-scripts/run-task.sh SHORTAGE --log-level DEBUG
-scripts/run-task.sh MISPLACED
-```
-
-任务类型含义：
-
-|类型|用途|
-|---|---|
-|`SORTING`|识别小票，抓取两件商品并放到交付台|
-|`SHORTAGE`|巡检货架，补齐两处缺货|
-|`MISPLACED`|巡检货架，将一对乱放商品交换归位|
-
-## 启动任务一独立服务
-
-`task1_service` 执行任务一完整闭环：移动到小票点并调整拍摄位姿，识别两个商品，按
-货位手能力映射抓取，移动到交付台调整放置位姿并调用 `pick-place` 放置，最后移动到
-`task_boundary` 判定区。任务入口固定处理小票上的两件商品，请求体使用 `{}`。
-
-使用生产配置启动：
-
-```bash
-scripts/task1.sh start
-```
-
-健康检查：
+健康检查和任务调用示例：
 
 ```bash
 curl http://127.0.0.1:8108/health
+
+curl -X POST http://127.0.0.1:8108/tasks/0/run \
+  -H 'Content-Type: application/json' -d '{}'
+curl -X POST http://127.0.0.1:8108/tasks/1/run \
+  -H 'Content-Type: application/json' -d '{}'
+curl -X POST http://127.0.0.1:8108/tasks/2/run \
+  -H 'Content-Type: application/json' -d '{}'
+curl -X POST http://127.0.0.1:8108/tasks/3/run \
+  -H 'Content-Type: application/json' -d '{}'
 ```
 
-执行完整任务一：
+### test1 双腕相机采集
+
+`test1` 是独立的一次性采集任务，不接入前端，也不占用服务端口。在项目根目录执行：
 
 ```bash
-curl -X POST http://127.0.0.1:8108/task1/run \
-  -H 'Content-Type: application/json' \
-  -d '{}'
+UV_CACHE_DIR="$PWD/.cache/uv" PYTHONPATH="$PWD/src" \
+uv run --frozen python -m test1_service \
+  --config "$PWD/config/runtime.production.yaml"
 ```
 
-任务一实际环境配置见 `config/task1.production.yaml`。完整商品货位手能力位于
-`config/product-hand-options.yaml`；任务一只使用每个货位的 `hands`，其中的
-`product_name` 和 `target_id` 还会供任务二匹配巡检结果。
+命令启动后会立即驱动机器人完成整套采集流程，成功或失败后自动退出。机器人从
+`start` 出发，按 Task0 的八个巡检点顺序导航，并在每次导航前执行
+`START_POSITION` 复位。每个巡检点固定按 L1-L5 调整位姿，每层等待 2 秒后依次采集
+左、右腕部相机的彩色图和深度图，最后复位并返回 `start`。
 
-## 启动任务二独立服务
+每次运行的数据保存在独立的 `output/test1/<时间-运行ID>/` 批次目录中。单次成功
+运行生成 80 个采集目录，命名格式为 `<导航点>-<层数>-<LEFT|RIGHT>`，例如
+`H1_F_L_INSPECT-L1-LEFT`；每个目录包含 `rgb.jpg`（相机返回 PNG 时为
+`rgb.png`）和 `depth.png`。运行事件及接口调用记录保存在 `log/`。
 
-`task2_service` 依次访问八个货架巡检点，在每个点分别准备上下观察位姿并调用
-`POST /perception/inspect`。发现缺货商品时记录当前巡检点和观察位姿，到补货台抓取后
-恢复该点位和位姿，再调用 8086 的 `/place`。
+## 任务说明
 
-```bash
-scripts/task2.sh start
-curl http://127.0.0.1:8109/health
-curl -X POST http://127.0.0.1:8109/task2/run \
-  -H 'Content-Type: application/json' \
-  -d '{}'
-```
+- Task0 先到 `start`，再以蛇形姿态顺序巡检八个点；每次拍摄前等待 2 秒，完成后
+  返回 `start`，并将 RGB-D 数据保存到 `output/task0/`。
+- Task1 识别小票并完成 SKU 货位转换、两件商品抓取、交付台放置和任务收尾。
+- Task2 往返巡检货架，由感知服务自行取图识别缺货商品；累计两件后从补货台抓取，
+  并恢复发现位置完成放置。
+- Task3 由感知服务自行取图识别一对乱放商品，校验安全手能力后交换货位。
+- test1 按八个巡检点和 L1-L5 固定顺序采集左右腕部相机的 80 组 RGB-D 数据，仅通过
+  上述一次性命令启动。
 
-默认端口为 `8109`；端口被占用时可使用 `TASK2_PORT=8110 scripts/task2.sh start`。
+Task2 和 Task3 运行前必须先成功完成一次 Task0 基准采集。
 
-任务二生产配置见 `config/task2.production.yaml`，详细流程和接口见
-[`doc/task2流程与接口说明.md`](doc/task2流程与接口说明.md)。8086 的 `SHORTAGE /place`
-内部实现和真实机器人联调不属于当前任务二编排服务。
+## 配置
 
-## 使用生产配置
+| 文件 | 用途 |
+|---|---|
+| `config/runtime.production.yaml` | 机器人 IP、服务端口、Task0-3、test1、pick-place 与 Web 的全部运行配置；任务同名通用项位于 `tasks.shared` |
+| `config/product-hand-options.yaml` | 商品货位、巡检导航点及安全手能力 |
+| `config/camera/*.json` | 三台相机的独立标定数据 |
 
-生产地址已经写在 `config/agent.production.yaml`：商品库 `192.168.130.59:25540`，导航 `8081`，姿态 `8082`，感知 `8083`，抓放 `8084`，取放编排 `8086`。运行前确认各服务健康检查返回 `{"status":"READY"}`：
-
-```bash
-scripts/run-task.sh SORTING --config config/agent.production.yaml
-```
-
-现场需要调整的内容主要是 `services`、`inspection_points`、`timeouts` 和 `product_slots`。8086 的下游地址、相机、标定文件和临时目录位于 `config/pick-place.yaml`。
+机器人 IP 只配置在 `robot.ip`。修改后需要依次重启 pick-place 和统一任务服务；也可
+在 Web 控制台使用“应用并重启”。统一服务固定使用一个 Uvicorn worker，以保证全局
+任务锁对 Task0-3 全部生效。
 
 ## 测试
 
@@ -126,26 +105,4 @@ scripts/run-task.sh SORTING --config config/agent.production.yaml
 scripts/run-tests.sh
 ```
 
-等价的直接命令为：
-
-```bash
-PYTHONPATH=src .venv/bin/pytest -q
-```
-
 测试使用进程内 HTTP Mock，不会驱动真实机器人。
-
-## 配置与代码入口
-
-|入口|职责|
-|---|---|
-|`src/agent/main.py`|任务 CLI 和 `run_task` Python 入口|
-|`src/agent/workflow.py`|三类 LangGraph 工作流|
-|`src/agent/client.py`|主 Agent 的 HTTP 客户端、超时、重试和幂等键|
-|`src/pick_place_service/`|8086 独立取放服务|
-|`src/task1_service/`|任务一小票识别到抓取独立服务|
-|`src/task2_service/`|任务二货架巡检与补货独立服务|
-|`config/agent.production.yaml`|主 Agent 实际环境服务地址和场地配置|
-|`config/task1.production.yaml`|任务一独立服务地址、点位、手能力映射和超时配置|
-|`config/task2.production.yaml`|任务二独立服务地址、巡检路线和超时配置|
-|`config/product-hand-options.yaml`|任务一、任务二共用的商品、巡检点及左右手能力|
-|`config/pick-place.yaml`|8086 下游服务和相机配置|

@@ -1,20 +1,19 @@
 [project]
-name = "robot-games-agent"
+name = "robot-games-services"
 version = "0.1.0"
-description = "LangGraph orchestration agent for robot retail tasks"
+description = "Unified orchestration service for robot retail tasks"
 requires-python = ">=3.11"
-# 运行时依赖：HTTP 异步调用、状态图编排、数据校验和 YAML 配置加载。
+# 运行时依赖：HTTP 异步调用、API 服务、数据校验和 YAML 配置加载。
 dependencies = [
     "httpx>=0.28,<1",
     "fastapi>=0.115,<1",
-    "langgraph>=1.0,<2",
     "pydantic>=2.10,<3",
     "pyyaml>=6,<7",
     "uvicorn>=0.34,<1",
 ]
 
 [dependency-groups]
-# 开发依赖仅用于同步/异步测试，不进入 Agent 的运行逻辑。
+# 开发依赖仅用于同步/异步测试，不进入任务服务的运行逻辑。
 dev = [
     "pytest>=8.3,<9",
     "pytest-asyncio>=0.24,<2",

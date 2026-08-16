@@ -9,6 +9,7 @@ import uvicorn
 
 from pick_place_service.app import create_app
 from pick_place_service.models import PickPlaceSettings
+from runtime_config import load_runtime_document
 
 
 def main() -> None:
@@ -17,11 +18,15 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     parser = argparse.ArgumentParser(description="Run the pick/place orchestration service")
-    parser.add_argument("--config", default="config/pick-place.yaml")
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=8086)
+    parser.add_argument("--config", default="config/runtime.production.yaml")
     args = parser.parse_args()
-    uvicorn.run(create_app(PickPlaceSettings.load(args.config)), host=args.host, port=args.port)
+    document = load_runtime_document(args.config)
+    server = document.servers.pick_place
+    uvicorn.run(
+        create_app(PickPlaceSettings.from_runtime_document(document)),
+        host=server.host,
+        port=server.port,
+    )
 
 
 if __name__ == "__main__":

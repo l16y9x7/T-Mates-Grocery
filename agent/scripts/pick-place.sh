@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$PROJECT_ROOT/.cache/uv}"
 export PYTHONPATH="$PROJECT_ROOT/src"
+export RUNTIME_CONFIG_FILE="${RUNTIME_CONFIG_FILE:-$PROJECT_ROOT/config/runtime.production.yaml}"
 RUN_DIR="$PROJECT_ROOT/run"
 LOG_DIR="$PROJECT_ROOT/log/process"
 PID_FILE="$RUN_DIR/pick-place.pid"
@@ -20,7 +21,7 @@ start() {
   local timestamp log_file pid
   timestamp="$(date +%Y%m%d-%H%M%S)"; log_file="$LOG_DIR/pick-place-$timestamp.log"
   cd "$PROJECT_ROOT"
-  nohup uv run --project "$PROJECT_ROOT" --frozen python -m pick_place_service --config config/pick-place.yaml >"$log_file" 2>&1 < /dev/null &
+  nohup uv run --project "$PROJECT_ROOT" --frozen python -m pick_place_service --config "$RUNTIME_CONFIG_FILE" >"$log_file" 2>&1 < /dev/null &
   pid=$!; printf '%s\n' "$pid" > "$PID_FILE"; sleep 1
   if ! kill -0 "$pid" 2>/dev/null; then echo "pick-place 服务启动失败，日志：$log_file" >&2; rm -f "$PID_FILE"; tail -n 40 "$log_file" >&2 || true; return 1; fi
   echo "pick-place 服务已后台启动，PID=$pid"; echo "地址: http://127.0.0.1:8086"; echo "日志: $log_file"

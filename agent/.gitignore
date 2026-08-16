@@ -5,6 +5,8 @@
 # Runtime state and generated logs
 log/
 run/
+output/
+config/runtime.production.yaml.bak
 
 # Python and test artifacts
 __pycache__/

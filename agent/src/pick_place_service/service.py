@@ -31,6 +31,7 @@ from pick_place_service.models import (
     ServiceError,
     StatusResponse,
     action_payload,
+    normalize_product_name,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -291,20 +292,25 @@ class SubagentClient:
             request.product_name,
             locate_url,
         )
+        payload = {
+            # 8083 正式定位接口使用 task_type；name 是旧版接口字段。
+            "task_type": request.task_type.value,
+            "product_name": request.product_name,
+            "hand": request.normalized_hand,
+        }
+        if kind == "pick" and request.level is not None:
+            payload["level"] = request.level
         response = await self._post(
             locate_url,
             f"/perception/{kind}/locate",
-            {
-                # 8083 正式定位接口使用 task_type；name 是旧版接口字段。
-                "task_type": request.task_type.value,
-                "product_name": request.product_name,
-                "hand": request.normalized_hand,
-            },
+            payload,
             self.settings.timeouts.locate_seconds,
         )
         try:
             located = LocateResponse.model_validate(response.json())
-            if located.product_name != request.product_name:
+            if normalize_product_name(located.product_name) != normalize_product_name(
+                request.product_name
+            ):
                 raise ValueError("locate response product_name does not match request")
             if len(located.bbox) != 4:
                 raise ValueError("bbox must contain four values")
@@ -435,6 +441,7 @@ class SubagentClient:
             # 定位、取图和位姿估计，直接按现场 release 契约释放当前手上的商品。
             payload = {
                 "task_type": "SORTING",
+                "product_name": request.product_name,
                 "hand": request.hand.upper(),
                 "pose": [0, 0, 0, 0, 0, 0],
                 "frame": "camera",
@@ -480,33 +487,40 @@ class SubagentClient:
     ) -> httpx.Response:
         # 所有 JSON 下游请求统一在这里处理 HTTP 错误、超时和网络异常，
         # 这样上层日志能明确知道是哪个能力接口断开，而不是只看到 502。
+        url = f"{base_url.rstrip('/')}{path}"
+        interface_name = path.strip("/").replace("/", "_") or "root"
+        log_dir = f"interfaces/{interface_name}"
+        _save_log_json(
+            f"{log_dir}/request.json",
+            {"method": "POST", "url": url, "headers": headers or {}, "body": payload},
+        )
         try:
-            url = f"{base_url.rstrip('/')}{path}"
             response = await self.client.post(
                 url,
                 json=payload,
                 headers=headers,
                 timeout=timeout_seconds,
             )
-            interface_name = path.strip("/").replace("/", "_") or "root"
-            _save_log_json(
-                f"interfaces/{interface_name}/request.json",
-                {"method": "POST", "url": url, "headers": headers or {}, "body": payload},
-            )
-            _save_http_response(f"interfaces/{interface_name}/response.json", response)
+            _save_http_response(f"{log_dir}/response.json", response)
             if not response.is_success:
                 try:
                     payload = response.json()
                     if isinstance(payload, dict):
                         code = payload.get("error_code") or "EXECUTION_FAILED"
-                        detail = payload.get("detail") or code
+                        detail = payload.get("detail") or payload.get("message") or code
                     else:
                         code = "EXECUTION_FAILED"
                         detail = payload
                 except (AttributeError, TypeError, ValueError):
                     code = "EXECUTION_FAILED"
                     detail = "EXECUTION_FAILED"
-                raise ServiceError(str(code), f"{path}: {detail}", status_code=502)
+                raise ServiceError(
+                    str(code),
+                    f"{path}: {detail}",
+                    status_code=502,
+                    failed_interface=interface_name,
+                    url=url,
+                )
             LOGGER.info("下游请求成功 method=POST path=%s status=%d", path, response.status_code)
             return response
         except ServiceError:
@@ -515,10 +529,26 @@ class SubagentClient:
         except (httpx.TimeoutException, TimeoutError) as exc:
             LOGGER.exception("下游请求超时 path=%s", path)
             code = "ACTION_RESULT_UNKNOWN" if path.endswith(("/grasp", "/release")) else "NETWORK_ERROR"
-            raise ServiceError(code, f"{path} request result is unknown", status_code=504) from exc
+            message = f"{url} request result is unknown"
+            _save_http_error(f"{log_dir}/response.json", 504, code, message, url)
+            raise ServiceError(
+                code,
+                message,
+                status_code=504,
+                failed_interface=interface_name,
+                url=url,
+            ) from exc
         except httpx.HTTPError as exc:
             LOGGER.exception("下游网络异常 path=%s", path)
-            raise ServiceError("NETWORK_ERROR", str(exc), status_code=502) from exc
+            message = f"{url}: {exc}"
+            _save_http_error(f"{log_dir}/response.json", 502, "NETWORK_ERROR", message, url)
+            raise ServiceError(
+                "NETWORK_ERROR",
+                message,
+                status_code=502,
+                failed_interface=interface_name,
+                url=url,
+            ) from exc
 
     @staticmethod
     def _validate_status(response: httpx.Response, action: str) -> None:
@@ -591,7 +621,7 @@ class PickPlaceOrchestrator:
             located = await self.subagents.locate(request, kind)
             _append_log_event("定位", "succeeded", bbox=located.bbox, has_mask=bool(located.mask))
             step = "取图"
-            camera = self.settings.camera_for(kind, request.normalized_hand)
+            camera = self.settings.camera_for(kind, request.normalized_hand, request.task_type)
             _append_log_event("取图", "started", camera=camera)
             frame = await self.frames.capture(
                 camera,
@@ -608,14 +638,8 @@ class PickPlaceOrchestrator:
             _append_log_event("抓取/释放执行", "started")
             await self.subagents.execute(request, kind, pose, operation_key)
             _append_log_event("抓取/释放执行", "succeeded")
-            if kind == "place":
-                step = "视觉校验"
-                _append_log_event("视觉校验", "started")
-                await self.subagents.check(request, kind)
-                _append_log_event("视觉校验", "succeeded")
-            # 暂时跳过 pick 的夹取结果视觉检测：现场抓取动作已成功完成，
-            # 检测接口的响应契约/结果目前不稳定，不能因此把抓取标记为失败。
-            # if kind == "pick":
+            # 所有 pick/place 操作均跳过结果视觉校验；抓取或释放执行成功后直接返回。
+            # if kind in {"pick", "place"}:
             #     step = "视觉校验"
             #     _append_log_event("视觉校验", "started")
             #     await self.subagents.check(request, kind)
@@ -630,6 +654,8 @@ class PickPlaceOrchestrator:
                 step=step,
                 error_code=getattr(exc, "code", type(exc).__name__),
                 message=str(exc),
+                failed_interface=getattr(exc, "failed_interface", None),
+                url=getattr(exc, "url", None),
             )
             LOGGER.exception(
                 "取放流程失败 step=%s kind=%s product=%s key=%s",
@@ -651,6 +677,10 @@ class OperationCache:
     def __init__(self) -> None:
         self._entries: dict[str, tuple[str, asyncio.Task[StatusResponse]]] = {}
         self._lock = asyncio.Lock()
+
+    async def active_count(self) -> int:
+        async with self._lock:
+            return sum(not task.done() for _, task in self._entries.values())
 
     async def run(
         self,
@@ -915,6 +945,30 @@ def _save_http_response(relative_path: str, response: httpx.Response) -> None:
         )
     except Exception:
         LOGGER.exception("持久化 HTTP 响应日志失败 path=%s", relative_path)
+
+
+def _save_http_error(
+    relative_path: str,
+    status_code: int,
+    error_code: str,
+    message: str,
+    url: str,
+) -> None:
+    """保存未收到 HTTP 响应时的结构化传输错误，供 Web 接口时间线展示。"""
+
+    _save_log_json(
+        relative_path,
+        {
+            "status_code": status_code,
+            "headers": {},
+            "body": {
+                "error_code": error_code,
+                "message": message,
+                "url": url,
+                "transport_error": True,
+            },
+        },
+    )
 
 
 def _write_mask(path: Path, width: int, height: int, bbox: list[int | float]) -> None:

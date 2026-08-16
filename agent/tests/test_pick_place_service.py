@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
 import httpx
 import pytest
 
+import pick_place_service.service as service_module
 from pick_place_service.app import create_app
 from pick_place_service.models import (
     FrameBundle,
@@ -16,9 +18,16 @@ from pick_place_service.models import (
     PickPlaceSettings,
     PoseResponse,
     ServiceError,
+    StatusResponse,
     action_payload,
+    normalize_product_name,
 )
-from pick_place_service.service import CameraFrameProvider, PickPlaceOrchestrator, SubagentClient
+from pick_place_service.service import (
+    CameraFrameProvider,
+    OperationCache,
+    PickPlaceOrchestrator,
+    SubagentClient,
+)
 
 
 PICK_CAMERAS = {"left": "left_wrist", "right": "right_wrist"}
@@ -83,6 +92,28 @@ def make_app(fake: FakeSubagents):
 
 
 @pytest.mark.asyncio
+async def test_operation_cache_reports_active_operations() -> None:
+    cache = OperationCache()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    request = PickPlaceRequest(
+        task_type="SORTING", product_name="可口可乐", hand="left"
+    )
+
+    async def operation():
+        started.set()
+        await release.wait()
+        return StatusResponse(status="SUCCEEDED")
+
+    execution = asyncio.create_task(cache.run("active-1", request, operation))
+    await started.wait()
+    assert await cache.active_count() == 1
+    release.set()
+    await execution
+    assert await cache.active_count() == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("hand", ["left", "right", "LEFT", "RIGHT"])
 async def test_operation_started_event_uses_public_request_fields(tmp_path: Path, hand: str) -> None:
     fake = FakeSubagents()
@@ -109,6 +140,64 @@ async def test_operation_started_event_uses_public_request_fields(tmp_path: Path
     assert started["hand"] == hand.lower()
     assert "kind" not in started
     assert frames.cameras == [f"{hand.lower()}_wrist"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hand", ["left", "right", "LEFT", "RIGHT"])
+async def test_shortage_pick_always_uses_head_camera(tmp_path: Path, hand: str) -> None:
+    fake = FakeSubagents()
+    frames = FakeFrames()
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://manipulation",
+        camera_url="http://camera",
+        calibration_file="camera.json",
+        log_dir=str(tmp_path),
+        pick_cameras=PICK_CAMERAS,
+        shortage_pick_camera="head",
+    )
+    orchestrator = PickPlaceOrchestrator(settings, fake, frames)
+    request = PickPlaceRequest(task_type="SHORTAGE", product_name="舒克牙膏海盐薄荷", hand=hand)
+
+    await orchestrator.run(request, "pick", f"shortage-pick-{hand}")
+
+    assert frames.cameras == ["head"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "hand", "expected_camera"),
+    [
+        ("pick", "left", "left_wrist"),
+        ("pick", "right", "right_wrist"),
+        ("place", "left", "head"),
+        ("place", "right", "head"),
+    ],
+)
+async def test_misplaced_camera_policy(
+    tmp_path: Path, kind: str, hand: str, expected_camera: str
+) -> None:
+    fake = FakeSubagents()
+    frames = FakeFrames()
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://manipulation",
+        camera_url="http://camera",
+        calibration_file="camera.json",
+        log_dir=str(tmp_path),
+        pick_cameras=PICK_CAMERAS,
+        place_camera="head",
+    )
+    request = PickPlaceRequest(
+        task_type="MISPLACED", product_name="舒克牙膏海盐薄荷", hand=hand
+    )
+
+    await PickPlaceOrchestrator(settings, fake, frames).run(
+        request, kind, f"misplaced-{kind}-{hand}"
+    )
+
+    assert frames.cameras == [expected_camera]
+    assert fake.calls == [(kind, "locate"), (kind, "pose"), (kind, "execute")]
 
 
 @pytest.mark.parametrize(
@@ -173,6 +262,28 @@ async def test_pick_rejects_request_without_hand() -> None:
 
 
 @pytest.mark.asyncio
+async def test_pick_rejects_invalid_level() -> None:
+    fake = FakeSubagents()
+    app = make_app(fake)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://pick-place"
+    ) as client:
+        response = await client.post(
+            "/pick",
+            json={
+                "task_type": "SORTING",
+                "product_name": "可口可乐",
+                "hand": "left",
+                "level": "1",
+            },
+            headers={"Idempotency-Key": "task-invalid-level"},
+        )
+
+    assert response.status_code == 422
+    assert fake.calls == []
+
+
+@pytest.mark.asyncio
 async def test_place_maps_internal_sequence_and_rejects_key_conflict() -> None:
     fake = FakeSubagents()
     app = make_app(fake)
@@ -192,7 +303,11 @@ async def test_place_maps_internal_sequence_and_rejects_key_conflict() -> None:
 
     assert first.status_code == 200
     assert conflict.status_code == 409
-    assert fake.calls == [("place", "locate"), ("place", "pose"), ("place", "execute"), ("place", "check")]
+    assert fake.calls == [
+        ("place", "locate"),
+        ("place", "pose"),
+        ("place", "execute"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -229,12 +344,49 @@ async def test_sorting_place_skips_vision_and_uses_fixed_release_payload() -> No
     assert requests[0].headers["Idempotency-Key"] == "release-left-001:execute"
     assert json.loads(requests[0].content) == {
         "task_type": "SORTING",
+        "product_name": "可口可乐",
         "hand": "LEFT",
         "pose": [0, 0, 0, 0, 0, 0],
         "frame": "camera",
         "pose_unit": "mm_rad",
         "rotation_order": "zyx",
     }
+
+
+@pytest.mark.asyncio
+async def test_sorting_release_preserves_robot_planning_error() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500,
+            json={
+                "error_code": "EXECUTION_FAILED",
+                "message": "MoveL 规划失败，错误码 -1022",
+            },
+        )
+
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://robot:8084",
+        camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
+        calibration_file="camera.json",
+    )
+    request = PickPlaceRequest(
+        task_type="SORTING", product_name="水溶C100瓶装", hand="RIGHT"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ServiceError) as error:
+            await SubagentClient(settings, client).execute(
+                request,
+                "place",
+                PoseResponse(pose=[0, 0, 0, 0, 0, 0]),
+                "task1-place",
+            )
+
+    assert error.value.code == "EXECUTION_FAILED"
+    assert error.value.message == "/manipulation/release: MoveL 规划失败，错误码 -1022"
+    assert error.value.failed_interface == "manipulation_release"
+    assert error.value.url == "http://robot:8084/manipulation/release"
 
 
 @pytest.mark.asyncio
@@ -257,6 +409,44 @@ async def test_missing_idempotency_key_and_downstream_failure_are_reported() -> 
     assert missing.status_code == 400
     assert failed.status_code == 502
     assert failed.json()["error_code"] == "EXECUTION_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_downstream_failure_response_exposes_interface_and_url() -> None:
+    fake = FakeSubagents()
+    url = "http://robot:8084/manipulation/grasp"
+
+    async def fail_execute(
+        request: PickPlaceRequest,
+        kind: str,
+        pose: PoseResponse,
+        operation_key: str,
+    ) -> None:
+        raise ServiceError(
+            "NETWORK_ERROR",
+            f"{url}: All connection attempts failed",
+            failed_interface="manipulation_grasp",
+            url=url,
+        )
+
+    fake.execute = fail_execute  # type: ignore[method-assign]
+    app = make_app(fake)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://pick-place"
+    ) as client:
+        response = await client.post(
+            "/pick",
+            json={"task_type": "SORTING", "product_name": "可口可乐", "hand": "right"},
+            headers={"Idempotency-Key": "network-error"},
+        )
+
+    assert response.status_code == 502
+    assert response.json() == {
+        "error_code": "NETWORK_ERROR",
+        "message": f"{url}: All connection attempts failed",
+        "failed_interface": "manipulation_grasp",
+        "url": url,
+    }
 
 
 @pytest.mark.asyncio
@@ -441,6 +631,42 @@ async def test_subagent_pose_preserves_downstream_error_message(
     assert "No valid depth values inside the selected mask" in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_connection_failure_records_interface_url_and_transport_error(tmp_path: Path) -> None:
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://robot:8084",
+        camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
+        calibration_file="camera.json",
+    )
+    request = PickPlaceRequest(task_type="SORTING", product_name="可口可乐", hand="right")
+    pose = PoseResponse(pose=[1, 2, 3, 4, 5, 6])
+
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=http_request)
+
+    token = service_module._ACTIVE_LOG_DIR.set(tmp_path)
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(ServiceError) as error:
+                await SubagentClient(settings, client).execute(request, "pick", pose, "operation")
+    finally:
+        service_module._ACTIVE_LOG_DIR.reset(token)
+
+    assert error.value.code == "NETWORK_ERROR"
+    assert error.value.failed_interface == "manipulation_grasp"
+    assert error.value.url == "http://robot:8084/manipulation/grasp"
+    assert error.value.url in error.value.message
+    interface_dir = tmp_path / "interfaces" / "manipulation_grasp"
+    logged_request = json.loads((interface_dir / "request.json").read_text(encoding="utf-8"))
+    logged_response = json.loads((interface_dir / "response.json").read_text(encoding="utf-8"))
+    assert logged_request["url"] == error.value.url
+    assert logged_response["status_code"] == 502
+    assert logged_response["body"]["transport_error"] is True
+    assert logged_response["body"]["url"] == error.value.url
+
+
 def test_action_payload_matches_8084_execution_contract() -> None:
     request = PickPlaceRequest(
         task_type="SORTING",
@@ -457,9 +683,9 @@ def test_action_payload_matches_8084_execution_contract() -> None:
 
     assert action_payload(request, pose) == {
         "task_type": "SORTING",
+        "product_name": "可口可乐",
         "pose": [1, 2, 3, 4, 5, 6],
         "hand": "right",
-        "product_type": "can",
         "frame": "camera",
         "pose_unit": "mm_rad",
         "rotation_order": "zyx",
@@ -524,12 +750,17 @@ async def test_subagent_locate_uses_formal_locate_contract() -> None:
         pick_cameras=PICK_CAMERAS,
         calibration_file="camera.json",
     )
-    request = PickPlaceRequest(task_type="SORTING", product_name="可口可乐", hand="LEFT")
+    request = PickPlaceRequest(
+        task_type="SORTING", product_name="可口可乐", hand="LEFT", level="L2"
+    )
 
     async def handler(http_request: httpx.Request) -> httpx.Response:
         assert http_request.url.path == "/perception/pick/locate"
         assert http_request.headers["content-type"] == "application/json"
-        assert http_request.content.decode("utf-8") == '{"task_type":"SORTING","product_name":"可口可乐","hand":"left"}'
+        assert http_request.content.decode("utf-8") == (
+            '{"task_type":"SORTING","product_name":"可口可乐",'
+            '"hand":"left","level":"L2"}'
+        )
         return httpx.Response(
             200,
             json={
@@ -545,3 +776,81 @@ async def test_subagent_locate_uses_formal_locate_contract() -> None:
 
     assert result.bbox == [100, 200, 300, 500]
     assert result.mask == "c2VnbWVudGF0aW9u"
+
+
+@pytest.mark.asyncio
+async def test_subagent_locate_omits_level_when_not_provided() -> None:
+    request = PickPlaceRequest(
+        task_type="SHORTAGE", product_name="矿泉水", hand="right"
+    )
+
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        assert json.loads(http_request.content) == {
+            "task_type": "SHORTAGE",
+            "product_name": "矿泉水",
+            "hand": "right",
+        }
+        return httpx.Response(
+            200,
+            json={"product_name": "矿泉水", "bbox": [100, 200, 300, 500]},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        await SubagentClient(_locate_settings(), client).locate(request, "pick")
+
+
+def test_normalize_product_name_strips_spaces_and_symbols() -> None:
+    assert normalize_product_name("Lay's乐事薯片意大利香浓红烩味") == "Lays乐事薯片意大利香浓红烩味"
+    assert normalize_product_name("Lays乐事薯片意大利香浓红烩味") == "Lays乐事薯片意大利香浓红烩味"
+    assert normalize_product_name("呀！土豆番茄酱味") == "呀土豆番茄酱味"
+    assert normalize_product_name("Lays 乐事") == "Lays乐事"
+
+
+def _locate_settings() -> PickPlaceSettings:
+    return PickPlaceSettings(
+        perception_url="http://legacy-perception",
+        locate_url="http://formal-locate",
+        manipulation_url="http://manipulation",
+        camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
+        calibration_file="camera.json",
+    )
+
+
+@pytest.mark.asyncio
+async def test_subagent_locate_accepts_product_name_with_symbols() -> None:
+    request = PickPlaceRequest(
+        task_type="SORTING",
+        product_name="Lays乐事薯片意大利香浓红烩味",
+        hand="LEFT",
+    )
+
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "product_name": "Lay's乐事薯片意大利香浓红烩味",
+                "bbox": [620, 420, 670, 455],
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await SubagentClient(_locate_settings(), client).locate(request, "pick")
+
+    assert result.product_name == "Lay's乐事薯片意大利香浓红烩味"
+    assert result.bbox == [620, 420, 670, 455]
+
+
+@pytest.mark.asyncio
+async def test_subagent_locate_rejects_different_product_name() -> None:
+    request = PickPlaceRequest(task_type="SORTING", product_name="可口可乐", hand="LEFT")
+
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"product_name": "百事可乐", "bbox": [100, 200, 300, 500]},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ServiceError, match="invalid pick locate response"):
+            await SubagentClient(_locate_settings(), client).locate(request, "pick")

@@ -6,8 +6,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from runtime_config import RuntimeDocument, load_runtime_document
 
 
 class TaskType(StrEnum):
@@ -24,6 +25,7 @@ class PickPlaceRequest(BaseModel):
     task_type: TaskType
     product_name: str = Field(min_length=1)
     hand: Literal["left", "right", "LEFT", "RIGHT"]
+    level: Literal["L1", "L2", "L3", "L4", "L5"] | None = None
     product_type: str | int | None = None
 
     @field_validator("product_name")
@@ -37,6 +39,15 @@ class PickPlaceRequest(BaseModel):
     @property
     def normalized_hand(self) -> str:
         return self.hand.lower()
+
+
+def normalize_product_name(value: str) -> str:
+    """去掉空格和符号后再比较商品名。
+
+    感知定位可能返回 ``Lay's乐事薯片...``，而请求侧配置是 ``Lays乐事薯片...``。
+    """
+
+    return "".join(ch for ch in value if ch.isalnum())
 
 
 class StatusResponse(BaseModel):
@@ -87,6 +98,7 @@ class PickPlaceSettings(BaseModel):
     manipulation_url: str = Field(min_length=1)
     camera_url: str = Field(min_length=1)
     pick_cameras: dict[Literal["left", "right"], str]
+    shortage_pick_camera: str = Field(min_length=1, default="head")
     place_camera: str = Field(min_length=1, default="head")
     # 正式配置按相机 ID 选择标定；calibration_file 仅兼容旧配置和单元测试。
     calibration_files: dict[str, str] = Field(default_factory=dict)
@@ -97,8 +109,30 @@ class PickPlaceSettings(BaseModel):
 
     @classmethod
     def load(cls, path: str | Path) -> PickPlaceSettings:
-        with Path(path).open("r", encoding="utf-8") as config_file:
-            return cls.model_validate(yaml.safe_load(config_file))
+        return cls.from_runtime_document(load_runtime_document(path))
+
+    @classmethod
+    def from_runtime_document(cls, document: RuntimeDocument) -> PickPlaceSettings:
+        raw = document.section("pick_place")
+        raw.update(
+            {
+                "perception_url": document.local_services.perception,
+                "pose_estimation_url": document.local_services.pose_estimation,
+                "manipulation_url": document.robot.pose_url,
+                "camera_url": document.robot.camera_url,
+            }
+        )
+        calibration_files = raw.get("calibration_files")
+        if isinstance(calibration_files, dict):
+            raw["calibration_files"] = {
+                camera: document.resolve(str(calibration))
+                for camera, calibration in calibration_files.items()
+            }
+        if raw.get("calibration_file"):
+            raw["calibration_file"] = document.resolve(str(raw["calibration_file"]))
+        if raw.get("log_dir"):
+            raw["log_dir"] = document.resolve(str(raw["log_dir"]))
+        return cls.model_validate(raw)
 
     @field_validator("pick_cameras")
     @classmethod
@@ -121,10 +155,12 @@ class PickPlaceSettings(BaseModel):
             raise ValueError(f"未配置相机 {camera} 的标定文件")
         return calibration
 
-    def camera_for(self, operation: str, hand: str) -> str:
-        """按操作和手臂选择相机。"""
+    def camera_for(self, operation: str, hand: str, task_type: TaskType) -> str:
+        """按任务类型、操作和手臂选择相机。"""
 
         if operation == "pick":
+            if task_type is TaskType.SHORTAGE:
+                return self.shortage_pick_camera
             return self.pick_cameras[hand.lower()]
         return self.place_camera
 
@@ -141,11 +177,21 @@ class FrameBundle(BaseModel):
 
 
 class ServiceError(Exception):
-    def __init__(self, code: str, message: str, *, status_code: int = 502) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status_code: int = 502,
+        failed_interface: str | None = None,
+        url: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.failed_interface = failed_interface
+        self.url = url
 
 
 def action_payload(request: PickPlaceRequest, pose: PoseResponse) -> dict[str, Any]:
@@ -153,6 +199,7 @@ def action_payload(request: PickPlaceRequest, pose: PoseResponse) -> dict[str, A
 
     payload: dict[str, Any] = {
         "task_type": request.task_type.value,
+        "product_name": request.product_name,
         "pose": pose.pose,
         "hand": request.normalized_hand,
         # 位姿服务可能返回这些元数据；缺省时使用 8084 文档约定值。
@@ -160,6 +207,4 @@ def action_payload(request: PickPlaceRequest, pose: PoseResponse) -> dict[str, A
         "pose_unit": pose.pose_unit or "mm_rad",
         "rotation_order": pose.rotation_order or "zyx",
     }
-    if request.product_type is not None:
-        payload["product_type"] = request.product_type
     return payload

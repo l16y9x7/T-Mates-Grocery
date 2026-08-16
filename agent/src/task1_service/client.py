@@ -123,6 +123,24 @@ class Task1Client:
             self.settings.timeouts.navigation_seconds,
         )
 
+    async def nudge_back(self, idempotency_key: str) -> None:
+        await self._physical_action(
+            "navigation",
+            "/navigation/nudge",
+            {"action": "approach", "direction": "back"},
+            idempotency_key,
+            self.settings.timeouts.navigation_seconds,
+        )
+
+    async def nudge_return(self, idempotency_key: str) -> None:
+        await self._physical_action(
+            "navigation",
+            "/navigation/nudge",
+            {"action": "return"},
+            idempotency_key,
+            self.settings.timeouts.navigation_seconds,
+        )
+
     async def prepare_pose(
         self,
         pose_type: str,
@@ -198,12 +216,18 @@ class Task1Client:
         self,
         product_name: str,
         hand: Hand,
+        level: str,
         idempotency_key: str,
     ) -> None:
         await self._physical_action(
             "pick_place",
             "/pick",
-            {"task_type": TaskType.SORTING.value, "product_name": product_name, "hand": hand.value},
+            {
+                "task_type": TaskType.SORTING.value,
+                "product_name": product_name,
+                "hand": hand.value,
+                "level": level,
+            },
             idempotency_key,
             self.settings.timeouts.pick_seconds,
         )
@@ -313,6 +337,8 @@ class Task1Client:
                     payload = {}
                 code = payload.get("error_code", "EXECUTION_FAILED")
                 detail = payload.get("message") or payload.get("detail")
+                failed_interface = payload.get("failed_interface")
+                failed_url = payload.get("url")
                 message = f"{service} returned HTTP {response.status_code}"
                 if detail:
                     message = f"{message}: {detail}"
@@ -330,6 +356,10 @@ class Task1Client:
                 raise Task1ServiceError(
                     code if isinstance(code, str) else "EXECUTION_FAILED",
                     message,
+                    failed_interface=(
+                        failed_interface if isinstance(failed_interface, str) else None
+                    ),
+                    url=failed_url if isinstance(failed_url, str) else None,
                 )
             self._trace(
                 service=service,
