@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import tempfile
 import unittest
 from contextlib import nullcontext
@@ -166,6 +167,110 @@ class PlaceLocateApiTest(unittest.TestCase):
         self.assertEqual(decoded_mask.shape, (240, 320))
         self.assertEqual(np.count_nonzero(decoded_mask), np.count_nonzero(reference_mask))
 
+    def test_formal_locate_persists_rgbd_bbox_crop_and_sam3_mask(self) -> None:
+        request = self.make_request()
+        scan = InitialScan(
+            inspection_target_id="H1_F_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+            directory=Path("task0/H1_F_L_INSPECT_UPPER"),
+            rgb_path=Path("task0/H1_F_L_INSPECT_UPPER/rgb.jpg"),
+            depth_path=Path("task0/H1_F_L_INSPECT_UPPER/depth_mm.npy"),
+            rgb=self.reference_image,
+            depth_mm=self.reference_depth,
+            metadata={},
+        )
+        reference_mask = np.zeros(self.reference_image.shape[:2], dtype=np.uint8)
+        reference_mask[70:180, 120:200] = 255
+        sam_result = api.ReferenceMaskResult(
+            mask=reference_mask,
+            sam_prompt="box",
+            crop_box=(100, 50, 220, 200),
+            selected_bbox=(120.0, 70.0, 200.0, 180.0),
+            selected_score=0.95,
+            candidate_count=1,
+        )
+        request_payload = {
+            "task_type": "SHORTAGE",
+            "product_name": "测试商品",
+            "location_id": "H1_F_L2_C01",
+            "pose_type": "SHELF_VIEW_UPPER",
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_root = Path(directory)
+            with (
+                patch.object(api, "load_initial_scan", return_value=scan),
+                patch.object(api, "generate_reference_mask", return_value=sam_result),
+            ):
+                api.locate_place_debug(
+                    request,
+                    persist_artifacts=True,
+                    artifact_root=artifact_root,
+                    artifact_request=request_payload,
+                )
+
+            artifact_directories = list(artifact_root.iterdir())
+            self.assertEqual(len(artifact_directories), 1)
+            artifact_directory = artifact_directories[0]
+            expected_files = {
+                "request.json",
+                "result.json",
+                "rgbd.json",
+                "baseline_rgb.jpg",
+                "baseline_depth_mm.npy",
+                "current_rgb.jpg",
+                "current_depth_mm.npy",
+                "change_mask_reference.png",
+                "reference_component_mask.png",
+                "bbox_crop.jpg",
+                "sam3_crop.jpg",
+                "sam3_mask.png",
+            }
+            self.assertTrue(
+                expected_files.issubset(
+                    {path.name for path in artifact_directory.iterdir()}
+                )
+            )
+            saved_request = json.loads(
+                (artifact_directory / "request.json").read_text(encoding="utf-8")
+            )
+            saved_result = json.loads(
+                (artifact_directory / "result.json").read_text(encoding="utf-8")
+            )
+            saved_mask = cv2.imread(
+                str(artifact_directory / "sam3_mask.png"),
+                cv2.IMREAD_GRAYSCALE,
+            )
+            saved_crop = cv2.imread(str(artifact_directory / "bbox_crop.jpg"))
+            saved_sam3_crop = cv2.imread(
+                str(artifact_directory / "sam3_crop.jpg")
+            )
+            saved_depth = np.load(
+                artifact_directory / "current_depth_mm.npy",
+                allow_pickle=False,
+            )
+
+            self.assertEqual(saved_request, request_payload)
+            self.assertEqual(saved_result["product_name"], "测试商品")
+            self.assertEqual(saved_result["artifacts"]["sam3_mask"], "sam3_mask.png")
+            self.assertEqual(
+                saved_result["artifacts"]["bbox_crop_box"],
+                [120, 70, 200, 180],
+            )
+            self.assertEqual(saved_result["artifacts"]["bbox_crop_source"], "bbox")
+            self.assertEqual(
+                saved_result["artifacts"]["sam3_crop_box"],
+                [100, 50, 220, 200],
+            )
+            self.assertEqual(saved_mask.shape, self.reference_image.shape[:2])
+            self.assertEqual(
+                np.count_nonzero(saved_mask),
+                np.count_nonzero(reference_mask),
+            )
+            self.assertEqual(saved_crop.shape[:2], (110, 80))
+            self.assertEqual(saved_sam3_crop.shape[:2], (150, 120))
+            self.assertEqual(saved_depth.shape, self.reference_image.shape[:2])
+
     def test_public_response_returns_pose_estimator_inputs(self) -> None:
         debug = api.PlaceLocateDebugResponse(
             product_name="测试商品",
@@ -231,6 +336,11 @@ class PlaceLocateApiTest(unittest.TestCase):
         self.assertIsInstance(captured_request, api.PlaceLocateDebugRequest)
         self.assertEqual(captured_request.location_id, "H1_F_L_INSPECT")
         self.assertEqual(captured_request.product_name, "测试商品")
+        self.assertTrue(locate.call_args.kwargs["persist_artifacts"])
+        self.assertEqual(
+            locate.call_args.kwargs["artifact_request"],
+            public_request.model_dump(mode="json"),
+        )
 
     def test_public_request_matches_inspect_and_captures_current_rgbd(self) -> None:
         required = set(api.PlaceLocateRequest.model_json_schema()["required"])

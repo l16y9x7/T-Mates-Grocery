@@ -81,6 +81,33 @@ distortion_model = plumb_bob
 point_current = rotate_matrix @ point_reference
 ```
 
+## 结果与调试产物
+
+每次正式调用 `POST /perception/place/locate` 成功后都会创建一个独立结果目录。默认保存到
+`place/locate/debug`，可通过 `PLACE_LOCATE_DEBUG_DIR` 指定其它根目录。目录结构为：
+
+```text
+<timestamp>_<location>_<task>_<product>_<id>/
+├── request.json
+├── result.json
+├── rgbd.json
+├── baseline_rgb.jpg
+├── baseline_depth_mm.npy
+├── current_rgb.jpg
+├── current_depth_mm.npy
+├── change_mask_reference.png
+├── reference_component_mask.png
+├── bbox_crop.jpg
+├── sam3_crop.jpg
+└── sam3_mask.png
+```
+
+`bbox_crop.jpg` 严格使用正式响应的 bbox 从 Task0 RGB 裁切；`sam3_crop.jpg` 额外保留
+实际送入 SAM3 的扩展 crop。`sam3_mask.png` 是与 `baseline_rgb.jpg` 同尺寸、同坐标系
+的二值 mask。MISPLACED 当前使用深度细化而非 SAM3，因此只保存
+`reference_mask.png`，且 `result.json` 中的 `artifacts.sam3_mask/sam3_crop` 为
+`null`。`result.json` 保留正式响应字段并额外记录所有产物路径、crop 坐标及其来源。
+
 下游位姿估计先利用 Task0 RGB、bbox 和 mask 得到 `T_reference_object`，再计算
 `T_current_object = rotate_matrix @ T_reference_object`。Place Locate 不接收
 `reference_pose`，也不计算或返回商品 `target_pose`。

@@ -614,6 +614,63 @@ class ShortageBatchTest(unittest.TestCase):
             0.2,
         )
 
+    def test_large_object_like_depth_hole_may_touch_open_row_bottom(self) -> None:
+        shape = (120, 200)
+        photometric_mask = np.zeros(shape, dtype=np.uint8)
+        photometric_mask[80:120, 50:110] = 255
+        baseline_depth = np.full(shape, 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[80:120, 50:110] = 1100
+        depth_mask = np.where(
+            current_depth - baseline_depth > 60,
+            255,
+            0,
+        ).astype(np.uint8)
+
+        promoted = batch.promote_depth_components(
+            photometric_mask,
+            depth_mask,
+            baseline_depth,
+            current_depth,
+            [[0, 60, 200, 60]],
+            [[0, 60, 200, 60]],
+            [],
+        )
+
+        self.assertEqual(len(promoted), 1)
+        finding, support, _ = promoted[0]
+        self.assertEqual(finding.bbox, [50, 80, 60, 40])
+        self.assertTrue(support["bottom_border_exception"]["allowed"])
+        self.assertEqual(
+            support["bottom_border_exception"]["movement_balance_ratio"],
+            0.0,
+        )
+
+    def test_thin_bottom_border_depth_strip_remains_rejected(self) -> None:
+        shape = (120, 200)
+        photometric_mask = np.zeros(shape, dtype=np.uint8)
+        photometric_mask[114:120, 35:165] = 255
+        baseline_depth = np.full(shape, 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[114:120, 35:165] = 1100
+        depth_mask = np.where(
+            current_depth - baseline_depth > 60,
+            255,
+            0,
+        ).astype(np.uint8)
+
+        promoted = batch.promote_depth_components(
+            photometric_mask,
+            depth_mask,
+            baseline_depth,
+            current_depth,
+            [[0, 60, 200, 60]],
+            [[0, 60, 200, 60]],
+            [],
+        )
+
+        self.assertEqual(promoted, [])
+
     def test_depth_filter_does_not_promote_depth_without_rgb_evidence(self) -> None:
         image = np.full((72, 128, 3), 80, dtype=np.uint8)
         response = batch.INSPECT_API.InspectResponse(

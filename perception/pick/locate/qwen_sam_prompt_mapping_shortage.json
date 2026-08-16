@@ -125,15 +125,15 @@
   },
   "品客原味": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的红色品客薯片罐，输出满足条件的所有红色品客薯片罐的bbox。返回格式：{\"name\": \"红色品客薯片罐\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "pringles can"
+    "sam3_prompt": "red can"
   },
   "品客薯片烧烤牛排味": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的褐色品客薯片罐，输出满足条件的所有褐色品客薯片罐的bbox。返回格式：{\"name\": \"褐色品客薯片罐\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "pringles can"
+    "sam3_prompt": "purple can"
   },
   "品客酸乳酪洋葱味": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的绿色品客薯片罐，输出满足条件的所有绿色品客薯片罐的bbox。返回格式：{\"name\": \"绿色品客薯片罐\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "pringles can"
+    "sam3_prompt": "green can"
   },
   "外星人电解质水椰子口味": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的所有蓝椰子口味外星人电解质水瓶，输出bbox。返回格式：{\"name\": \"蓝白椰子口味外星人电解质水瓶\", \"bbox\": [x1, y1, x2, y2]}",

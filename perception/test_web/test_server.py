@@ -199,6 +199,9 @@ class PromptMappingTest(unittest.TestCase):
         review_js = (server.STATIC_DIR / "qwen_review.js").read_text(
             encoding="utf-8"
         )
+        review_css = (server.STATIC_DIR / "qwen_review.css").read_text(
+            encoding="utf-8"
+        )
         self.assertIn('id="shortageBatchGroupSelect"', review_html)
         self.assertIn('id="shortageBatchDatasetSelect"', review_html)
         self.assertIn('value="real_shortage">真实数据测试', review_html)
@@ -211,6 +214,12 @@ class PromptMappingTest(unittest.TestCase):
         self.assertNotIn('id="constraintTitle"', review_html)
         self.assertNotIn('id="modelInputs"', review_html)
         self.assertIn("shortage-qwen-image-grid", review_js)
+        self.assertIn('input.kind === "candidate_sheet"', review_js)
+        self.assertNotIn("input.description || input.kind", review_js)
+        self.assertIn(
+            "grid-template-columns: repeat(2, minmax(0, 1fr))",
+            review_css,
+        )
         self.assertIn("使用修改后的 Prompt 重试 Qwen", review_js)
         self.assertIn("Qwen 模型原始返回", review_js)
         self.assertNotIn("/api/qwen-review/samples", review_js)
@@ -438,7 +447,7 @@ class PromptMappingTest(unittest.TestCase):
                 "=== USER ===\nlook here\n[IMAGE 1]\nthen candidate\n[IMAGE 2]\n"
             )
             raw_output = (
-                '{"shortage_product_name":"NFC桔汁","confidence":0.93}'
+                '{"product_name":"NFC桔汁","confidence":0.93}'
             )
             captured: dict = {}
 
@@ -482,7 +491,7 @@ class PromptMappingTest(unittest.TestCase):
             ["text", "image_url", "text", "image_url"],
         )
         self.assertEqual(result["raw_output"], raw_output)
-        self.assertEqual(result["parsed_result"]["shortage_product_name"], "NFC桔汁")
+        self.assertEqual(result["parsed_result"]["product_name"], "NFC桔汁")
         self.assertEqual(saved["prompt_used"], prompt.strip())
 
     def test_sorting_batch_gallery_lists_and_serves_rgb_depth_and_result(self) -> None:
@@ -896,6 +905,22 @@ SKU 2: 商品B
         )
         self.assertFalse(
             server.prompt_has_expected_candidates(valid, ["商品B", "商品A"])
+        )
+
+        shortage = """=== SYSTEM ===
+system
+=== USER ===
+[IMAGE 1]
+候选（与下方标准图拼图上方数字一致）：
+1: 商品A
+2: 商品B
+[IMAGE 2]
+"""
+        self.assertTrue(
+            server.prompt_has_expected_candidates(shortage, ["商品A", "商品B"])
+        )
+        self.assertFalse(
+            server.prompt_has_expected_candidates(shortage, ["商品B", "商品A"])
         )
 
     def test_misplaced_stage_prompt_saves_against_its_own_candidates(self) -> None:

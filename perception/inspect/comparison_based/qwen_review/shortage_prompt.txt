@@ -8,6 +8,6 @@
 
 只输出严格 JSON，不要输出 Markdown、代码块或任何说明：
 {
-  "shortage_product_name": "候选标准名称",
+  "product_name": "候选标准名称",
   "confidence": 0.0
 }

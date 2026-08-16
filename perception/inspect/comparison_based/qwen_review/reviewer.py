@@ -824,13 +824,13 @@ def build_qwen_payload(
                 "type": "text",
                 "text": (
                     "请只审核下面这一张货架局部图："
-                    "缺货商品只能从以下候选商品中选择。"
+                    "只能从以下候选商品中选择最像的一个商品。"
                 ),
             },
             _numpy_image_content(region_image),
             {
                 "type": "text",
-                "text": _candidate_number_mapping_text(candidates),
+                "text": _shortage_candidate_number_mapping_text(candidates),
             },
         ]
     elif misplaced_stage == "misplaced_product":
@@ -872,14 +872,15 @@ def build_qwen_payload(
     )
     if candidates and not sheets:
         raise QwenReviewError("payload_assembly", "候选 SKU 拼图为空")
-    content.append(
-        {
-            "type": "text",
-            "text": (
-                "下面是候选 SKU 标准图拼图；每格上方数字与候选 SKU 编号一致。"
-            ),
-        }
-    )
+    if task_type != "SHORTAGE":
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    "下面是候选 SKU 标准图拼图；每格上方数字与候选 SKU 编号一致。"
+                ),
+            }
+        )
     for sheet_index, sheet in enumerate(sheets, start=1):
         if len(sheets) > 1:
             content.append(
@@ -1199,10 +1200,13 @@ def parse_qwen_review(
     confidence = min(1.0, max(0.0, float(confidence)))
 
     if task_type == "SHORTAGE":
+        output_field = (
+            "product_name" if "product_name" in payload else "shortage_product_name"
+        )
         name = _validated_name(
-            payload.get("shortage_product_name"),
+            payload.get(output_field),
             expected_names or candidate_names,
-            "shortage_product_name",
+            output_field,
         )
         if name is None:
             return None
@@ -1310,6 +1314,18 @@ def _candidate_number_mapping_text(
     lines = ["候选 SKU 编号（与下方标准图拼图上方数字一致）："]
     lines.extend(
         f"SKU {candidate_number}: {candidate.name}"
+        for candidate_number, candidate in enumerate(candidates, start=1)
+    )
+    lines.append("所有输出商品名必须从以上名称中逐字选择。")
+    return "\n".join(lines)
+
+
+def _shortage_candidate_number_mapping_text(
+    candidates: Sequence[CandidateProduct],
+) -> str:
+    lines = ["候选（与下方标准图拼图上方数字一致）："]
+    lines.extend(
+        f"{candidate_number}: {candidate.name}"
         for candidate_number, candidate in enumerate(candidates, start=1)
     )
     lines.append("所有输出商品名必须从以上名称中逐字选择。")

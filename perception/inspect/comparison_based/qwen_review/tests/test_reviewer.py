@@ -126,7 +126,7 @@ class QwenReviewerTest(unittest.TestCase):
         session = FakeSession(
             json.dumps(
                 {
-                    "shortage_product_name": "绿色奥利奥",
+                    "product_name": "绿色奥利奥",
                     "confidence": 0.94,
                 },
                 ensure_ascii=False,
@@ -150,7 +150,7 @@ class QwenReviewerTest(unittest.TestCase):
         self.assertEqual(len(result.findings), 1)
         self.assertEqual(len(result.prompts), 1)
         self.assertIn("=== SYSTEM ===", result.prompts[0])
-        self.assertIn("SKU 1:", result.prompts[0])
+        self.assertIn("1: 绿色奥利奥", result.prompts[0])
         self.assertEqual(result.findings[0].shortage_product_name, "绿色奥利奥")
         candidate_call = session.calls[0]
         self.assertEqual(candidate_call[0], "GET")
@@ -168,9 +168,9 @@ class QwenReviewerTest(unittest.TestCase):
         qwen_payload = session.calls[-1][2]["json"]
         serialized = json.dumps(qwen_payload, ensure_ascii=False)
         self.assertNotIn("同列后排仍可见", serialized)
-        self.assertIn("SKU 1: 绿色奥利奥", serialized)
-        self.assertIn("SKU 2: 棕色奥利奥", serialized)
-        self.assertIn("每格上方数字与候选 SKU 编号一致", serialized)
+        self.assertIn("1: 绿色奥利奥", serialized)
+        self.assertIn("2: 棕色奥利奥", serialized)
+        self.assertIn("候选（与下方标准图拼图上方数字一致）", serialized)
         self.assertNotIn("sku_id=SKU_A", serialized)
         self.assertNotIn("location_id=H1_F_L2_C03", serialized)
         user_content = qwen_payload["messages"][1]["content"]
@@ -178,7 +178,7 @@ class QwenReviewerTest(unittest.TestCase):
         self.assertEqual(
             user_content[0]["text"],
             "请只审核下面这一张货架局部图："
-            "缺货商品只能从以下候选商品中选择。",
+            "只能从以下候选商品中选择最像的一个商品。",
         )
         region_bytes = base64.b64decode(
             user_content[1]["image_url"]["url"].split(",", 1)[1]
@@ -189,14 +189,15 @@ class QwenReviewerTest(unittest.TestCase):
         )
         self.assertGreater(int(region_image[110, 40, 1]), 120)
         self.assertLess(int(region_image[110, 40, 0]), 40)
-        self.assertIn("候选 SKU 编号", user_content[2]["text"])
+        self.assertIn("候选（与下方标准图拼图上方数字一致）", user_content[2]["text"])
         self.assertIn("绿色奥利奥", serialized)
         self.assertIn("棕色奥利奥", serialized)
         self.assertNotIn("BEFORE", serialized)
         self.assertNotIn("AFTER", serialized)
         self.assertNotIn("差分算法", serialized)
         system_prompt = qwen_payload["messages"][0]["content"]
-        self.assertIn("shortage_product_name", system_prompt)
+        self.assertIn('"product_name"', system_prompt)
+        self.assertNotIn("shortage_product_name", system_prompt)
         self.assertNotIn("misplaced_product_name", system_prompt)
         image_items = [item for item in user_content if item["type"] == "image_url"]
         self.assertEqual(len(image_items), 2)
@@ -214,7 +215,7 @@ class QwenReviewerTest(unittest.TestCase):
         session = FakeSession(
             json.dumps(
                 {
-                    "shortage_product_name": "绿色奥利奥",
+                    "product_name": "绿色奥利奥",
                     "confidence": 0.94,
                 },
                 ensure_ascii=False,

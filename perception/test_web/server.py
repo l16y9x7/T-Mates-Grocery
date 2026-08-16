@@ -621,8 +621,8 @@ def shortage_qwen_images(
             {
                 "image_index": 1,
                 "kind": "reference_region",
-                "label": "缺货前 reference 局部图",
-                "description": "缺货 bbox 对应的原商品区域",
+                "label": "原始放置局部图",
+                "description": "原始扫描图中的商品区域",
                 "url": shortage_batch_file_url(
                     relative_path.as_posix(),
                     version,
@@ -643,34 +643,18 @@ def shortage_qwen_images(
         if isinstance(image, Path) and image.is_file()
     ]
     if valid_exact_images:
-        candidate_names = [
-            f"{index}: {candidate.get('name') or '未知候选'}"
-            for index, candidate in enumerate(candidates, start=1)
-            if isinstance(candidate, dict)
-        ]
         for exact_index, exact_image in enumerate(valid_exact_images, start=1):
             relative_path = exact_image.relative_to(batch_root.resolve())
-            is_sheet = len(valid_exact_images) == 1 and len(candidates) > 1
-            candidate = (
-                candidates[exact_index - 1]
-                if exact_index <= len(candidates)
-                and isinstance(candidates[exact_index - 1], dict)
-                else {}
-            )
             images.append(
                 {
                     "image_index": exact_index + 1,
-                    "kind": "candidate_sheet" if is_sheet else "candidate",
+                    "kind": "candidate_sheet",
                     "label": (
                         "候选 SKU 编号拼图"
-                        if is_sheet
-                        else candidate.get("name") or "候选 SKU 图"
+                        if len(valid_exact_images) == 1
+                        else f"候选 SKU 编号拼图 {exact_index}"
                     ),
-                    "description": (
-                        " · ".join(candidate_names)
-                        if is_sheet
-                        else candidate.get("sku_id") or ""
-                    ),
+                    "description": "",
                     "url": shortage_batch_file_url(
                         relative_path.as_posix(),
                         version,
@@ -2775,6 +2759,13 @@ def prompt_has_expected_candidates(prompt: str, expected_names: list[str]) -> bo
             prompt,
         )
     ]
+    plain_numbered_entries = [
+        (int(index), name.strip())
+        for index, name in re.findall(
+            r"(?m)^\s*(\d+)\s*:\s*(.*?)\s*$",
+            prompt,
+        )
+    ]
     expected_entries = list(enumerate(expected_names, start=1))
     summaries = [
         value.strip()
@@ -2783,8 +2774,15 @@ def prompt_has_expected_candidates(prompt: str, expected_names: list[str]) -> bo
     if numbered_entries:
         return (
             not legacy_entries
+            and not plain_numbered_entries
             and not summaries
             and numbered_entries == expected_entries
+        )
+    if plain_numbered_entries:
+        return (
+            not legacy_entries
+            and not summaries
+            and plain_numbered_entries == expected_entries
         )
     return (
         legacy_entries == expected_entries

@@ -11,10 +11,15 @@ from __future__ import annotations
 import base64
 import binascii
 import io
+import json
+import logging
+import os
 import re
+import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Sequence, cast
+from typing import Any, Literal, Sequence, cast
 
 import cv2
 import numpy as np
@@ -81,6 +86,14 @@ HEAD_CAMERA_DISTORTION = (0.0, 0.0, 0.0, 0.0, 0.0)
 MAX_REGISTRATION_RMSE_MM = 20.0
 MIN_REGISTRATION_INLIER_RATIO = 0.5
 MAX_RGB_REPROJECTION_RMSE_PX = 4.0
+DEFAULT_ARTIFACT_ROOT = Path(
+    os.getenv(
+        "PLACE_LOCATE_DEBUG_DIR",
+        str(Path(__file__).resolve().parent / "debug"),
+    )
+)
+
+logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(
     title="Place Locate",
@@ -532,6 +545,178 @@ def mask_bbox_xyxy(mask: np.ndarray) -> list[int]:
     return [int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)]
 
 
+def create_place_locate_artifact_directory(
+    request: PlaceLocateDebugRequest,
+    *,
+    artifact_root: str | Path | None = None,
+) -> Path:
+    """Create one inspect-style directory for a formal Place Locate request."""
+
+    root = Path(artifact_root) if artifact_root is not None else DEFAULT_ARTIFACT_ROOT
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S_%fZ")
+    safe_location = re.sub(r"[^A-Za-z0-9_.-]+", "_", request.location_id.strip())
+    safe_product = re.sub(r"[^A-Za-z0-9_.-]+", "_", request.product_name.strip())
+    directory = root / (
+        f"{timestamp}_{safe_location}_{request.task_type}_{safe_product}_"
+        f"{uuid.uuid4().hex[:8]}"
+    )
+    directory.mkdir(parents=True, exist_ok=False)
+    return directory
+
+
+def _write_artifact_json(path: Path, value: Any) -> None:
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_artifact_image(path: Path, image: np.ndarray) -> None:
+    parameters = (
+        [cv2.IMWRITE_JPEG_QUALITY, 95]
+        if path.suffix.lower() in {".jpg", ".jpeg"}
+        else []
+    )
+    success, encoded = cv2.imencode(path.suffix, np.asarray(image), parameters)
+    if not success:
+        raise OSError(f"cannot encode Place Locate artifact image: {path}")
+    encoded.tofile(path)
+
+
+def _write_artifact_depth(path: Path, depth_mm: np.ndarray) -> None:
+    depth = np.asarray(depth_mm)
+    if depth.ndim != 2 or not np.issubdtype(depth.dtype, np.number):
+        raise OSError(f"Place Locate artifact depth is invalid: {path}")
+    np.save(path, depth, allow_pickle=False)
+
+
+def _clamped_crop_box(
+    box: Sequence[int | float],
+    image_shape: Sequence[int],
+) -> tuple[int, int, int, int]:
+    if len(box) != 4:
+        raise OSError("Place Locate bbox crop must contain four values")
+    height, width = int(image_shape[0]), int(image_shape[1])
+    x1 = max(0, min(width, int(round(float(box[0])))))
+    y1 = max(0, min(height, int(round(float(box[1])))))
+    x2 = max(0, min(width, int(round(float(box[2])))))
+    y2 = max(0, min(height, int(round(float(box[3])))))
+    if x2 <= x1 or y2 <= y1:
+        raise OSError(f"Place Locate bbox crop is empty: {[x1, y1, x2, y2]}")
+    return x1, y1, x2, y2
+
+
+def save_place_locate_artifacts(
+    directory: Path,
+    *,
+    request_payload: dict[str, Any],
+    response: PlaceLocateDebugResponse,
+    reference_image: np.ndarray,
+    current_image: np.ndarray,
+    reference_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+    prepared: PreparedReferenceMask,
+) -> None:
+    """Persist the formal response and every RGB-D/mask input needed to audit it."""
+
+    directory.mkdir(parents=True, exist_ok=True)
+    baseline_rgb_name = "baseline_rgb.jpg"
+    baseline_depth_name = "baseline_depth_mm.npy"
+    current_rgb_name = "current_rgb.jpg"
+    current_depth_name = "current_depth_mm.npy"
+    change_mask_name = "change_mask_reference.png"
+    component_mask_name = "reference_component_mask.png"
+    mask_name = "sam3_mask.png" if prepared.sam3 is not None else "reference_mask.png"
+    bbox_crop_name = "bbox_crop.jpg"
+    sam3_crop_name = "sam3_crop.jpg" if prepared.sam3 is not None else None
+
+    crop_box = _clamped_crop_box(response.bbox, reference_image.shape)
+    x1, y1, x2, y2 = crop_box
+    sam3_crop_box = (
+        _clamped_crop_box(prepared.sam3.crop_box, reference_image.shape)
+        if prepared.sam3 is not None
+        else None
+    )
+
+    _write_artifact_json(directory / "request.json", request_payload)
+    _write_artifact_image(directory / baseline_rgb_name, reference_image)
+    _write_artifact_depth(directory / baseline_depth_name, reference_depth_mm)
+    _write_artifact_image(directory / current_rgb_name, current_image)
+    _write_artifact_depth(directory / current_depth_name, current_depth_mm)
+    _write_artifact_image(
+        directory / change_mask_name,
+        prepared.registration.rgb.change_mask_reference,
+    )
+    _write_artifact_image(directory / component_mask_name, prepared.component_mask)
+    _write_artifact_image(directory / mask_name, prepared.reference_mask)
+    _write_artifact_image(
+        directory / bbox_crop_name,
+        np.asarray(reference_image)[y1:y2, x1:x2],
+    )
+    if sam3_crop_name is not None and sam3_crop_box is not None:
+        sam_x1, sam_y1, sam_x2, sam_y2 = sam3_crop_box
+        _write_artifact_image(
+            directory / sam3_crop_name,
+            np.asarray(reference_image)[sam_y1:sam_y2, sam_x1:sam_x2],
+        )
+
+    rgbd_manifest = {
+        "coordinate_system": "Task0 reference RGB",
+        "baseline": {
+            "rgb": baseline_rgb_name,
+            "depth": baseline_depth_name,
+            "width": int(reference_image.shape[1]),
+            "height": int(reference_image.shape[0]),
+            "depth_dtype": str(np.asarray(reference_depth_mm).dtype),
+            "valid_depth_pixels": int(
+                np.count_nonzero(
+                    np.isfinite(reference_depth_mm) & (reference_depth_mm > 0)
+                )
+            ),
+        },
+        "current": {
+            "rgb": current_rgb_name,
+            "depth": current_depth_name,
+            "width": int(current_image.shape[1]),
+            "height": int(current_image.shape[0]),
+            "depth_dtype": str(np.asarray(current_depth_mm).dtype),
+            "valid_depth_pixels": int(
+                np.count_nonzero(
+                    np.isfinite(current_depth_mm) & (current_depth_mm > 0)
+                )
+            ),
+        },
+    }
+    _write_artifact_json(directory / "rgbd.json", rgbd_manifest)
+
+    artifacts = {
+        "baseline_rgb": baseline_rgb_name,
+        "baseline_depth_mm": baseline_depth_name,
+        "current_rgb": current_rgb_name,
+        "current_depth_mm": current_depth_name,
+        "change_mask_reference": change_mask_name,
+        "reference_component_mask": component_mask_name,
+        "reference_mask": mask_name,
+        "sam3_mask": mask_name if prepared.sam3 is not None else None,
+        "bbox_crop": bbox_crop_name,
+        "bbox_crop_box": list(crop_box),
+        "bbox_crop_format": ["x1", "y1", "x2", "y2"],
+        "bbox_crop_source": "bbox",
+        "sam3_crop": sam3_crop_name,
+        "sam3_crop_box": list(sam3_crop_box) if sam3_crop_box is not None else None,
+        "mask_coordinate_system": "baseline_rgb",
+    }
+    saved_result = response.model_dump(mode="json")
+    saved_result["artifacts"] = artifacts
+    _write_artifact_json(directory / "result.json", saved_result)
+    logger.info(
+        "Place Locate artifacts saved: directory=%s product_name=%s level=%s",
+        directory,
+        response.product_name,
+        response.level,
+    )
+
+
 def validate_registration_quality(registration: RGBDRegistrationResult) -> None:
     """Reject a geometrically weak transform before it can produce a robot mask."""
 
@@ -676,6 +861,8 @@ def build_debug_response(
     *,
     inspection_target_id: str,
     baseline_path: str,
+    artifact_directory: Path | None = None,
+    artifact_request: dict[str, Any] | None = None,
 ) -> PlaceLocateDebugResponse:
     prepared = prepare_reference_mask(
         request,
@@ -699,7 +886,7 @@ def build_debug_response(
     )
     reference_height, reference_width = reference_image.shape[:2]
     current_height, current_width = current_image.shape[:2]
-    return PlaceLocateDebugResponse(
+    response = PlaceLocateDebugResponse(
         product_name=request.product_name,
         bbox=reference_product_bbox,
         mask=encode_png_base64(reference_mask),
@@ -737,6 +924,18 @@ def build_debug_response(
         ),
         registration=registration_metrics(registration),
     )
+    if artifact_directory is not None:
+        save_place_locate_artifacts(
+            artifact_directory,
+            request_payload=(artifact_request or request.model_dump(mode="json")),
+            response=response,
+            reference_image=reference_image,
+            current_image=current_image,
+            reference_depth_mm=reference_depth_mm,
+            current_depth_mm=current_depth_mm,
+            prepared=prepared,
+        )
+    return response
 
 
 def build_reference_mask_debug_response(
@@ -862,6 +1061,10 @@ def locate_reference_mask_debug(
 
 def locate_place_debug(
     request: PlaceLocateDebugRequest,
+    *,
+    persist_artifacts: bool = False,
+    artifact_root: str | Path | None = None,
+    artifact_request: dict[str, Any] | None = None,
 ) -> PlaceLocateDebugResponse:
     try:
         initial_scan = load_initial_scan(request.location_id, request.pose_type)
@@ -888,6 +1091,20 @@ def locate_place_debug(
         reference_image,
         current_image,
     )
+    artifact_directory = (
+        create_place_locate_artifact_directory(
+            runtime_request,
+            artifact_root=artifact_root,
+        )
+        if persist_artifacts
+        else None
+    )
+    persisted_request = artifact_request
+    if persisted_request is None and artifact_directory is not None:
+        persisted_request = runtime_request.model_dump(
+            mode="json",
+            exclude={"current_image_base64", "current_depth_image_base64"},
+        )
     try:
         return build_debug_response(
             runtime_request,
@@ -899,6 +1116,8 @@ def locate_place_debug(
             current_intrinsics,
             inspection_target_id=initial_scan.inspection_target_id,
             baseline_path=str(initial_scan.rgb_path),
+            artifact_directory=artifact_directory,
+            artifact_request=persisted_request,
         )
     except HTTPException:
         raise
@@ -932,7 +1151,11 @@ def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
                     current.depth_path.read_bytes()
                 ).decode("ascii"),
             )
-            debug = locate_place_debug(debug_request)
+            debug = locate_place_debug(
+                debug_request,
+                persist_artifacts=True,
+                artifact_request=request.model_dump(mode="json"),
+            )
     except CameraCaptureError as error:
         raise HTTPException(
             status_code=502,
@@ -941,7 +1164,7 @@ def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
     except OSError as error:
         raise HTTPException(
             status_code=500,
-            detail=f"创建或读取定位临时目录失败: {error}",
+            detail=f"创建、读取或保存定位目录失败: {error}",
         ) from error
     return PlaceLocateResponse(
         product_name=debug.product_name,

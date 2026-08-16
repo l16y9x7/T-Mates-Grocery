@@ -286,12 +286,16 @@ function renderQwenImages(finding) {
   images.forEach((input) => {
     const figure = document.createElement("figure");
     if (input.image_index === 1) figure.classList.add("primary-qwen-input");
+    if (input.kind === "candidate_sheet") figure.classList.add("candidate-sheet-input");
     const caption = document.createElement("figcaption");
     const title = document.createElement("strong");
     title.textContent = `IMAGE ${input.image_index} · ${input.label || "未命名输入"}`;
-    const description = document.createElement("small");
-    description.textContent = input.description || input.kind || "";
-    caption.append(title, description);
+    caption.append(title);
+    if (input.description) {
+      const description = document.createElement("small");
+      description.textContent = input.description;
+      caption.append(description);
+    }
     const image = document.createElement("img");
     image.src = input.url;
     image.alt = title.textContent;

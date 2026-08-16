@@ -54,6 +54,13 @@ DEPTH_PROMOTION_MAX_ASPECT_RATIO = 5.0
 DEPTH_PROMOTION_DUPLICATE_IOU = 0.20
 DEPTH_PROMOTION_INTERIOR_INSET_RATIO = 0.25
 MIN_OPEN_ROW_INTERIOR_FILL_RATIO = 0.20
+MIN_BOTTOM_BORDER_AREA_MULTIPLIER = 3.0
+MIN_BOTTOM_BORDER_WIDTH_TO_ROW_HEIGHT_RATIO = 0.25
+MIN_BOTTOM_BORDER_HEIGHT_TO_ROW_HEIGHT_RATIO = 0.30
+MAX_BOTTOM_BORDER_ASPECT_RATIO = 3.0
+MIN_BOTTOM_BORDER_RGB_EVIDENCE_RATIO = 0.15
+MIN_BOTTOM_BORDER_FARTHER_WINDOW_RATIO = 0.35
+MAX_BOTTOM_BORDER_MOVEMENT_BALANCE_RATIO = 0.35
 SIGNED_DEPTH_CLOSE_RATIO = 0.0125
 MIN_SIGNED_DEPTH_COMPONENT_AREA_RATIO = 0.001
 MIN_SIGNED_DEPTH_RGB_OVERLAP_RATIO = 0.02
@@ -637,13 +644,14 @@ def promote_depth_components(
         if not minimum_area <= area <= maximum_area:
             continue
         # The first visible shelf row is commonly cropped by the image top,
-        # especially for LOWER views.  Reject left/right/bottom warp borders,
-        # but do not discard a real product merely because it reaches y=0.
-        if min(
-            x,
-            width - (x + box_width),
-            height - (y + box_height),
-        ) < border_clearance:
+        # especially for LOWER views. Keep rejecting left/right warp borders.
+        # A large object-like shortage in the open last row may legitimately
+        # touch the image bottom, so validate that case after RGB/depth shape
+        # metrics are available instead of rejecting it here.
+        touches_bottom_border = (
+            height - (y + box_height) < border_clearance
+        )
+        if min(x, width - (x + box_width)) < border_clearance:
             continue
         aspect_ratio = max(
             box_width / max(1, box_height),
@@ -669,9 +677,14 @@ def promote_depth_components(
             continue
         rgb_pixels = int(np.count_nonzero(component & rgb_binary))
         rgb_evidence_ratio = rgb_pixels / area
+        minimum_rgb_ratio = (
+            MIN_BOTTOM_BORDER_RGB_EVIDENCE_RATIO
+            if touches_bottom_border
+            else MIN_DEPTH_PROMOTION_RGB_RATIO
+        )
         required_rgb_pixels = max(
             MIN_DEPTH_PROMOTION_RGB_PIXELS,
-            round(area * MIN_DEPTH_PROMOTION_RGB_RATIO),
+            round(area * minimum_rgb_ratio),
         )
         nearby_rgb_pixels = int(np.count_nonzero(component & rgb_near))
         nearby_rgb_ratio = nearby_rgb_pixels / area
@@ -680,6 +693,85 @@ def promote_depth_components(
             or nearby_rgb_ratio < MIN_DEPTH_PROMOTION_NEAR_RATIO
         ):
             continue
+        bottom_border_exception: dict[str, Any] | None = None
+        if touches_bottom_border:
+            matched_row_bbox = max(
+                row_bboxes,
+                key=lambda row: max(
+                    0,
+                    min(y + box_height, row[1] + row[3]) - max(y, row[1]),
+                ),
+                default=None,
+            )
+            row_height = (
+                int(matched_row_bbox[3])
+                if matched_row_bbox is not None
+                else 0
+            )
+            window_valid = (
+                np.isfinite(baseline_depth_mm[y : y + box_height, x : x + box_width])
+                & np.isfinite(current_depth_mm[y : y + box_height, x : x + box_width])
+                & (baseline_depth_mm[y : y + box_height, x : x + box_width] > 0)
+                & (current_depth_mm[y : y + box_height, x : x + box_width] > 0)
+            )
+            window_delta = delta[y : y + box_height, x : x + box_width]
+            farther_window_pixels = int(
+                np.count_nonzero(
+                    window_valid & (window_delta > DEPTH_CHANGE_THRESHOLD_MM)
+                )
+            )
+            nearer_window_pixels = int(
+                np.count_nonzero(
+                    window_valid & (window_delta < -DEPTH_CHANGE_THRESHOLD_MM)
+                )
+            )
+            valid_window_pixels = int(np.count_nonzero(window_valid))
+            farther_window_ratio = (
+                farther_window_pixels / valid_window_pixels
+                if valid_window_pixels
+                else 0.0
+            )
+            movement_balance_ratio = (
+                nearer_window_pixels / max(1, farther_window_pixels)
+            )
+            width_to_row_height_ratio = (
+                box_width / row_height if row_height > 0 else 0.0
+            )
+            height_to_row_height_ratio = (
+                box_height / row_height if row_height > 0 else 0.0
+            )
+            allow_bottom_border = (
+                in_open_ended_row
+                and area
+                >= round(minimum_area * MIN_BOTTOM_BORDER_AREA_MULTIPLIER)
+                and width_to_row_height_ratio
+                >= MIN_BOTTOM_BORDER_WIDTH_TO_ROW_HEIGHT_RATIO
+                and height_to_row_height_ratio
+                >= MIN_BOTTOM_BORDER_HEIGHT_TO_ROW_HEIGHT_RATIO
+                and aspect_ratio <= MAX_BOTTOM_BORDER_ASPECT_RATIO
+                and farther_window_ratio
+                >= MIN_BOTTOM_BORDER_FARTHER_WINDOW_RATIO
+                and movement_balance_ratio
+                <= MAX_BOTTOM_BORDER_MOVEMENT_BALANCE_RATIO
+            )
+            if not allow_bottom_border:
+                continue
+            bottom_border_exception = {
+                "allowed": True,
+                "row_height": row_height,
+                "width_to_row_height_ratio": round(
+                    width_to_row_height_ratio,
+                    4,
+                ),
+                "height_to_row_height_ratio": round(
+                    height_to_row_height_ratio,
+                    4,
+                ),
+                "farther_window_pixels": farther_window_pixels,
+                "nearer_window_pixels": nearer_window_pixels,
+                "farther_window_ratio": round(farther_window_ratio, 4),
+                "movement_balance_ratio": round(movement_balance_ratio, 4),
+            }
         if any(
             _bbox_iou(bbox, existing_bbox) >= DEPTH_PROMOTION_DUPLICATE_IOU
             for existing_bbox in occupied
@@ -714,6 +806,7 @@ def promote_depth_components(
             "bbox_fill_ratio": round(bbox_fill_ratio, 4),
             "interior_fill_ratio": round(interior_fill_ratio, 4),
             "open_ended_row": in_open_ended_row,
+            "bottom_border_exception": bottom_border_exception,
         }
         finding = INSPECT_API.Finding(
             bbox=bbox,
@@ -2167,8 +2260,15 @@ def filter_execution_with_depth(
         for promotion in promotion_candidates
         if int(promotion[1].get("depth_component_pixels", 0))
         >= minimum_dominant_area
-        and float(promotion[1].get("rgb_evidence_ratio", 0.0))
-        >= MIN_DOMINANT_DEPTH_PROMOTION_RGB_RATIO
+        and (
+            float(promotion[1].get("rgb_evidence_ratio", 0.0))
+            >= MIN_DOMINANT_DEPTH_PROMOTION_RGB_RATIO
+            or bool(
+                (promotion[1].get("bottom_border_exception") or {}).get(
+                    "allowed"
+                )
+            )
+        )
     ]
     kept_pairs.extend(promotions)
 
