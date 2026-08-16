@@ -465,6 +465,37 @@ def review_inspection_execution(
     )
 
 
+def apply_shortage_depth_filter(
+    execution: InspectionExecution,
+    *,
+    baseline: np.ndarray,
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+) -> InspectionExecution:
+    """Apply the shared shelf-range and aligned-depth filter used by batch runs."""
+
+    if __package__ and __package__.startswith("perception."):
+        from . import batch_shortage as shortage_depth
+    else:
+        import batch_shortage as shortage_depth
+
+    filtered, _, summary, _ = shortage_depth.filter_execution_with_depth(
+        execution,
+        baseline_depth_mm,
+        current_depth_mm,
+        baseline,
+    )
+    logger.info(
+        "Shortage shelf/depth filter: input=%s kept=%s shelf_rejected=%s "
+        "closed_depth_recovered=%s",
+        summary.get("input_findings"),
+        summary.get("kept_findings"),
+        summary.get("shelf_range_rejected_findings", 0),
+        summary.get("closed_depth_recovery_findings", 0),
+    )
+    return filtered
+
+
 @router.post("/perception/inspect", response_model=InspectApiResponse)
 def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
     """Load task0 reference RGB-D and compare it with a live head-camera capture."""
@@ -531,6 +562,24 @@ def inspect_supplied_images(
         )
     except RuntimeError as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
+
+    if (
+        task_type == "SHORTAGE"
+        and baseline_depth_mm is not None
+        and current_depth_mm is not None
+    ):
+        try:
+            execution = apply_shortage_depth_filter(
+                execution,
+                baseline=baseline,
+                baseline_depth_mm=baseline_depth_mm,
+                current_depth_mm=current_depth_mm,
+            )
+        except (RuntimeError, ValueError, cv2.error) as error:
+            raise HTTPException(
+                status_code=500,
+                detail=f"货架范围/深度缺货筛选失败: {error}",
+            ) from error
     if not execution.response.findings:
         return InspectApiResponse()
 

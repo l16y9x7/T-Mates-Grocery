@@ -82,6 +82,71 @@ class ShortageBatchTest(unittest.TestCase):
         self.assertEqual(records[0]["pose_type"], "SHELF_VIEW_UPPER")
         self.assertEqual(records[0]["location_id"], "H1_B_R_INSPECT")
 
+    def test_detection_stage_rejects_candidate_outside_shelf_span(self) -> None:
+        row = SimpleNamespace(
+            bbox=[0, 273, 1280, 377],
+            index=2,
+            lower_rail_index=0,
+        )
+        rail = SimpleNamespace(
+            line=[128, 650, 1151, 650],
+            y_center=650,
+        )
+        inside = batch.INSPECT_API.Finding(
+            bbox=[670, 350, 78, 240],
+            center=[709, 470],
+            sources=["comparison_based"],
+            votes=1,
+        )
+        outside = batch.INSPECT_API.Finding(
+            bbox=[1149, 571, 95, 46],
+            center=[1196, 594],
+            sources=["comparison_based"],
+            votes=1,
+        )
+
+        kept, rejected = batch.filter_findings_to_shelf_range(
+            [inside, outside],
+            [row],
+            [rail],
+            image_width=1280,
+            pose_type="SHELF_VIEW_UPPER",
+        )
+
+        self.assertEqual(
+            [list(finding.bbox) for finding in kept],
+            [[670, 350, 78, 240]],
+        )
+        self.assertEqual(len(rejected), 1)
+        self.assertLess(rejected[0]["shelf_overlap_ratio"], 0.75)
+
+    def test_regression_evaluation_matches_bbox_and_product(self) -> None:
+        findings = [
+            {
+                "region_index": 1,
+                "bbox": [670, 350, 78, 240],
+                "product_name": "奥利奥冰淇淋抹茶味",
+            }
+        ]
+        expected = {
+            "findings": [
+                {
+                    "bbox": [672, 352, 76, 236],
+                    "product_name": "奥利奥冰淇淋抹茶味",
+                }
+            ],
+            "minimum_bbox_iou": 0.5,
+        }
+
+        result = batch.evaluate_expected_findings(
+            findings,
+            expected,
+            detection_only=False,
+        )
+
+        self.assertTrue(result["detection_pass"])
+        self.assertTrue(result["recognition_pass"])
+
     def test_clipped_region_mask_keeps_only_bbox_pixels(self) -> None:
         mask = np.full((20, 30), 255, dtype=np.uint8)
 

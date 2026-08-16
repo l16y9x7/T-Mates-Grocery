@@ -221,6 +221,43 @@ def validate_depth(
     return depth_path, valid_pixels, depth_mm
 
 
+def load_record_baseline(
+    entry: dict[str, Any],
+    fallback: InitialScan | None,
+) -> InitialScan | None:
+    """Use a self-contained regression baseline when one accompanies a record."""
+
+    record_directory: Path = entry["record_directory"]
+    rgb_path = record_directory / "baseline_rgb.jpg"
+    depth_path = record_directory / "baseline_depth_mm.npy"
+    if not rgb_path.exists() and not depth_path.exists():
+        return fallback
+    if not rgb_path.is_file() or not depth_path.is_file():
+        raise RuntimeError(
+            "回归记录的 baseline_rgb.jpg 与 baseline_depth_mm.npy 必须同时存在: "
+            f"{record_directory}"
+        )
+    rgb = read_image(rgb_path)
+    try:
+        depth = np.load(depth_path, allow_pickle=False)
+    except (OSError, ValueError, TypeError) as error:
+        raise RuntimeError(f"读取基准深度失败 {depth_path}: {error}") from error
+    if depth.ndim != 2 or depth.shape != rgb.shape[:2]:
+        raise RuntimeError(
+            f"基准 RGB/深度尺寸不一致: rgb={rgb.shape[:2]}, depth={depth.shape}"
+        )
+    return InitialScan(
+        inspection_target_id=entry["inspection_target_id"],
+        pose_type=entry["pose_type"],
+        directory=record_directory,
+        rgb_path=rgb_path,
+        depth_path=depth_path,
+        rgb=rgb,
+        depth_mm=depth.astype(np.float32),
+        metadata={"source": "record_regression_baseline"},
+    )
+
+
 def parse_group_name(group_name: str) -> tuple[str, str]:
     match = GROUP_PATTERN.fullmatch(group_name)
     if match is None:
@@ -1383,6 +1420,15 @@ def recover_closed_depth_candidate(
     if baseline_image is None or not rows:
         return None
     height, width = depth_change_mask.shape
+    baseline_review = (
+        cv2.resize(
+            baseline_image,
+            (width, height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        if baseline_image.shape[:2] != (height, width)
+        else baseline_image
+    )
     radius = max(2, round(min(height, width) * RECOVERY_CLOSE_RATIO / 2))
     closed = cv2.morphologyEx(
         (depth_change_mask > 0).astype(np.uint8),
@@ -1460,7 +1506,7 @@ def recover_closed_depth_candidate(
             1,
             max(farther_pixels, nearer_pixels),
         )
-        baseline_crop = baseline_image[y : y + box_height, x : x + box_width]
+        baseline_crop = baseline_review[y : y + box_height, x : x + box_width]
         current_crop = execution.review_image[y : y + box_height, x : x + box_width]
         if baseline_crop.size == 0 or current_crop.size == 0:
             continue
@@ -2133,6 +2179,7 @@ def filter_execution_with_depth(
     # fragments; non-overlapping, depth-supported findings remain available
     # for genuine multi-shortage scenes.
     location_id = str(execution.response.location_id).upper()
+    early_shelf_interference_rejections: list[dict[str, Any]] = []
     if "_F_" in location_id and baseline_image is not None:
         recovered = recover_closed_depth_candidate(
             execution=working_execution,
@@ -2155,7 +2202,7 @@ def filter_execution_with_depth(
                     rails=detected_rails,
                 )
             )
-            shelf_range_rejections.extend(recovery_rejections)
+            early_shelf_interference_rejections.extend(recovery_rejections)
             if recovery_pairs:
                 recovered_bbox = list(recovery_pairs[0][0].bbox)
                 kept_pairs = [
@@ -2197,6 +2244,9 @@ def filter_execution_with_depth(
             rows=detected_rows,
             rails=detected_rails,
         )
+    )
+    shelf_interference_rejections = (
+        early_shelf_interference_rejections + shelf_interference_rejections
     )
     fixed_layout_depth_promotion_count = 0
     fixed_layout_promotion = promote_fixed_layout_depth_slot(
@@ -2394,6 +2444,78 @@ def existing_result_is_reusable(result: dict[str, Any], detection_only: bool) ->
     return status in {"success", "partial", "unrecognized", "no_anomaly"}
 
 
+def evaluate_expected_findings(
+    findings: list[dict[str, Any]],
+    expected: dict[str, Any],
+    *,
+    detection_only: bool,
+) -> dict[str, Any]:
+    """Match batch output against optional per-record regression expectations."""
+
+    expected_findings = expected.get("findings", [])
+    if not isinstance(expected_findings, list):
+        raise RuntimeError("expected.json findings 必须是数组")
+    minimum_iou = float(expected.get("minimum_bbox_iou", 0.5))
+    unmatched = set(range(len(findings)))
+    matches: list[dict[str, Any]] = []
+    for expected_index, expected_finding in enumerate(expected_findings, start=1):
+        if not isinstance(expected_finding, dict):
+            raise RuntimeError("expected.json finding 必须是对象")
+        expected_bbox = expected_finding.get("bbox")
+        if not isinstance(expected_bbox, list) or len(expected_bbox) != 4:
+            raise RuntimeError("expected.json bbox 必须是四元素数组")
+        ranked = sorted(
+            (
+                (_bbox_iou(expected_bbox, findings[index].get("bbox", [])), index)
+                for index in unmatched
+                if len(findings[index].get("bbox", [])) == 4
+            ),
+            reverse=True,
+        )
+        best_iou, prediction_index = ranked[0] if ranked else (0.0, None)
+        if prediction_index is not None:
+            unmatched.remove(prediction_index)
+            prediction = findings[prediction_index]
+        else:
+            prediction = None
+        expected_name = expected_finding.get("product_name")
+        predicted_name = prediction.get("product_name") if prediction else None
+        matches.append(
+            {
+                "expected_region_index": expected_index,
+                "predicted_region_index": (
+                    prediction.get("region_index") if prediction else None
+                ),
+                "bbox_iou": round(float(best_iou), 4),
+                "bbox_pass": best_iou >= minimum_iou,
+                "expected_product_name": expected_name,
+                "predicted_product_name": predicted_name,
+                "product_pass": (
+                    None
+                    if detection_only
+                    else bool(expected_name) and predicted_name == expected_name
+                ),
+            }
+        )
+    detection_pass = (
+        len(findings) == len(expected_findings)
+        and all(match["bbox_pass"] for match in matches)
+    )
+    recognition_pass = (
+        None
+        if detection_only
+        else detection_pass and all(match["product_pass"] for match in matches)
+    )
+    return {
+        "minimum_bbox_iou": minimum_iou,
+        "expected_finding_count": len(expected_findings),
+        "predicted_finding_count": len(findings),
+        "detection_pass": detection_pass,
+        "recognition_pass": recognition_pass,
+        "matches": matches,
+    }
+
+
 def run_record(
     entry: dict[str, Any],
     *,
@@ -2404,6 +2526,9 @@ def run_record(
     overwrite: bool,
 ) -> dict[str, Any]:
     record_directory: Path = entry["record_directory"]
+    active_scan = load_record_baseline(entry, initial_scan)
+    if active_scan is None:
+        raise RuntimeError(f"记录没有可用的基准 RGB-D: {record_directory}")
     output_directory = record_directory / RESULT_DIRECTORY_NAME
     result_path = output_directory / "result.json"
     if not overwrite and result_path.is_file():
@@ -2413,6 +2538,8 @@ def run_record(
 
     started_at = time.perf_counter()
     rgb_path = record_directory / "rgb.jpg"
+    expected_path = record_directory / "expected.json"
+    expected = read_json(expected_path) if expected_path.is_file() else None
     base_result: dict[str, Any] = {
         "schema_version": 1,
         "task_type": "SHORTAGE",
@@ -2422,9 +2549,11 @@ def run_record(
         "location_id": entry["location_id"],
         "pose_type": entry["pose_type"],
         "source_rgb": relative_path(rgb_path, data_root),
-        "baseline_rgb": str(initial_scan.rgb_path),
+        "baseline_rgb": str(active_scan.rgb_path),
         "findings": [],
     }
+    if expected is not None:
+        base_result["expected"] = expected
     try:
         current = read_image(rgb_path)
         depth_path, valid_depth_pixels, current_depth_mm = validate_depth(
@@ -2435,7 +2564,7 @@ def run_record(
         base_result["valid_depth_pixels"] = valid_depth_pixels
         execution = INSPECT_API.inspect_images_with_artifacts(
             "SHORTAGE",
-            initial_scan.rgb,
+            active_scan.rgb,
             current,
             location_id=entry["location_id"],
             pose_type=entry["pose_type"],
@@ -2444,9 +2573,9 @@ def run_record(
         execution, depth_supports, depth_filter, depth_change_mask = (
             filter_execution_with_depth(
                 execution,
-                initial_scan.depth_mm,
+                active_scan.depth_mm,
                 current_depth_mm,
-                initial_scan.rgb,
+                active_scan.rgb,
             )
         )
         response = execution.response
@@ -2460,9 +2589,9 @@ def run_record(
                     task_type="SHORTAGE",
                     location_id=entry["location_id"],
                     pose_type=entry["pose_type"],
-                    baseline=initial_scan.rgb,
+                    baseline=active_scan.rgb,
                     current_source=current,
-                    baseline_depth_mm=initial_scan.depth_mm,
+                    baseline_depth_mm=active_scan.depth_mm,
                     current_depth_mm=current_depth_mm,
                     reviewer=reviewer,
                 )
@@ -2590,6 +2719,12 @@ def run_record(
                 },
             }
         )
+        if expected is not None:
+            base_result["regression"] = evaluate_expected_findings(
+                findings,
+                expected,
+                detection_only=detection_only,
+            )
     except Exception as error:
         base_result.update(
             {
@@ -2625,6 +2760,11 @@ def build_summary(
     for result in results:
         status = str(result.get("status", "unknown"))
         counts[status] = counts.get(status, 0) + 1
+    regression_results = [
+        result["regression"]
+        for result in results
+        if isinstance(result.get("regression"), dict)
+    ]
     return {
         "schema_version": 1,
         "task_type": "SHORTAGE",
@@ -2634,6 +2774,17 @@ def build_summary(
         "total_records": total_records,
         "completed_records": len(results),
         "status_counts": counts,
+        "regression": {
+            "evaluated_records": len(regression_results),
+            "detection_passed_records": sum(
+                1 for result in regression_results if result.get("detection_pass")
+            ),
+            "recognition_passed_records": sum(
+                1
+                for result in regression_results
+                if result.get("recognition_pass") is True
+            ),
+        },
         "results": results,
     }
 
@@ -2761,9 +2912,14 @@ def main() -> int:
     for entry in records:
         group = entry["group"]
         if group not in scans:
-            scans[group] = load_initial_scan(
-                entry["inspection_target_id"],
-                entry["pose_type"],
+            local_baseline = load_record_baseline(entry, None)
+            scans[group] = (
+                local_baseline
+                if local_baseline is not None
+                else load_initial_scan(
+                    entry["inspection_target_id"],
+                    entry["pose_type"],
+                )
             )
 
     summary_path = data_root / DEFAULT_SUMMARY_NAME

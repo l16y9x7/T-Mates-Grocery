@@ -138,6 +138,11 @@ class InspectMainTest(unittest.TestCase):
                 "detect_rows",
                 wraps=inspect_api.detect_rows,
             ) as detect_rows,
+            patch.object(
+                inspect_api,
+                "apply_shortage_depth_filter",
+                wraps=inspect_api.apply_shortage_depth_filter,
+            ) as depth_filter,
         ):
             response = inspect_api.inspect_shelf(request)
 
@@ -147,6 +152,7 @@ class InspectMainTest(unittest.TestCase):
             "SHELF_VIEW_LOWER",
         )
         capture_rgbd.assert_called_once()
+        depth_filter.assert_called_once()
         self.assertEqual(len(capture_directories), 1)
         self.assertFalse(capture_directories[0].exists())
         self.assertEqual(len(response.findings), 1)
