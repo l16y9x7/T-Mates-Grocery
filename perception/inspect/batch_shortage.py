@@ -7,7 +7,10 @@ import importlib.util
 import json
 import re
 import sys
+import threading
 import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,6 +52,9 @@ DEPTH_PROMOTION_BORDER_RATIO = 0.015
 DEPTH_PROMOTION_RGB_DILATION_RATIO = 0.011
 DEPTH_PROMOTION_MAX_ASPECT_RATIO = 5.0
 DEPTH_PROMOTION_DUPLICATE_IOU = 0.20
+DEPTH_PROMOTION_INTERIOR_INSET_RATIO = 0.25
+MIN_OPEN_ROW_INTERIOR_FILL_RATIO = 0.20
+DEFAULT_WORKERS = 4
 
 
 def load_inspect_api() -> ModuleType:
@@ -280,12 +286,32 @@ def _maximum_row_overlap_ratio(
     )
 
 
+def _component_interior_fill_ratio(
+    component: np.ndarray,
+    bbox: list[int],
+) -> float:
+    """Measure whether a component fills its center instead of only its edges."""
+
+    x, y, width, height = bbox
+    inset_x = round(width * DEPTH_PROMOTION_INTERIOR_INSET_RATIO)
+    inset_y = round(height * DEPTH_PROMOTION_INTERIOR_INSET_RATIO)
+    left = x + inset_x
+    top = y + inset_y
+    right = x + width - inset_x
+    bottom = y + height - inset_y
+    if right <= left or bottom <= top:
+        return 0.0
+    interior = component[top:bottom, left:right]
+    return float(np.count_nonzero(interior)) / interior.size
+
+
 def promote_depth_components(
     photometric_mask: np.ndarray,
     depth_change_mask: np.ndarray,
     baseline_depth_mm: np.ndarray,
     current_depth_mm: np.ndarray,
     row_bboxes: list[list[int]],
+    open_ended_row_bboxes: list[list[int]],
     existing_findings: list[Any],
 ) -> list[tuple[Any, dict[str, Any], np.ndarray]]:
     """Promote large depth holes that retain nearby fragmented RGB evidence."""
@@ -342,6 +368,17 @@ def promote_depth_components(
         if row_overlap < MIN_DEPTH_PROMOTION_ROW_OVERLAP:
             continue
         component = labels == label
+        bbox_fill_ratio = area / (box_width * box_height)
+        interior_fill_ratio = _component_interior_fill_ratio(component, bbox)
+        in_open_ended_row = (
+            _maximum_row_overlap_ratio(bbox, open_ended_row_bboxes)
+            >= MIN_DEPTH_PROMOTION_ROW_OVERLAP
+        )
+        if (
+            in_open_ended_row
+            and interior_fill_ratio < MIN_OPEN_ROW_INTERIOR_FILL_RATIO
+        ):
+            continue
         rgb_pixels = int(np.count_nonzero(component & rgb_binary))
         required_rgb_pixels = max(
             MIN_DEPTH_PROMOTION_RGB_PIXELS,
@@ -384,6 +421,9 @@ def promote_depth_components(
             "nearby_rgb_evidence_pixels": nearby_rgb_pixels,
             "nearby_rgb_evidence_ratio": round(nearby_rgb_ratio, 4),
             "row_overlap_ratio": round(row_overlap, 4),
+            "bbox_fill_ratio": round(bbox_fill_ratio, 4),
+            "interior_fill_ratio": round(interior_fill_ratio, 4),
+            "open_ended_row": in_open_ended_row,
         }
         finding = INSPECT_API.Finding(
             bbox=bbox,
@@ -461,6 +501,7 @@ def filter_execution_with_depth(
     original_kept_count = len(kept_pairs)
     promotion_error: str | None = None
     row_bboxes: list[list[int]] = []
+    open_ended_row_bboxes: list[list[int]] = []
     try:
         row_detection = INSPECT_API.detect_rows(
             execution.review_image,
@@ -469,7 +510,11 @@ def filter_execution_with_depth(
                 pose_type=execution.response.pose_type,
             ),
         )
-        row_bboxes = [list(row.bbox) for row in row_detection.rows]
+        for row in row_detection.rows:
+            row_bbox = list(row.bbox)
+            row_bboxes.append(row_bbox)
+            if getattr(row, "lower_rail_index", None) is None:
+                open_ended_row_bboxes.append(row_bbox)
     except (ValueError, cv2.error) as error:
         promotion_error = f"{type(error).__name__}: {error}"
     promotions = promote_depth_components(
@@ -478,6 +523,7 @@ def filter_execution_with_depth(
         baseline_aligned,
         current_aligned,
         row_bboxes,
+        open_ended_row_bboxes,
         [finding for finding, _, _ in kept_pairs],
     )
     kept_pairs.extend(promotions)
@@ -516,6 +562,9 @@ def filter_execution_with_depth(
             "minimum_farther_ratio": MIN_DEPTH_FARTHER_RATIO,
             "minimum_promotion_area_ratio": MIN_DEPTH_PROMOTION_AREA_RATIO,
             "minimum_promotion_rgb_ratio": MIN_DEPTH_PROMOTION_RGB_RATIO,
+            "minimum_open_row_interior_fill_ratio": (
+                MIN_OPEN_ROW_INTERIOR_FILL_RATIO
+            ),
         },
         depth_change_mask,
     )
@@ -807,6 +856,70 @@ def build_summary(
     }
 
 
+def run_records_concurrently(
+    records: list[dict[str, Any]],
+    *,
+    data_root: Path,
+    scans: dict[str, InitialScan],
+    reviewer_kwargs: dict[str, Any] | None,
+    detection_only: bool,
+    overwrite: bool,
+    workers: int,
+    on_result: Callable[[int, int, dict[str, Any], dict[str, Any]], None]
+    | None = None,
+) -> list[dict[str, Any]]:
+    """Run independent records in parallel with one Qwen session per worker."""
+
+    if workers <= 0:
+        raise ValueError("workers must be positive")
+    if not records:
+        return []
+
+    worker_state = threading.local()
+
+    def execute(entry: dict[str, Any]) -> dict[str, Any]:
+        reviewer = None
+        if not detection_only:
+            reviewer = getattr(worker_state, "reviewer", None)
+            if reviewer is None:
+                configured = dict(reviewer_kwargs or {})
+                # SHORTAGE does not use the misplaced full-catalog retriever.
+                # Avoid loading one model per worker while keeping independent
+                # requests.Session instances for concurrent SKU/Qwen calls.
+                configured.setdefault("visual_retriever", None)
+                reviewer = INSPECT_API.QwenReviewer(**configured)
+                worker_state.reviewer = reviewer
+        return run_record(
+            entry,
+            data_root=data_root,
+            initial_scan=scans[entry["group"]],
+            reviewer=reviewer,
+            detection_only=detection_only,
+            overwrite=overwrite,
+        )
+
+    ordered_results: list[dict[str, Any] | None] = [None] * len(records)
+    completed = 0
+    worker_count = min(workers, len(records))
+    with ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="shortage-batch",
+    ) as executor:
+        futures = {
+            executor.submit(execute, entry): (index, entry)
+            for index, entry in enumerate(records)
+        }
+        for future in as_completed(futures):
+            index, entry = futures[future]
+            result = future.result()
+            ordered_results[index] = result
+            completed += 1
+            if on_result is not None:
+                on_result(completed, len(records), entry, result)
+
+    return [result for result in ordered_results if result is not None]
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
@@ -825,6 +938,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--qwen-url")
     parser.add_argument("--sku-base-url")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=f"并发 record 数，默认 {DEFAULT_WORKERS}",
+    )
     return parser.parse_args()
 
 
@@ -843,37 +962,40 @@ def main() -> int:
         records = records[: args.limit]
     if not records:
         raise RuntimeError("没有找到匹配的 shortage record")
+    if args.workers <= 0:
+        raise RuntimeError("--workers 必须为正整数")
 
-    reviewer = None
+    reviewer_kwargs: dict[str, Any] | None = None
     if not args.detection_only:
-        reviewer_kwargs: dict[str, Any] = {
+        reviewer_kwargs = {
             "debug_root": data_root / "qwen_debug",
         }
         if args.qwen_url:
             reviewer_kwargs["qwen_url"] = args.qwen_url
         if args.sku_base_url:
             reviewer_kwargs["sku_base_url"] = args.sku_base_url
-        reviewer = INSPECT_API.QwenReviewer(**reviewer_kwargs)
 
     scans: dict[str, InitialScan] = {}
-    summary_path = data_root / DEFAULT_SUMMARY_NAME
-    for index, entry in enumerate(records, start=1):
+    for entry in records:
         group = entry["group"]
         if group not in scans:
             scans[group] = load_initial_scan(
                 entry["inspection_target_id"],
                 entry["pose_type"],
             )
-        result = run_record(
-            entry,
-            data_root=data_root,
-            initial_scan=scans[group],
-            reviewer=reviewer,
-            detection_only=args.detection_only,
-            overwrite=args.overwrite,
-        )
+
+    summary_path = data_root / DEFAULT_SUMMARY_NAME
+    total_available_records = len(discover_records(data_root))
+
+    def report_result(
+        completed: int,
+        total: int,
+        entry: dict[str, Any],
+        result: dict[str, Any],
+    ) -> None:
+        group = entry["group"]
         print(
-            f"[{index}/{len(records)}] {group}/{entry['record']}: "
+            f"[{completed}/{total}] {group}/{entry['record']}: "
             f"{result.get('status')} findings={len(result.get('findings', []))} "
             f"elapsed={result.get('elapsed_ms', 0)}ms",
             flush=True,
@@ -884,10 +1006,21 @@ def main() -> int:
             build_summary(
                 data_root,
                 all_results,
-                total_records=len(discover_records(data_root)),
+                total_records=total_available_records,
                 detection_only=args.detection_only,
             ),
         )
+
+    run_records_concurrently(
+        records,
+        data_root=data_root,
+        scans=scans,
+        reviewer_kwargs=reviewer_kwargs,
+        detection_only=args.detection_only,
+        overwrite=args.overwrite,
+        workers=args.workers,
+        on_result=report_result,
+    )
 
     print(f"summary: {summary_path}")
     return 0

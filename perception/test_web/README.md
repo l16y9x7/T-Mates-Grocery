@@ -44,6 +44,9 @@ cd perception
 python inspect/batch_shortage.py
 ```
 
+默认同时处理 4 个 record；可用 `--workers 1` 改为串行，或用
+`--workers N` 调整并发数。每个 worker 使用独立的 SKU/Qwen HTTP 会话。
+
 Qwen 服务暂不可用时，可以先运行 `python inspect/batch_shortage.py --detection-only`
 生成 bbox/mask；服务恢复后直接运行不带该参数的命令，会自动补跑尚未识别的记录。
 使用 `--group H1_B_L_INSPECT_LOWER`、`--record record_...` 或 `--limit 10` 可缩小范围，

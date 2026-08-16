@@ -4,10 +4,10 @@
 
 要求：
 1. 商品名称只能逐字复制候选列表中的标准名称。
-2. 看不清没有可识别商品或无法可靠判断时返回 UNKNOWN，不要猜测。
+2. 商品一定存在于候选列表中，选择最像的一个。
 
 只输出严格 JSON，不要输出 Markdown、代码块或任何说明：
 {
-  "shortage_product_name": "候选标准名称或UNKNOWN",
+  "shortage_product_name": "候选标准名称",
   "confidence": 0.0
 }

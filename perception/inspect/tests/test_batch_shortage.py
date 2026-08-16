@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +21,50 @@ SPEC.loader.exec_module(batch)
 
 
 class ShortageBatchTest(unittest.TestCase):
+    def test_parse_args_defaults_to_four_workers(self) -> None:
+        with patch.object(sys, "argv", ["batch_shortage.py"]):
+            args = batch.parse_args()
+
+        self.assertEqual(args.workers, 4)
+
+    def test_concurrent_runner_uses_independent_reviewers_and_keeps_order(self) -> None:
+        records = [
+            {"group": "group", "record": f"record_{index}"}
+            for index in range(4)
+        ]
+        barrier = threading.Barrier(4)
+        reviewer_ids: list[int] = []
+
+        def run_record(entry: dict, **kwargs: object) -> dict:
+            reviewer_ids.append(id(kwargs["reviewer"]))
+            barrier.wait(timeout=3)
+            return {"record": entry["record"]}
+
+        with (
+            patch.object(batch, "run_record", side_effect=run_record),
+            patch.object(
+                batch.INSPECT_API,
+                "QwenReviewer",
+                side_effect=lambda **_: object(),
+            ) as reviewer_factory,
+        ):
+            results = batch.run_records_concurrently(
+                records,
+                data_root=Path("data"),
+                scans={"group": SimpleNamespace()},
+                reviewer_kwargs={},
+                detection_only=False,
+                overwrite=True,
+                workers=4,
+            )
+
+        self.assertEqual(
+            [result["record"] for result in results],
+            [f"record_{index}" for index in range(4)],
+        )
+        self.assertEqual(len(set(reviewer_ids)), 4)
+        self.assertEqual(reviewer_factory.call_count, 4)
+
     def test_discovers_grouped_records_and_uses_inspection_target_location(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -194,7 +240,12 @@ class ShortageBatchTest(unittest.TestCase):
         current_depth = baseline_depth.copy()
         current_depth[35:55, 30:60] = 1100
         rows = SimpleNamespace(
-            rows=[SimpleNamespace(bbox=(0, 0, 128, 72))],
+            rows=[
+                SimpleNamespace(
+                    bbox=(0, 0, 128, 72),
+                    lower_rail_index=None,
+                )
+            ],
         )
 
         with patch.object(batch.INSPECT_API, "detect_rows", return_value=rows):
@@ -212,7 +263,57 @@ class ShortageBatchTest(unittest.TestCase):
         )
         self.assertEqual(int(np.count_nonzero(filtered.review_mask)), 600)
         self.assertTrue(supports[0]["promoted"])
+        self.assertTrue(supports[0]["open_ended_row"])
+        self.assertEqual(supports[0]["interior_fill_ratio"], 1.0)
         self.assertEqual(summary["promoted_findings"], 1)
+
+    def test_depth_filter_rejects_open_row_edge_outline(self) -> None:
+        image = np.full((72, 128, 3), 80, dtype=np.uint8)
+        outline = np.zeros((72, 128), dtype=np.uint8)
+        outline[40:44, 30:70] = 255
+        outline[40:65, 30:34] = 255
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H1_B_L1_C01",
+            pose_type="SHELF_VIEW_LOWER",
+            task_type="SHORTAGE",
+            has_anomaly=False,
+            image_size=[128, 72],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=outline,
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        baseline_depth = np.full((72, 128), 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[outline > 0] = 1100
+        rows = SimpleNamespace(
+            rows=[
+                SimpleNamespace(
+                    bbox=(0, 35, 128, 37),
+                    lower_rail_index=None,
+                )
+            ],
+        )
+
+        with patch.object(batch.INSPECT_API, "detect_rows", return_value=rows):
+            filtered, supports, summary, _ = batch.filter_execution_with_depth(
+                execution,
+                baseline_depth,
+                current_depth,
+            )
+
+        self.assertEqual(filtered.response.findings, [])
+        self.assertEqual(supports, [])
+        self.assertEqual(summary["promoted_findings"], 0)
+        self.assertEqual(
+            summary["minimum_open_row_interior_fill_ratio"],
+            0.2,
+        )
 
     def test_depth_filter_does_not_promote_depth_without_rgb_evidence(self) -> None:
         image = np.full((72, 128, 3), 80, dtype=np.uint8)
