@@ -216,6 +216,240 @@ class ShortageBatchTest(unittest.TestCase):
         self.assertEqual(supports, [])
         self.assertEqual(summary["rejected_findings"], 1)
 
+    def test_depth_filter_refines_mixed_rgb_bbox_to_farther_component(self) -> None:
+        image = np.full((100, 140, 3), 80, dtype=np.uint8)
+        photometric_mask = np.zeros((100, 140), dtype=np.uint8)
+        photometric_mask[25:55, 25:55] = 255
+        photometric_mask[25:55, 65:95] = 255
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H1_B_L1_C01",
+            pose_type="SHELF_VIEW_LOWER",
+            task_type="SHORTAGE",
+            has_anomaly=True,
+            image_size=[140, 100],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[
+                batch.INSPECT_API.Finding(
+                    bbox=[20, 20, 80, 50],
+                    center=[60, 45],
+                    sources=["comparison_based"],
+                    votes=1,
+                )
+            ],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=photometric_mask,
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        baseline_depth = np.full((100, 140), 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[25:55, 25:55] = 1100
+        current_depth[25:55, 65:95] = 700
+        rows = SimpleNamespace(
+            rows=[
+                SimpleNamespace(
+                    bbox=(0, 0, 140, 100),
+                    lower_rail_index=None,
+                )
+            ],
+        )
+
+        with patch.object(batch.INSPECT_API, "detect_rows", return_value=rows):
+            filtered, supports, summary, _ = batch.filter_execution_with_depth(
+                execution,
+                baseline_depth,
+                current_depth,
+            )
+
+        self.assertEqual(len(filtered.response.findings), 1)
+        self.assertEqual(filtered.response.findings[0].bbox, [25, 25, 30, 30])
+        self.assertEqual(int(np.count_nonzero(filtered.review_mask)), 900)
+        self.assertTrue(supports[0]["refined"])
+        self.assertEqual(supports[0]["original_bbox"], [20, 20, 80, 50])
+        self.assertEqual(summary["refined_findings"], 1)
+        self.assertEqual(summary["promoted_findings"], 0)
+
+    def test_dominant_depth_hole_overrides_unrelated_rgb_candidate(self) -> None:
+        image = np.full((200, 300, 3), 80, dtype=np.uint8)
+        photometric_mask = np.zeros((200, 300), dtype=np.uint8)
+        photometric_mask[5:45, 30:70] = 255
+        photometric_mask[130:170, 180:240] = 255
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H1_B_L1_C01",
+            pose_type="SHELF_VIEW_LOWER",
+            task_type="SHORTAGE",
+            has_anomaly=True,
+            image_size=[300, 200],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[
+                batch.INSPECT_API.Finding(
+                    bbox=[180, 130, 60, 40],
+                    center=[210, 150],
+                    sources=["comparison_based"],
+                    votes=1,
+                )
+            ],
+            algorithms=[
+                batch.INSPECT_API.AlgorithmResult(
+                    name="comparison_based",
+                    success=True,
+                    elapsed_ms=1.0,
+                    findings=[
+                        batch.INSPECT_API.AlgorithmFinding(
+                            bbox=[180, 130, 60, 40],
+                            center=[210, 150],
+                            contour_area=2000,
+                            changed_pixels=2400,
+                            chroma_dominance_ratio=0.05,
+                        )
+                    ],
+                )
+            ],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=photometric_mask,
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        baseline_depth = np.full((200, 300), 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[5:45, 30:70] = 1100
+        rows = SimpleNamespace(
+            rows=[
+                SimpleNamespace(
+                    bbox=(0, 0, 300, 100),
+                    lower_rail_index=0,
+                ),
+                SimpleNamespace(
+                    bbox=(0, 100, 300, 100),
+                    lower_rail_index=None,
+                ),
+            ],
+        )
+
+        with patch.object(batch.INSPECT_API, "detect_rows", return_value=rows):
+            filtered, supports, summary, _ = batch.filter_execution_with_depth(
+                execution,
+                baseline_depth,
+                current_depth,
+            )
+
+        self.assertEqual(len(filtered.response.findings), 1)
+        self.assertEqual(filtered.response.findings[0].bbox, [30, 5, 40, 40])
+        self.assertTrue(supports[0]["promoted"])
+        self.assertEqual(summary["rgb_fallback_findings"], 0)
+
+    def test_rgb_fallback_keeps_low_chroma_same_product_change(self) -> None:
+        image = np.full((100, 140, 3), 80, dtype=np.uint8)
+        photometric_mask = np.zeros((100, 140), dtype=np.uint8)
+        photometric_mask[25:65, 35:85] = 255
+        finding = batch.INSPECT_API.Finding(
+            bbox=[35, 25, 50, 40],
+            center=[60, 45],
+            sources=["comparison_based"],
+            votes=1,
+        )
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H1_B_L1_C01",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=True,
+            image_size=[140, 100],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[finding],
+            algorithms=[
+                batch.INSPECT_API.AlgorithmResult(
+                    name="comparison_based",
+                    success=True,
+                    elapsed_ms=1.0,
+                    findings=[
+                        batch.INSPECT_API.AlgorithmFinding(
+                            bbox=[35, 25, 50, 40],
+                            center=[60, 45],
+                            contour_area=1800,
+                            changed_pixels=2000,
+                            chroma_dominance_ratio=0.05,
+                        )
+                    ],
+                )
+            ],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=photometric_mask,
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        depth = np.full((100, 140), 900, dtype=np.float32)
+        rows = SimpleNamespace(
+            rows=[
+                SimpleNamespace(
+                    bbox=(0, 0, 140, 100),
+                    lower_rail_index=None,
+                )
+            ],
+        )
+
+        with patch.object(batch.INSPECT_API, "detect_rows", return_value=rows):
+            filtered, supports, summary, _ = batch.filter_execution_with_depth(
+                execution,
+                depth,
+                depth.copy(),
+            )
+
+        self.assertEqual(filtered.response.findings, [finding])
+        self.assertTrue(supports[0]["rgb_fallback"])
+        self.assertEqual(summary["rgb_fallback_findings"], 1)
+
+    def test_low_contrast_depth_pair_recovers_identical_rear_item(self) -> None:
+        baseline = np.full((200, 300, 3), 80, dtype=np.uint8)
+        current = baseline.copy()
+        current[60:120, 100:125] = 110
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H1_B_L1_C01",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=False,
+            image_size=[300, 200],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=current,
+            review_mask=np.zeros((200, 300), dtype=np.uint8),
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        baseline_depth = np.full((200, 300), 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[60:120, 100:125] = 1100
+        current_depth[60:120, 128:153] = 700
+        rows = SimpleNamespace(
+            rows=[
+                SimpleNamespace(
+                    bbox=(0, 0, 300, 200),
+                    lower_rail_index=0,
+                )
+            ],
+        )
+
+        with patch.object(batch.INSPECT_API, "detect_rows", return_value=rows):
+            filtered, supports, summary, _ = batch.filter_execution_with_depth(
+                execution,
+                baseline_depth,
+                current_depth,
+                baseline,
+            )
+
+        self.assertEqual(len(filtered.response.findings), 1)
+        self.assertTrue(supports[0]["low_contrast_promotion"])
+        self.assertEqual(summary["low_contrast_promoted_findings"], 1)
+
     def test_depth_filter_promotes_large_hole_with_rgb_fragments(self) -> None:
         image = np.full((72, 128, 3), 80, dtype=np.uint8)
         photometric_mask = np.zeros((72, 128), dtype=np.uint8)

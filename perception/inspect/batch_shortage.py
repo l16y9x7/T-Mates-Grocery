@@ -42,10 +42,10 @@ DEPTH_CHANGE_THRESHOLD_MM = 60.0
 MIN_DEPTH_VALID_PIXELS = 50
 MIN_DEPTH_VALID_RATIO = 0.02
 MIN_DEPTH_FARTHER_RATIO = 0.20
-MIN_DEPTH_PROMOTION_AREA_RATIO = 0.005
+MIN_DEPTH_PROMOTION_AREA_RATIO = 0.001
 MAX_DEPTH_PROMOTION_AREA_RATIO = 0.20
 MIN_DEPTH_PROMOTION_RGB_PIXELS = 10
-MIN_DEPTH_PROMOTION_RGB_RATIO = 0.05
+MIN_DEPTH_PROMOTION_RGB_RATIO = 0.20
 MIN_DEPTH_PROMOTION_NEAR_RATIO = 0.15
 MIN_DEPTH_PROMOTION_ROW_OVERLAP = 0.80
 DEPTH_PROMOTION_BORDER_RATIO = 0.015
@@ -54,6 +54,19 @@ DEPTH_PROMOTION_MAX_ASPECT_RATIO = 5.0
 DEPTH_PROMOTION_DUPLICATE_IOU = 0.20
 DEPTH_PROMOTION_INTERIOR_INSET_RATIO = 0.25
 MIN_OPEN_ROW_INTERIOR_FILL_RATIO = 0.20
+SIGNED_DEPTH_CLOSE_RATIO = 0.0125
+MIN_SIGNED_DEPTH_COMPONENT_AREA_RATIO = 0.001
+MIN_SIGNED_DEPTH_RGB_OVERLAP_RATIO = 0.02
+MAX_SIGNED_DEPTH_COMPONENT_ASPECT_RATIO = 8.0
+MAX_SIGNED_DEPTH_COMPONENTS_PER_FINDING = 3
+MIN_DOMINANT_DEPTH_PROMOTION_AREA_RATIO = 0.003
+MIN_DOMINANT_DEPTH_PROMOTION_RGB_RATIO = 0.22
+MIN_LOW_CONTRAST_PROMOTION_AREA_RATIO = 0.0025
+MIN_LOW_CONTRAST_DIFFERENCE = 15.0
+MAX_LOW_CONTRAST_DIFFERENCE = 60.0
+MIN_LOW_CONTRAST_NEARER_COMPANION_RATIO = 0.10
+MAX_RGB_FALLBACK_CHROMA_DOMINANCE_RATIO = 0.15
+MIN_BALANCED_DEPTH_CHANGE_RATIO = 0.03
 DEFAULT_WORKERS = 4
 
 
@@ -305,6 +318,158 @@ def _component_interior_fill_ratio(
     return float(np.count_nonzero(interior)) / interior.size
 
 
+def refine_findings_with_signed_depth(
+    photometric_mask: np.ndarray,
+    depth_change_mask: np.ndarray,
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+    findings: list[Any],
+) -> tuple[list[tuple[Any, dict[str, Any], np.ndarray]], int]:
+    """Turn coarse RGB changes into baseline-side shortage depth components."""
+
+    height, width = depth_change_mask.shape
+    image_area = height * width
+    minimum_area = max(
+        50,
+        round(image_area * MIN_SIGNED_DEPTH_COMPONENT_AREA_RATIO),
+    )
+    close_radius = max(
+        1,
+        round(min(height, width) * SIGNED_DEPTH_CLOSE_RATIO / 2),
+    )
+    close_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (close_radius * 2 + 1, close_radius * 2 + 1),
+    )
+    rgb_binary = np.asarray(photometric_mask) > 0
+    positive_depth = np.asarray(depth_change_mask) > 0
+    delta = current_depth_mm - baseline_depth_mm
+    refined: list[tuple[Any, dict[str, Any], np.ndarray]] = []
+    accepted_input_count = 0
+    occupied: list[list[int]] = []
+
+    for finding in findings:
+        x, y, box_width, box_height = (int(value) for value in finding.bbox)
+        x0 = max(0, min(width, x))
+        y0 = max(0, min(height, y))
+        x1 = max(x0, min(width, x + box_width))
+        y1 = max(y0, min(height, y + box_height))
+        if x1 <= x0 or y1 <= y0:
+            continue
+
+        roi = positive_depth[y0:y1, x0:x1].astype(np.uint8)
+        roi = cv2.morphologyEx(roi, cv2.MORPH_CLOSE, close_kernel)
+        component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+            roi,
+            8,
+        )
+        candidates: list[tuple[int, int, list[int], float, int]] = []
+        for label in range(1, component_count):
+            local_x, local_y, component_width, component_height, area = (
+                int(value) for value in stats[label]
+            )
+            if area < minimum_area:
+                continue
+            aspect_ratio = max(
+                component_width / max(1, component_height),
+                component_height / max(1, component_width),
+            )
+            if aspect_ratio > MAX_SIGNED_DEPTH_COMPONENT_ASPECT_RATIO:
+                continue
+            component = labels == label
+            rgb_pixels = int(
+                np.count_nonzero(
+                    component
+                    & rgb_binary[y0:y1, x0:x1]
+                )
+            )
+            required_rgb_pixels = max(
+                10,
+                round(area * MIN_SIGNED_DEPTH_RGB_OVERLAP_RATIO),
+            )
+            if rgb_pixels < required_rgb_pixels:
+                continue
+            component_bbox = [
+                x0 + local_x,
+                y0 + local_y,
+                component_width,
+                component_height,
+            ]
+            candidates.append(
+                (area, label, component_bbox, aspect_ratio, rgb_pixels)
+            )
+
+        candidates.sort(reverse=True, key=lambda candidate: candidate[0])
+        accepted_this_input = False
+        for area, label, component_bbox, aspect_ratio, rgb_pixels in candidates[
+            :MAX_SIGNED_DEPTH_COMPONENTS_PER_FINDING
+        ]:
+            output_bbox = component_bbox
+            original_aspect_ratio = max(
+                box_width / max(1, box_height),
+                box_height / max(1, box_width),
+            )
+            # A narrow farther-depth seed often exposes only one side of the
+            # removed item. Preserve the RGB coarse box for Qwen while keeping
+            # the signed-depth component as the output mask.
+            if aspect_ratio > 3.0 and original_aspect_ratio <= 3.0:
+                output_bbox = [x0, y0, x1 - x0, y1 - y0]
+            if any(
+                _bbox_iou(output_bbox, existing_bbox)
+                >= DEPTH_PROMOTION_DUPLICATE_IOU
+                for existing_bbox in occupied
+            ):
+                continue
+
+            local_component = labels == label
+            component_mask = np.zeros((height, width), dtype=np.uint8)
+            component_mask[y0:y1, x0:x1] = np.where(
+                local_component,
+                255,
+                0,
+            ).astype(np.uint8)
+            component_deltas = delta[component_mask > 0]
+            support = {
+                "applicable": True,
+                "accepted": True,
+                "refined": True,
+                "reason": "farther signed-depth component inside RGB candidate",
+                "original_bbox": [x0, y0, x1 - x0, y1 - y0],
+                "changed_pixels": rgb_pixels,
+                "valid_pixels": area,
+                "required_valid_pixels": minimum_area,
+                "farther_pixels": area,
+                "farther_ratio": 1.0,
+                "median_delta_mm": (
+                    round(float(np.median(component_deltas)), 1)
+                    if component_deltas.size
+                    else None
+                ),
+                "threshold_mm": DEPTH_CHANGE_THRESHOLD_MM,
+                "depth_component_pixels": area,
+                "required_depth_component_pixels": minimum_area,
+                "rgb_evidence_pixels": rgb_pixels,
+                "required_rgb_evidence_pixels": required_rgb_pixels,
+                "component_aspect_ratio": round(aspect_ratio, 4),
+            }
+            refined_finding = INSPECT_API.Finding(
+                bbox=output_bbox,
+                center=[
+                    output_bbox[0] + output_bbox[2] // 2,
+                    output_bbox[1] + output_bbox[3] // 2,
+                ],
+                sources=list(finding.sources),
+                votes=finding.votes,
+            )
+            refined.append((refined_finding, support, component_mask))
+            occupied.append(output_bbox)
+            accepted_this_input = True
+        if accepted_this_input:
+            accepted_input_count += 1
+
+    return refined, accepted_input_count
+
+
 def promote_depth_components(
     photometric_mask: np.ndarray,
     depth_change_mask: np.ndarray,
@@ -350,9 +515,11 @@ def promote_depth_components(
         )
         if not minimum_area <= area <= maximum_area:
             continue
+        # The first visible shelf row is commonly cropped by the image top,
+        # especially for LOWER views.  Reject left/right/bottom warp borders,
+        # but do not discard a real product merely because it reaches y=0.
         if min(
             x,
-            y,
             width - (x + box_width),
             height - (y + box_height),
         ) < border_clearance:
@@ -380,6 +547,7 @@ def promote_depth_components(
         ):
             continue
         rgb_pixels = int(np.count_nonzero(component & rgb_binary))
+        rgb_evidence_ratio = rgb_pixels / area
         required_rgb_pixels = max(
             MIN_DEPTH_PROMOTION_RGB_PIXELS,
             round(area * MIN_DEPTH_PROMOTION_RGB_RATIO),
@@ -417,6 +585,7 @@ def promote_depth_components(
             "depth_component_pixels": area,
             "required_depth_component_pixels": minimum_area,
             "rgb_evidence_pixels": rgb_pixels,
+            "rgb_evidence_ratio": round(rgb_evidence_ratio, 4),
             "required_rgb_evidence_pixels": required_rgb_pixels,
             "nearby_rgb_evidence_pixels": nearby_rgb_pixels,
             "nearby_rgb_evidence_ratio": round(nearby_rgb_ratio, 4),
@@ -436,10 +605,323 @@ def promote_depth_components(
     return promoted
 
 
+def _algorithm_finding_metadata(
+    execution: Any,
+    bbox: list[int],
+) -> Any | None:
+    """Find the detector metadata corresponding to one fused RGB bbox."""
+
+    best: Any | None = None
+    best_iou = 0.0
+    for algorithm in execution.response.algorithms:
+        if algorithm.name != "comparison_based" or not algorithm.success:
+            continue
+        for candidate in algorithm.findings:
+            overlap = _bbox_iou(bbox, list(candidate.bbox))
+            if overlap > best_iou:
+                best = candidate
+                best_iou = overlap
+    return best if best_iou >= 0.5 else None
+
+
+def select_rgb_fallback_finding(
+    execution: Any,
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+) -> tuple[Any, dict[str, Any], np.ndarray] | None:
+    """Keep one product-like RGB change when depth cannot expose the gap.
+
+    Removing the front item can reveal an identical item behind it.  That item
+    may lean forward, so requiring a farther current surface would erase the
+    real shortage.  Low chroma-dominance changes are useful here: they usually
+    describe the displacement/count change of the same package, while strong
+    colour-only regions are commonly illumination or neighbouring motion.
+    """
+
+    height, width = execution.review_mask.shape
+    candidates: list[
+        tuple[float, float, float, Any, dict[str, Any], np.ndarray]
+    ] = []
+    valid_depth = (
+        np.isfinite(baseline_depth_mm)
+        & np.isfinite(current_depth_mm)
+        & (baseline_depth_mm > 0)
+        & (current_depth_mm > 0)
+    )
+    delta = current_depth_mm - baseline_depth_mm
+    for finding in execution.response.findings:
+        metadata = _algorithm_finding_metadata(execution, list(finding.bbox))
+        if metadata is None:
+            continue
+        chroma_dominance = float(metadata.chroma_dominance_ratio)
+        if chroma_dominance > MAX_RGB_FALLBACK_CHROMA_DOMINANCE_RATIO:
+            continue
+
+        x, y, box_width, box_height = (int(value) for value in finding.bbox)
+        x0 = max(0, min(width, x))
+        y0 = max(0, min(height, y))
+        x1 = max(x0, min(width, x + box_width))
+        y1 = max(y0, min(height, y + box_height))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        valid = valid_depth[y0:y1, x0:x1]
+        valid_pixels = int(np.count_nonzero(valid))
+        region_delta = delta[y0:y1, x0:x1]
+        farther_pixels = int(
+            np.count_nonzero(valid & (region_delta > DEPTH_CHANGE_THRESHOLD_MM))
+        )
+        nearer_pixels = int(
+            np.count_nonzero(valid & (region_delta < -DEPTH_CHANGE_THRESHOLD_MM))
+        )
+        farther_ratio = farther_pixels / valid_pixels if valid_pixels else 0.0
+        nearer_ratio = nearer_pixels / valid_pixels if valid_pixels else 0.0
+        # A strong, balanced positive/negative pair is normally a deforming
+        # foreground package or residual parallax.  Signed-depth refinement
+        # has already handled any trustworthy farther component before this
+        # RGB-only fallback is considered.
+        if (
+            min(farther_ratio, nearer_ratio)
+            >= MIN_BALANCED_DEPTH_CHANGE_RATIO
+        ):
+            continue
+
+        region_mask = clipped_region_mask(
+            execution.review_mask,
+            list(finding.bbox),
+        )
+        changed_pixels = int(np.count_nonzero(region_mask))
+        if changed_pixels == 0:
+            continue
+        signed_change_ratio = farther_ratio + nearer_ratio
+        support = {
+            "applicable": False,
+            "accepted": True,
+            "rgb_fallback": True,
+            "reason": (
+                "low-chroma RGB product change retained when no reliable "
+                "farther-depth component was available"
+            ),
+            "changed_pixels": changed_pixels,
+            "valid_pixels": valid_pixels,
+            "farther_pixels": farther_pixels,
+            "nearer_pixels": nearer_pixels,
+            "farther_ratio": round(farther_ratio, 4),
+            "nearer_ratio": round(nearer_ratio, 4),
+            "signed_change_ratio": round(signed_change_ratio, 4),
+            "chroma_dominance_ratio": round(chroma_dominance, 4),
+            "threshold_mm": DEPTH_CHANGE_THRESHOLD_MM,
+        }
+        candidates.append(
+            (
+                signed_change_ratio,
+                chroma_dominance,
+                -float(metadata.changed_pixels),
+                finding,
+                support,
+                region_mask,
+            )
+        )
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda candidate: candidate[:3])
+    _, _, _, finding, support, region_mask = candidates[0]
+    return finding, support, region_mask
+
+
+def promote_low_contrast_depth_component(
+    baseline_image: np.ndarray,
+    current_aligned_image: np.ndarray,
+    depth_change_mask: np.ndarray,
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+    row_bboxes: list[list[int]],
+    open_ended_row_bboxes: list[list[int]],
+) -> tuple[Any, dict[str, Any], np.ndarray] | None:
+    """Recover an identical rear item that slid into the removed item's slot."""
+
+    height, width = depth_change_mask.shape
+    baseline_resized = cv2.resize(
+        baseline_image,
+        (width, height),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    baseline_lab = cv2.cvtColor(baseline_resized, cv2.COLOR_BGR2LAB).astype(
+        np.float32
+    )
+    current_lab = cv2.cvtColor(
+        current_aligned_image,
+        cv2.COLOR_BGR2LAB,
+    ).astype(np.float32)
+    luminance_difference = np.abs(current_lab[:, :, 0] - baseline_lab[:, :, 0])
+    chroma_difference = np.sqrt(
+        np.sum(
+            (current_lab[:, :, 1:] - baseline_lab[:, :, 1:]) ** 2,
+            axis=2,
+        )
+    )
+    visual_difference = np.maximum(luminance_difference, chroma_difference)
+
+    image_area = height * width
+    minimum_area = max(
+        50,
+        round(image_area * MIN_LOW_CONTRAST_PROMOTION_AREA_RATIO),
+    )
+    maximum_area = max(
+        minimum_area,
+        round(image_area * MAX_DEPTH_PROMOTION_AREA_RATIO),
+    )
+    border_clearance = max(
+        2,
+        round(min(height, width) * DEPTH_PROMOTION_BORDER_RATIO),
+    )
+    positive = depth_change_mask > 0
+    valid = (
+        np.isfinite(baseline_depth_mm)
+        & np.isfinite(current_depth_mm)
+        & (baseline_depth_mm > 0)
+        & (current_depth_mm > 0)
+    )
+    delta = current_depth_mm - baseline_depth_mm
+    negative = valid & (delta < -DEPTH_CHANGE_THRESHOLD_MM)
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        positive.astype(np.uint8),
+        8,
+    )
+    candidates: list[
+        tuple[float, int, Any, dict[str, Any], np.ndarray]
+    ] = []
+    companion_padding = max(8, round(min(height, width) * 0.03))
+    for label in range(1, component_count):
+        x, y, box_width, box_height, area = (
+            int(value) for value in stats[label]
+        )
+        if not minimum_area <= area <= maximum_area:
+            continue
+        if min(
+            x,
+            width - (x + box_width),
+            height - (y + box_height),
+        ) < border_clearance:
+            continue
+        aspect_ratio = max(
+            box_width / max(1, box_height),
+            box_height / max(1, box_width),
+        )
+        if aspect_ratio > DEPTH_PROMOTION_MAX_ASPECT_RATIO:
+            continue
+        bbox = [x, y, box_width, box_height]
+        if (
+            _maximum_row_overlap_ratio(bbox, row_bboxes)
+            < MIN_DEPTH_PROMOTION_ROW_OVERLAP
+        ):
+            continue
+        component = labels == label
+        if (
+            _maximum_row_overlap_ratio(bbox, open_ended_row_bboxes)
+            >= MIN_DEPTH_PROMOTION_ROW_OVERLAP
+            and _component_interior_fill_ratio(component, bbox)
+            < MIN_OPEN_ROW_INTERIOR_FILL_RATIO
+        ):
+            continue
+        mean_difference = float(np.mean(visual_difference[component]))
+        if not (
+            MIN_LOW_CONTRAST_DIFFERENCE
+            <= mean_difference
+            <= MAX_LOW_CONTRAST_DIFFERENCE
+        ):
+            continue
+        x0 = max(0, x - companion_padding)
+        y0 = max(0, y - companion_padding)
+        x1 = min(width, x + box_width + companion_padding)
+        y1 = min(height, y + box_height + companion_padding)
+        nearer_pixels = int(np.count_nonzero(negative[y0:y1, x0:x1]))
+        nearer_companion_ratio = nearer_pixels / area
+        if (
+            nearer_companion_ratio
+            < MIN_LOW_CONTRAST_NEARER_COMPANION_RATIO
+        ):
+            continue
+
+        component_mask = np.where(component, 255, 0).astype(np.uint8)
+        nearby_negative_y, nearby_negative_x = np.where(
+            negative[y0:y1, x0:x1]
+        )
+        negative_center_x = (
+            x0 + float(np.mean(nearby_negative_x))
+            if nearby_negative_x.size
+            else x + box_width / 2
+        )
+        horizontal_expansion = box_width * 3
+        if negative_center_x >= x + box_width / 2:
+            output_x = x - round(box_width * 0.15)
+        else:
+            output_x = x + box_width - horizontal_expansion + round(
+                box_width * 0.15
+            )
+        output_x = max(0, min(width - 1, output_x))
+        output_width = min(width - output_x, horizontal_expansion)
+        vertical_padding = round(box_height * 0.20)
+        output_y = max(0, y - vertical_padding)
+        output_bottom = min(height, y + box_height + vertical_padding)
+        output_bbox = [
+            output_x,
+            output_y,
+            output_width,
+            output_bottom - output_y,
+        ]
+        support = {
+            "applicable": True,
+            "accepted": True,
+            "promoted": True,
+            "low_contrast_promotion": True,
+            "reason": (
+                "low-contrast farther component with a nearby nearer-depth "
+                "companion, consistent with a rear item sliding forward"
+            ),
+            "valid_pixels": area,
+            "farther_pixels": area,
+            "farther_ratio": 1.0,
+            "nearer_companion_pixels": nearer_pixels,
+            "nearer_companion_ratio": round(nearer_companion_ratio, 4),
+            "mean_visual_difference": round(mean_difference, 2),
+            "threshold_mm": DEPTH_CHANGE_THRESHOLD_MM,
+            "depth_component_pixels": area,
+            "required_depth_component_pixels": minimum_area,
+            "component_aspect_ratio": round(aspect_ratio, 4),
+            "component_bbox": bbox,
+        }
+        finding = INSPECT_API.Finding(
+            bbox=output_bbox,
+            center=[
+                output_bbox[0] + output_bbox[2] // 2,
+                output_bbox[1] + output_bbox[3] // 2,
+            ],
+            sources=["depth_rgb_low_contrast"],
+            votes=1,
+        )
+        candidates.append(
+            (
+                abs(mean_difference - 30.0),
+                -area,
+                finding,
+                support,
+                component_mask,
+            )
+        )
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda candidate: candidate[:2])
+    _, _, finding, support, component_mask = candidates[0]
+    return finding, support, component_mask
+
+
 def filter_execution_with_depth(
     execution: Any,
     baseline_depth_mm: np.ndarray,
     current_depth_mm: np.ndarray,
+    baseline_image: np.ndarray | None = None,
 ) -> tuple[Any, list[dict[str, Any]], dict[str, Any], np.ndarray]:
     """Reject illumination-only RGB regions when aligned depth contradicts shortage."""
 
@@ -480,25 +962,13 @@ def filter_execution_with_depth(
         255,
         0,
     ).astype(np.uint8)
-    supports = [
-        depth_support_for_finding(
-            execution.review_mask,
-            finding.bbox,
-            baseline_aligned,
-            current_aligned,
-        )
-        for finding in execution.response.findings
-    ]
-    kept_pairs = [
-        (
-            finding,
-            support,
-            clipped_region_mask(execution.review_mask, finding.bbox),
-        )
-        for finding, support in zip(execution.response.findings, supports)
-        if support["accepted"]
-    ]
-    original_kept_count = len(kept_pairs)
+    kept_pairs, accepted_input_count = refine_findings_with_signed_depth(
+        execution.review_mask,
+        depth_change_mask,
+        baseline_aligned,
+        current_aligned,
+        list(execution.response.findings),
+    )
     promotion_error: str | None = None
     row_bboxes: list[list[int]] = []
     open_ended_row_bboxes: list[list[int]] = []
@@ -517,7 +987,11 @@ def filter_execution_with_depth(
                 open_ended_row_bboxes.append(row_bbox)
     except (ValueError, cv2.error) as error:
         promotion_error = f"{type(error).__name__}: {error}"
-    promotions = promote_depth_components(
+    # A large, RGB-supported depth hole can be the real shortage even when the
+    # global RGB detector was distracted by a different shelf row.  Only let a
+    # dominant hole override those coarse candidates; weaker depth edges stay
+    # out of the result.
+    promotion_candidates = promote_depth_components(
         execution.review_mask,
         depth_change_mask,
         baseline_aligned,
@@ -526,7 +1000,52 @@ def filter_execution_with_depth(
         open_ended_row_bboxes,
         [finding for finding, _, _ in kept_pairs],
     )
+    minimum_dominant_area = max(
+        50,
+        round(
+            depth_change_mask.size
+            * MIN_DOMINANT_DEPTH_PROMOTION_AREA_RATIO
+        ),
+    )
+    promotions = [
+        promotion
+        for promotion in promotion_candidates
+        if int(promotion[1].get("depth_component_pixels", 0))
+        >= minimum_dominant_area
+        and float(promotion[1].get("rgb_evidence_ratio", 0.0))
+        >= MIN_DOMINANT_DEPTH_PROMOTION_RGB_RATIO
+    ]
     kept_pairs.extend(promotions)
+    low_contrast_promotion_count = 0
+    if (
+        not kept_pairs
+        and not execution.response.findings
+        and baseline_image is not None
+    ):
+        low_contrast_promotion = promote_low_contrast_depth_component(
+            baseline_image,
+            execution.review_image,
+            depth_change_mask,
+            baseline_aligned,
+            current_aligned,
+            row_bboxes,
+            open_ended_row_bboxes,
+        )
+        if low_contrast_promotion is not None:
+            kept_pairs.append(low_contrast_promotion)
+            promotions.append(low_contrast_promotion)
+            low_contrast_promotion_count = 1
+    rgb_fallback_count = 0
+    if not kept_pairs:
+        rgb_fallback = select_rgb_fallback_finding(
+            execution,
+            baseline_aligned,
+            current_aligned,
+        )
+        if rgb_fallback is not None:
+            kept_pairs.append(rgb_fallback)
+            accepted_input_count = 1
+            rgb_fallback_count = 1
     kept_pairs.sort(key=lambda pair: (pair[0].bbox[1], pair[0].bbox[0]))
     kept_findings = [finding for finding, _, _ in kept_pairs]
     kept_supports = [support for _, support, _ in kept_pairs]
@@ -552,16 +1071,40 @@ def filter_execution_with_depth(
         kept_supports,
         {
             "applied": True,
-            "input_findings": len(supports),
+            "input_findings": len(execution.response.findings),
             "kept_findings": len(kept_findings),
-            "rejected_findings": len(supports) - original_kept_count,
+            "rejected_findings": (
+                len(execution.response.findings) - accepted_input_count
+            ),
+            "refined_findings": (
+                len(kept_pairs) - len(promotions) - rgb_fallback_count
+            ),
             "promoted_findings": len(promotions),
+            "low_contrast_promoted_findings": (
+                low_contrast_promotion_count
+            ),
+            "rgb_fallback_findings": rgb_fallback_count,
             "promotion_row_count": len(row_bboxes),
             "promotion_error": promotion_error,
             "depth_change_threshold_mm": DEPTH_CHANGE_THRESHOLD_MM,
             "minimum_farther_ratio": MIN_DEPTH_FARTHER_RATIO,
             "minimum_promotion_area_ratio": MIN_DEPTH_PROMOTION_AREA_RATIO,
             "minimum_promotion_rgb_ratio": MIN_DEPTH_PROMOTION_RGB_RATIO,
+            "minimum_signed_depth_component_area_ratio": (
+                MIN_SIGNED_DEPTH_COMPONENT_AREA_RATIO
+            ),
+            "minimum_dominant_depth_promotion_area_ratio": (
+                MIN_DOMINANT_DEPTH_PROMOTION_AREA_RATIO
+            ),
+            "minimum_dominant_depth_promotion_rgb_ratio": (
+                MIN_DOMINANT_DEPTH_PROMOTION_RGB_RATIO
+            ),
+            "minimum_low_contrast_promotion_area_ratio": (
+                MIN_LOW_CONTRAST_PROMOTION_AREA_RATIO
+            ),
+            "maximum_rgb_fallback_chroma_dominance_ratio": (
+                MAX_RGB_FALLBACK_CHROMA_DOMINANCE_RATIO
+            ),
             "minimum_open_row_interior_fill_ratio": (
                 MIN_OPEN_ROW_INTERIOR_FILL_RATIO
             ),
@@ -668,6 +1211,7 @@ def run_record(
                 execution,
                 initial_scan.depth_mm,
                 current_depth_mm,
+                initial_scan.rgb,
             )
         )
         response = execution.response
