@@ -8,8 +8,9 @@
 ## 当前接口契约
 
 `/perception/inspect` 负责判断异常货架与商品名称；本接口固定从
-`agent/output/task0` 读取正常场景 RGB-D，请求只上传当前场景 RGB-D，生成当前
-头部相机视角下缺失商品的理论 mask。
+`agent/output/task0` 读取正常场景 RGB-D，请求只上传当前场景 RGB-D。接口在 Task0
+原图中生成目标商品 bbox/mask，并计算从 Task0 reference 相机到当前相机的 `4×4`
+刚体变换；商品 6D 位姿由下游位姿估计接口负责计算。
 
 ```json
 {
@@ -18,26 +19,8 @@
   "location_id": "H1_F_L2_C01",
   "current_image_base64": "<当前场景 RGB>",
   "current_depth_image_base64": "<当前场景 NPY/PNG/RAW 深度>",
-  "reference_pose": {
-    "frame_id": "reference_head_camera",
-    "unit": "millimeter",
-    "matrix": [
-      [1, 0, 0, 20],
-      [0, 1, 0, -30],
-      [0, 0, 1, 900],
-      [0, 0, 0, 1]
-    ]
-  },
   "pose_type": "SHELF_VIEW_UPPER",
   "current_image_name": "current_rgb.jpg",
-  "camera_intrinsics": {
-    "fx": 900.0,
-    "fy": 900.0,
-    "cx": 640.0,
-    "cy": 360.0,
-    "width": 1280,
-    "height": 720
-  },
   "region_index": 1
 }
 ```
@@ -58,46 +41,65 @@ agent/output/task0/H1_B_L_INSPECT_LOWER/
 巡检导航点则必须提供 `pose_type`。可用 `INITIAL_SCAN_ROOT` 覆盖 task0 根目录，使用
 `PRODUCT_HAND_OPTIONS_PATH` 覆盖货位映射文件。
 
-相机内参也可以通过环境变量 `PLACE_HEAD_CAMERA_INTRINSICS` 配置为同样结构的
-JSON，此时请求不必重复传入。若当前帧使用不同相机内参，可额外传
-`current_camera_intrinsics`。深度必须已对齐到各自 RGB，数值通过 `depth_unit_mm`
-统一换算为毫米。
+Task0 和当前缺货检测固定使用 `head_color_optical_frame`，请求不再接收相机内参。
+代码内置的 `1280×720` 标定为：
 
-正式响应保留 `/perception/pick/locate` 的 mask 字段，同时返回转换后的主目标位姿：
+```text
+K = [[910.744324, 0,          650.132690],
+     [0,          910.395020, 381.874634],
+     [0,          0,          1]]
+D = [0, 0, 0, 0, 0]
+distortion_model = plumb_bob
+```
+
+输入 RGB 若经过整体缩放，代码会按实际宽高同步缩放 `fx/fy/cx/cy`。深度必须已对齐
+到各自 RGB，数值通过 `depth_unit_mm` 统一换算为毫米。
+
+正式响应全部使用 Task0 reference 原图坐标系，并返回 reference 到 current 的变换：
 
 ```json
 {
   "product_name": "可口可乐罐装",
   "bbox": [310, 220, 430, 650],
-  "mask": "<当前视角理论 mask 的 PNG base64>",
-  "image_path": "current_rgb.jpg",
-  "target_pose": {
-    "frame_id": "current_head_camera",
-    "unit": "millimeter",
-    "matrix": [
-      [1, 0, 0, 25],
-      [0, 1, 0, -28],
-      [0, 0, 1, 905],
-      [0, 0, 0, 1]
-    ]
-  }
+  "mask": "<Task0 原图同尺寸的 PNG base64>",
+  "image_path": "agent/output/task0/H1_F_L_INSPECT_UPPER/rgb.jpg",
+  "rotate_matrix": [
+    [1, 0, 0, 25],
+    [0, 1, 0, -28],
+    [0, 0, 1, 5],
+    [0, 0, 0, 1]
+  ]
 }
 ```
 
-`bbox` 为 `[x1,y1,x2,y2]`，归一化到 `[1,1000]`。正式响应中的 `mask` 始终是
-完整理论投影；当前深度只参与配准、遮挡和占用判断，不会用空缺后的货架背景深度
-替换原商品深度。`target_pose` 是主结果，后续再通过现有手眼标定转换到左右手或
-机器人基座坐标系；mask 和 expected depth 用于校验该位姿及放置空间。
+`bbox` 为 Task0 原图像素坐标 `[x1,y1,x2,y2]`，由最终全图商品 mask 计算，不再
+归一化到 `[1,1000]`。`mask` 与 `image_path` 对应的 Task0 RGB 完全同尺寸、同坐标系。
+`rotate_matrix` 虽沿用接口约定名称，实际是包含旋转和平移的完整 `4×4 SE(3)`：
+
+```text
+point_current = rotate_matrix @ point_reference
+```
+
+下游位姿估计先利用 Task0 RGB、bbox 和 mask 得到 `T_reference_object`，再计算
+`T_current_object = rotate_matrix @ T_reference_object`。Place Locate 不接收
+`reference_pose`，也不计算或返回商品 `target_pose`。
 
 `pose_type` 与 inspection 含义一致，支持 `""`、`SHELF_VIEW_UPPER` 和
 `SHELF_VIEW_LOWER`。接口复用顶层 `perception/row_detection`，将 reference mask
 限制到目标商品所在货架层；无法可靠检测行时自动回退到未裁层的 change mask。
 
-`POST /perception/place/locate/debug` 使用相同请求，并额外返回 reference/visible
-mask、理论 `expected_depth_mm` NPY、匹配的 `row_index/row_bbox`、RGB-D 配准矩阵及
-质量指标，以及实际使用的 `inspection_target_id/baseline_path`。存在多个异常区域时，
+`POST /perception/place/locate/debug` 使用相同请求，并额外返回缺货差异 bbox、
+reference mask 来源、SAM3 crop/bbox、匹配的 `row_index/row_bbox`、RGB-D 配准质量
+指标，以及实际使用的 `inspection_target_id/baseline_path`。存在多个异常区域时，
 `region_index` 按从上到下、同行从左到右的 1-based 顺序选择；也可以传
 `reference_bbox=[x,y,width,height]` 精确指定 inspection 检出的基准图区域。
+
+`POST /perception/place/locate/reference-mask/debug` 只执行到 Task0 reference mask
+生成完成，因此请求不需要 `reference_pose`。它返回 Task0 RGB、原始 change mask、
+选中的缺货 component、货架行、SAM3 crop/bbox/score 和最终 reference mask，适合在
+test_web 的 `/qwen-review` 中结合已有 shortage 批测结果核验这一阶段，不会被后续重投影
+或 6D 位姿校验阻断。网页直接复用已得到的商品名、reference bbox 和 region mask，
+不再提供单独的上传页面。
 
 ## 结论
 
@@ -137,47 +139,37 @@ agent/output/task0/<inspection_target_id>_<UPPER|LOWER>/
 
 - `rgb.jpg` 和 `depth_mm.npy` 必须时间同步并完成深度到 RGB 的对齐；加载时会校验
   `meta.json` 的尺寸、单位和 `aligned_to=rgb`。
-- 商品 reference pose 由请求的 `reference_pose` 提供，单位必须是毫米。
-- 相机内参由请求或 `PLACE_HEAD_CAMERA_INTRINSICS` 提供。
-- 运行时还需要当前 RGB、对齐深度，以及后续手眼转换使用的外参。
+- 相机内参固定使用代码内置的头部相机标定。
+- 运行时还需要当前 RGB 和与其对齐的毫米深度。
 
 ## 推荐流程
 
-1. 根据 `product_name + location_id` 加载正常场景 RGB-D、商品 mask 和
-   `T_ref_object`。
+1. 根据 `product_name + location_id` 加载正常场景 RGB-D。
 2. 从正常场景和当前缺货场景生成点云。
 3. 排除正常场景的目标商品 mask、当前场景的运动物体和深度无效区域，只保留货架、
    轨道和稳定背景。
 4. 使用机器人相机外参、RGB 特征匹配加 PnP，或两者结合，生成配准初值。
 5. 在静态货架点云上做带 RANSAC 的刚体配准和 point-to-plane ICP，估计
    `T_cur_ref`。
-6. 计算 `T_cur_object = T_cur_ref @ T_ref_object`。
-7. 将正常场景目标 mask 内的 RGB-D 点变换到当前相机坐标系，再投影到当前 RGB，
-   生成虚拟 `target_mask`。
-8. 使用当前深度检查目标体积与现有商品、货架边缘是否碰撞。
-9. 将目标位姿转换到机器人基座坐标系后返回。
+6. 在 Task0 原图中生成商品的全分辨率 mask，并计算其像素 bbox。
+7. 返回 Task0 RGB 路径、bbox、mask 和 `T_cur_ref`。
+8. 下游位姿估计在 Task0 原图上计算 `T_ref_object`，再使用
+   `T_cur_object = T_cur_ref @ T_ref_object`。
 
 inspection 的 ORB + homography 可以作为 RGB 特征初值或调试图，但不能替代三维
 刚体配准，因为 homography 不包含可靠的三维平移、尺度和离平面旋转。
 
 ## Mask 定义
 
-建议明确区分两个 mask：
-
-- `reference_mask`：正常场景中原商品真实分割得到的 mask；
-- `target_mask`：把正常场景商品点云变换并投影到当前视角后得到的虚拟目标 mask。
-
-缺货场景中目标商品不存在，因此 `target_mask` 不是 SAM3 在当前 RGB 上直接分割的
-结果。它表示“商品按标准位姿放回后，在当前相机中的预期投影”。
-
-重投影时需要做 z-buffer 和当前深度检查。若目标投影被其它物体遮挡，Debug 响应可
-同时返回完整投影 mask 和当前视角可见 mask。
+正式响应只返回 `reference_mask`：即 Task0 正常场景中实际商品的全分辨率二值 mask。
+该 mask 不会投影到当前缺货图；它必须与 `image_path` 指向的 Task0 RGB 保持同尺寸、
+同坐标系，供下游位姿估计直接使用。
 
 ## Debug 响应
 
-正式请求和响应见文档开头的“当前接口契约”。Debug 接口额外返回 reference mask、
-完整/可见 target mask、转换后商品表面的理论 `expected_depth_mm`、`T_cur_ref`，以及
-RGB 重投影 RMSE、三维 RMSE、对应点数量和 inlier ratio。
+正式请求和响应见文档开头的“当前接口契约”。Debug 接口额外返回缺货差异 region、
+货架行约束、SAM3 选择信息，以及 RGB 重投影 RMSE、三维 RMSE、对应点数量、inlier
+ratio 和同一份 `T_cur_ref`。
 
 ## 配准质量门槛
 
@@ -188,8 +180,7 @@ RGB 重投影 RMSE、三维 RMSE、对应点数量和 inlier ratio。
 - 三维 RMSE 不高于 20 mm；
 - RGB 重投影 RMSE 不高于 4 px；
 - 旋转矩阵行列式接近 1；
-- 转换后的目标位姿仍位于目标货架层范围内；
-- 目标体积与当前点云没有显著碰撞。
+- `T_cur_ref` 必须通过完整 `4×4 SE(3)` 合法性校验。
 
 任何关键校验失败时都应返回定位失败，不能继续使用低质量矩阵驱动机械臂。
 
@@ -213,7 +204,8 @@ RGB 重投影 RMSE、三维 RMSE、对应点数量和 inlier ratio。
 - 4×4 刚体矩阵校验；
 - 坐标系变换求逆与组合；
 - 已知三维对应点的 SVD 刚体配准；
-- `T_cur_ref @ T_ref_object` 位姿转移。
+- `T_cur_ref @ T_ref_object` 位姿转移工具（供下游位姿估计复用，Place Locate 正式流程
+  不再调用）。
 
 `registration.py` 已提供：
 
@@ -223,22 +215,26 @@ RGB 重投影 RMSE、三维 RMSE、对应点数量和 inlier ratio。
 - 静态关键点二次 homography 和空间覆盖率统计；
 - RGB 关键点的对齐深度采样与三维反投影；
 - 三维对应点的 RANSAC + SVD 刚体配准；
-- reference mask 点云向当前相机的完整/可见 mask 重投影；
-- 重投影目标的 z-buffer `expected_depth_mm`，mask 外深度为 0；
-- 标准商品位姿向当前相机和机器人坐标系的转移。
+- reference mask 点云向当前相机的重投影工具（保留为独立几何能力，不属于当前正式
+  Place Locate 输出）。
 
 `main.py` 已提供并挂载：
 
 - `POST /perception/place/locate` 正式接口；
 - `POST /perception/place/locate/debug` 诊断接口；
 - RGB 与 NPY/PNG/TIFF/RAW 深度解码及对齐尺寸校验；
-- 请求内参或 `PLACE_HEAD_CAMERA_INTRINSICS` 标定读取；
-- 缺货区域选择、reference mask 深度细化及理论 mask 输出。
+- 内置 `head_color_optical_frame` 的 `1280×720` 标定，并按输入 RGB 尺寸缩放；
+- 将 current 配准到 Task0 reference 后，在 reference 坐标系提取唯一缺货 bbox；
+- SHORTAGE 使用已有商品 `sam3_prompt` 在 Task0 原图 bbox 附近分割实际商品，按与
+  缺货 component 的重叠选择实例，并映射成与 Task0 depth 对齐的全图 reference mask；
+- MISPLACED 保留原有的差异 component 深度细化；
+- 返回原图 bbox/mask/path 和 `current_from_reference`，不接收或转换商品 6D pose。
 
 运行核心测试：
 
 ```powershell
-python -m unittest place.locate.test_pose_transfer place.locate.test_registration -v
+python -m unittest place.locate.test_pose_transfer place.locate.test_registration \
+  place.locate.test_reference_mask place.locate.test_main -v
 ```
 
 在 inspection 的 MISPLACED paired RGB 上运行：

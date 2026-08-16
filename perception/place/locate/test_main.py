@@ -55,26 +55,10 @@ class PlaceLocateApiTest(unittest.TestCase):
             location_id="H1_F_L2_C01",
             current_image_base64=encode_rgb(current),
             current_depth_image_base64=encode_depth(current_depth),
-            reference_pose=api.PoseInput(
-                matrix=[
-                    [1, 0, 0, 0],
-                    [0, 1, 0, 0],
-                    [0, 0, 1, 900],
-                    [0, 0, 0, 1],
-                ]
-            ),
-            camera_intrinsics=api.CameraIntrinsicsInput(
-                fx=260,
-                fy=260,
-                cx=160,
-                cy=120,
-                width=width,
-                height=height,
-            ),
             reference_bbox=[115, 65, 90, 120],
         )
 
-    def test_rgbd_route_returns_theoretical_current_mask(self) -> None:
+    def test_rgbd_route_returns_reference_inputs_and_camera_transform(self) -> None:
         request = self.make_request()
         scan = InitialScan(
             inspection_target_id="H1_F_L_INSPECT",
@@ -86,63 +70,113 @@ class PlaceLocateApiTest(unittest.TestCase):
             depth_mm=self.reference_depth,
             metadata={},
         )
-        with patch.object(api, "load_initial_scan", return_value=scan):
+        reference_mask = np.zeros(self.reference_image.shape[:2], dtype=np.uint8)
+        reference_mask[70:180, 120:200] = 255
+        sam_result = api.ReferenceMaskResult(
+            mask=reference_mask,
+            sam_prompt="box",
+            crop_box=(100, 50, 220, 200),
+            selected_bbox=(120.0, 70.0, 200.0, 180.0),
+            selected_score=0.95,
+            candidate_count=1,
+        )
+        with (
+            patch.object(api, "load_initial_scan", return_value=scan),
+            patch.object(api, "generate_reference_mask", return_value=sam_result) as generate,
+        ):
             result = api.locate_place_debug(request)
 
         self.assertEqual(result.product_name, "测试商品")
         self.assertEqual(result.location_id, "H1_F_L2_C01")
         self.assertEqual(result.inspection_target_id, "H1_F_L_INSPECT")
         self.assertTrue(result.baseline_path.endswith("rgb.jpg"))
+        self.assertEqual(result.image_path, result.baseline_path)
         self.assertEqual(result.image_size, [320, 240])
-        self.assertGreater(result.projected_point_count, 1000)
+        self.assertEqual(result.current_image_size, [320, 240])
         self.assertGreater(result.registration.inlier_count, 12)
-        self.assertEqual(result.target_pose.frame_id, "current_head_camera")
-        expected_target_pose = (
-            np.asarray(result.registration.current_from_reference)
-            @ np.asarray(request.reference_pose.matrix)
-        )
+        self.assertEqual(result.reference_mask_source, "sam3")
+        self.assertEqual(result.reference_sam3_prompt, "box")
+        self.assertEqual(result.reference_sam3_crop_box, [100, 50, 220, 200])
+        self.assertEqual(result.reference_sam3_bbox, [120.0, 70.0, 200.0, 180.0])
+        self.assertEqual(result.reference_sam3_candidate_count, 1)
+        generate.assert_called_once()
+        self.assertEqual(generate.call_args.args[2], "测试商品")
         self.assertTrue(
             np.allclose(
-                np.asarray(result.target_pose.matrix),
-                expected_target_pose,
+                np.asarray(result.rotate_matrix),
+                np.asarray(result.registration.current_from_reference),
                 atol=1e-6,
             )
         )
+        self.assertEqual(result.bbox, [120, 70, 200, 180])
         mask_bytes = base64.b64decode(result.mask)
         mask = cv2.imdecode(np.frombuffer(mask_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
         self.assertEqual(mask.shape, (240, 320))
-        self.assertGreater(np.count_nonzero(mask), 1000)
-
-        expected_depth = np.load(
-            io.BytesIO(base64.b64decode(result.expected_depth_npy_base64)),
-            allow_pickle=False,
+        self.assertEqual(
+            np.count_nonzero(mask),
+            np.count_nonzero(reference_mask),
         )
-        self.assertEqual(expected_depth.shape, (240, 320))
-        self.assertAlmostEqual(float(np.median(expected_depth[mask > 0])), 900, delta=5)
 
-    def test_public_response_adds_transferred_pose_to_mask_fields(self) -> None:
+    def test_reference_mask_debug_stops_before_pose_transfer(self) -> None:
+        full_request = self.make_request()
+        request = api.PlaceReferenceMaskRequest.model_validate(
+            full_request.model_dump()
+        )
+        scan = InitialScan(
+            inspection_target_id="H1_F_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+            directory=Path("task0/H1_F_L_INSPECT_UPPER"),
+            rgb_path=Path("task0/H1_F_L_INSPECT_UPPER/rgb.jpg"),
+            depth_path=Path("task0/H1_F_L_INSPECT_UPPER/depth_mm.npy"),
+            rgb=self.reference_image,
+            depth_mm=self.reference_depth,
+            metadata={},
+        )
+        reference_mask = np.zeros(self.reference_image.shape[:2], dtype=np.uint8)
+        reference_mask[70:180, 120:200] = 255
+        sam_result = api.ReferenceMaskResult(
+            mask=reference_mask,
+            sam_prompt="box",
+            crop_box=(100, 50, 220, 200),
+            selected_bbox=(120.0, 70.0, 200.0, 180.0),
+            selected_score=0.95,
+            candidate_count=2,
+        )
+        with (
+            patch.object(api, "load_initial_scan", return_value=scan),
+            patch.object(api, "generate_reference_mask", return_value=sam_result),
+        ):
+            result = api.locate_reference_mask_debug(request)
+
+        self.assertEqual(result.reference_mask_source, "sam3")
+        self.assertEqual(result.reference_image_size, [320, 240])
+        self.assertEqual(result.current_image_size, [320, 240])
+        self.assertEqual(result.reference_sam3_prompt, "box")
+        self.assertEqual(result.reference_sam3_candidate_count, 2)
+        self.assertGreater(len(result.reference_image_base64), 100)
+        decoded_mask = cv2.imdecode(
+            np.frombuffer(base64.b64decode(result.reference_mask), np.uint8),
+            cv2.IMREAD_GRAYSCALE,
+        )
+        self.assertEqual(decoded_mask.shape, (240, 320))
+        self.assertEqual(np.count_nonzero(decoded_mask), np.count_nonzero(reference_mask))
+
+    def test_public_response_returns_pose_estimator_inputs(self) -> None:
         debug = api.PlaceLocateDebugResponse(
             product_name="测试商品",
             bbox=[100, 200, 300, 400],
             mask="mask",
-            image_path="current.jpg",
-            target_pose=api.PoseOutput(
-                frame_id="current_head_camera",
-                matrix=np.eye(4).tolist(),
-            ),
+            image_path="task0/rgb.jpg",
+            rotate_matrix=np.eye(4).tolist(),
             task_type="SHORTAGE",
             location_id="H1_F",
             inspection_target_id="H1_F_L_INSPECT",
             baseline_path="task0/H1_F_L_INSPECT_UPPER/rgb.jpg",
             region_index=1,
             image_size=[320, 240],
+            current_image_size=[320, 240],
             reference_bbox=[1, 2, 3, 4],
-            target_bbox_pixels=[5, 6, 7, 8],
             reference_mask="reference",
-            visible_mask="visible",
-            expected_depth_npy_base64="depth",
-            projected_point_count=10,
-            visible_point_count=9,
             registration=api.RegistrationMetrics(
                 current_from_reference=np.eye(4).tolist(),
                 rmse_mm=1,
@@ -161,12 +195,8 @@ class PlaceLocateApiTest(unittest.TestCase):
                 "product_name": "测试商品",
                 "bbox": [100, 200, 300, 400],
                 "mask": "mask",
-                "image_path": "current.jpg",
-                "target_pose": {
-                    "frame_id": "current_head_camera",
-                    "unit": "millimeter",
-                    "matrix": np.eye(4).tolist(),
-                },
+                "image_path": "task0/rgb.jpg",
+                "rotate_matrix": np.eye(4).tolist(),
             },
         )
 
@@ -176,18 +206,43 @@ class PlaceLocateApiTest(unittest.TestCase):
             {
                 "current_image_base64",
                 "current_depth_image_base64",
-                "reference_pose",
             }.issubset(required)
         )
+        self.assertNotIn("reference_pose", required)
         self.assertNotIn("baseline_image_base64", required)
         self.assertNotIn("baseline_depth_image_base64", required)
         properties = api.PlaceLocateRequest.model_json_schema()["properties"]
+        self.assertNotIn("reference_pose", properties)
+        self.assertNotIn("camera_intrinsics", properties)
+        self.assertNotIn("current_camera_intrinsics", properties)
         self.assertNotIn("baseline_image_base64", properties)
         self.assertNotIn("baseline_depth_image_base64", properties)
 
+        reference_required = set(
+            api.PlaceReferenceMaskRequest.model_json_schema()["required"]
+        )
+        self.assertIn("current_image_base64", reference_required)
+        self.assertIn("current_depth_image_base64", reference_required)
+        self.assertNotIn("reference_pose", reference_required)
+
+    def test_uses_fixed_head_camera_intrinsics(self) -> None:
+        native = api.head_camera_intrinsics(1280, 720)
+        self.assertEqual(native.width, 1280)
+        self.assertEqual(native.height, 720)
+        self.assertAlmostEqual(native.fx, 910.744324)
+        self.assertAlmostEqual(native.fy, 910.395020)
+        self.assertAlmostEqual(native.cx, 650.132690)
+        self.assertAlmostEqual(native.cy, 381.874634)
+
+        half = api.head_camera_intrinsics(640, 360)
+        self.assertAlmostEqual(half.fx, native.fx / 2)
+        self.assertAlmostEqual(half.fy, native.fy / 2)
+        self.assertAlmostEqual(half.cx, native.cx / 2)
+        self.assertAlmostEqual(half.cy, native.cy / 2)
+
     def test_request_rejects_unknown_fields(self) -> None:
         payload = self.make_request().model_dump()
-        payload["baseline_depth_base64"] = "misspelled"
+        payload["reference_pose"] = {"matrix": np.eye(4).tolist()}
         with self.assertRaises(ValidationError):
             api.PlaceLocateRequest.model_validate(payload)
 

@@ -44,6 +44,12 @@ cd perception
 python inspect/batch_shortage.py
 ```
 
+每个已识别商品的 region 下方都可以直接生成 Task0 reference mask。该操作复用批测
+结果中已有的商品名、完整图坐标系 bbox、region mask、`location_id` 和 `pose_type`，读取
+对应 Task0 完整 RGB 后在目标货架行附近调用 SAM3；无需重新上传当前 RGB-D，也不会
+重新执行 shortage 对比。页面显示 Task0 原图叠加结果、同尺寸二值 mask、实际 SAM3
+Prompt、crop、选中实例 bbox 和分数。
+
 默认同时处理 4 个 record；可用 `--workers 1` 改为串行，或用
 `--workers N` 调整并发数。每个 worker 使用独立的 SKU/Qwen HTTP 会话。
 

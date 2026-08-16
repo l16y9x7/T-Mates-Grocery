@@ -31,6 +31,94 @@ class PromptMappingTest(unittest.TestCase):
         self.assertIn('image_name: originalImageName', qwen_js)
         self.assertIn('image_base64: originalImageDataUrl', qwen_js)
 
+    def test_qwen_review_generates_reference_mask_from_existing_finding(self) -> None:
+        review_html = (server.STATIC_DIR / "qwen_review.html").read_text(
+            encoding="utf-8"
+        )
+        review_js = (server.STATIC_DIR / "qwen_review.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('id="shortageReferenceMaskList"', review_html)
+        self.assertIn(
+            "/api/qwen-review/shortage-batch/reference-mask",
+            review_js,
+        )
+        self.assertNotIn("/place-mask", review_html)
+        self.assertFalse((server.STATIC_DIR / "place_mask.html").exists())
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            mask_path = root / "group" / "record" / "region_01_mask.png"
+            mask_path.parent.mkdir(parents=True)
+            component_mask = server.np.zeros((100, 120), dtype=server.np.uint8)
+            component_mask[22:58, 31:69] = 255
+            success, encoded = server.cv2.imencode(".png", component_mask)
+            self.assertTrue(success)
+            encoded.tofile(mask_path)
+
+            result = {
+                "location_id": "H1_B_L_INSPECT",
+                "pose_type": "SHELF_VIEW_LOWER",
+                "findings": [
+                    {
+                        "region_index": 1,
+                        "bbox": [30, 20, 40, 40],
+                        "mask": "group/record/region_01_mask.png",
+                        "product_name": "妙洁海绵百洁布",
+                    }
+                ],
+                "row_detection": {
+                    "rows": [{"bbox": [0, 10, 120, 70]}],
+                },
+            }
+            initial_scan = Mock(
+                rgb=server.np.zeros((100, 120, 3), dtype=server.np.uint8),
+                inspection_target_id="H1_B_L_INSPECT",
+                pose_type="SHELF_VIEW_LOWER",
+            )
+            generated_mask = server.np.zeros((100, 120), dtype=server.np.uint8)
+            generated_mask[24:60, 34:72] = 255
+            generated = Mock(
+                mask=generated_mask,
+                sam_prompt="product package",
+                crop_box=(10, 5, 90, 90),
+                selected_bbox=(34.0, 24.0, 72.0, 60.0),
+                selected_score=0.93,
+                candidate_count=2,
+            )
+            with (
+                patch.object(server, "SHORTAGE_BATCH_ROOT", root),
+                patch.object(server, "shortage_batch_result", return_value=result),
+                patch.object(server, "load_initial_scan", return_value=initial_scan),
+                patch.object(
+                    server,
+                    "generate_reference_mask",
+                    return_value=generated,
+                ) as generate,
+            ):
+                payload = server.generate_shortage_reference_mask(
+                    server.ShortageReferenceMaskRequest(
+                        group="group",
+                        record="record",
+                        region_index=1,
+                    )
+                )
+
+        self.assertEqual(payload["product_name"], "妙洁海绵百洁布")
+        self.assertEqual(payload["row_bbox"], [0.0, 10.0, 120.0, 70.0])
+        self.assertTrue(payload["reference_mask_data_url"].startswith("data:image/png;base64,"))
+        self.assertTrue(payload["reference_overlay_data_url"].startswith("data:image/png;base64,"))
+        self.assertEqual(generate.call_args.args[1], [30.0, 20.0, 40.0, 40.0])
+        self.assertEqual(generate.call_args.args[2], "妙洁海绵百洁布")
+        self.assertEqual(
+            generate.call_args.kwargs["component_mask"].shape,
+            (100, 120),
+        )
+        self.assertEqual(
+            generate.call_args.kwargs["row_bbox"],
+            [0.0, 10.0, 120.0, 70.0],
+        )
+
     def test_moved_web_paths_are_anchored_to_perception_root(self) -> None:
         expected_root = Path(__file__).resolve().parent
 

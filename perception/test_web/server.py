@@ -30,7 +30,11 @@ PERCEPTION_ROOT = ROOT.parent
 if str(PERCEPTION_ROOT) not in sys.path:
     sys.path.insert(0, str(PERCEPTION_ROOT))
 from config import QWEN3_MODEL, QWEN3_URL, SAM3_URL, SERVICE_BIND_HOST  # noqa: E402
-from initial_scan import initial_scan_root  # noqa: E402
+from initial_scan import InitialScanError, initial_scan_root, load_initial_scan  # noqa: E402
+from place.locate.reference_mask import (  # noqa: E402
+    ReferenceMaskError,
+    generate_reference_mask,
+)
 from row_detection import RowDetectionConfig, detect_rows  # noqa: E402
 
 LOCATE_ROOT = PERCEPTION_ROOT / "pick" / "locate"
@@ -139,6 +143,12 @@ class ShortageBatchQwenRetryRequest(BaseModel):
     region_index: int = Field(ge=1)
     prompt: str
     temperature: float = Field(default=0.0, ge=0, le=2)
+
+
+class ShortageReferenceMaskRequest(BaseModel):
+    group: str
+    record: str
+    region_index: int = Field(ge=1)
 
 
 class FullInspectRunRequest(BaseModel):
@@ -632,6 +642,118 @@ def shortage_batch_result(group: str, record: str) -> dict:
     return result
 
 
+def shortage_batch_finding(result: dict, region_index: int) -> dict:
+    finding = next(
+        (
+            item
+            for item in result.get("findings", [])
+            if isinstance(item, dict) and item.get("region_index") == region_index
+        ),
+        None,
+    )
+    if finding is None:
+        raise HTTPException(status_code=404, detail="shortage finding 不存在")
+    return finding
+
+
+def decode_shortage_mask(relative_path: object) -> np.ndarray:
+    if not isinstance(relative_path, str):
+        raise HTTPException(status_code=422, detail="shortage finding 缺少 mask 文件")
+    path = resolve_descendant(SHORTAGE_BATCH_ROOT, relative_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="shortage finding mask 不存在")
+    try:
+        encoded = np.frombuffer(path.read_bytes(), dtype=np.uint8)
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"读取 shortage mask 失败: {error}") from error
+    mask = cv2.imdecode(encoded, cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        raise HTTPException(status_code=500, detail="shortage finding mask 不是有效图片")
+    return mask
+
+
+def shortage_finding_row_bbox(
+    result: dict,
+    finding_bbox: list[float],
+) -> list[float] | None:
+    """Select the shelf row with the largest overlap with one reference bbox."""
+
+    row_detection = result.get("row_detection")
+    rows = row_detection.get("rows", []) if isinstance(row_detection, dict) else []
+    if not isinstance(rows, list):
+        return None
+    x, y, width, height = finding_bbox
+    right = x + width
+    bottom = y + height
+    candidates: list[tuple[float, list[float]]] = []
+    for row in rows:
+        row_bbox = row.get("bbox") if isinstance(row, dict) else None
+        if not isinstance(row_bbox, list) or len(row_bbox) != 4:
+            continue
+        try:
+            row_x, row_y, row_width, row_height = [float(value) for value in row_bbox]
+        except (TypeError, ValueError):
+            continue
+        if row_width <= 0 or row_height <= 0:
+            continue
+        overlap_width = max(0.0, min(right, row_x + row_width) - max(x, row_x))
+        overlap_height = max(0.0, min(bottom, row_y + row_height) - max(y, row_y))
+        overlap_area = overlap_width * overlap_height
+        if overlap_area > 0:
+            candidates.append((overlap_area, [row_x, row_y, row_width, row_height]))
+    return max(candidates, key=lambda item: item[0])[1] if candidates else None
+
+
+def encode_web_image(image: np.ndarray) -> str:
+    success, encoded = cv2.imencode(".png", np.asarray(image))
+    if not success:
+        raise HTTPException(status_code=500, detail="reference mask 调试图编码失败")
+    payload = base64.b64encode(encoded.tobytes()).decode("ascii")
+    return f"data:image/png;base64,{payload}"
+
+
+def render_reference_mask_overlay(
+    reference_image: np.ndarray,
+    reference_mask: np.ndarray,
+    reference_bbox: list[float],
+    row_bbox: list[float] | None,
+    crop_box: tuple[int, int, int, int],
+    selected_bbox: tuple[float, float, float, float],
+) -> np.ndarray:
+    overlay = np.asarray(reference_image).copy()
+    mask = np.asarray(reference_mask) > 0
+    if np.any(mask):
+        green = np.full((int(np.count_nonzero(mask)), 3), (40, 220, 80), dtype=np.uint8)
+        overlay[mask] = cv2.addWeighted(overlay[mask], 0.45, green, 0.55, 0)
+
+    def draw_xyxy(box: list[float] | tuple[float, ...], color: tuple[int, int, int], label: str) -> None:
+        left, top, right, bottom = [int(round(value)) for value in box]
+        cv2.rectangle(overlay, (left, top), (right, bottom), color, 3)
+        cv2.putText(
+            overlay,
+            label,
+            (max(0, left), max(18, top - 7)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+
+    x, y, width, height = reference_bbox
+    draw_xyxy((x, y, x + width, y + height), (0, 255, 255), "SHORTAGE BBOX")
+    if row_bbox is not None:
+        row_x, row_y, row_width, row_height = row_bbox
+        draw_xyxy(
+            (row_x, row_y, row_x + row_width, row_y + row_height),
+            (255, 0, 255),
+            "ROW",
+        )
+    draw_xyxy(crop_box, (255, 255, 0), "SAM CROP")
+    draw_xyxy(selected_bbox, (0, 0, 255), "SAM INSTANCE")
+    return overlay
+
+
 def shortage_debug_region(result: dict, region_index: int) -> dict[str, object]:
     findings = [
         finding
@@ -883,6 +1005,98 @@ def retry_shortage_batch_qwen(request: ShortageBatchQwenRetryRequest) -> dict:
         "Qwen shortage 重试结果",
     )
     return retry_result
+
+
+@app.post("/api/qwen-review/shortage-batch/reference-mask")
+def generate_shortage_reference_mask(
+    request: ShortageReferenceMaskRequest,
+) -> dict:
+    """Generate a Task0-aligned product mask from one reviewed shortage finding."""
+
+    started_at = time.perf_counter()
+    result = shortage_batch_result(request.group, request.record)
+    finding = shortage_batch_finding(result, request.region_index)
+    product_name = finding.get("product_name")
+    if not isinstance(product_name, str) or not product_name.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="该 shortage finding 尚未识别出商品名称",
+        )
+    raw_bbox = finding.get("bbox")
+    if not isinstance(raw_bbox, list) or len(raw_bbox) != 4:
+        raise HTTPException(status_code=422, detail="shortage finding bbox 无效")
+    try:
+        reference_bbox = [float(value) for value in raw_bbox]
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail="shortage finding bbox 无效") from error
+    if not np.isfinite(reference_bbox).all() or reference_bbox[2] <= 0 or reference_bbox[3] <= 0:
+        raise HTTPException(status_code=422, detail="shortage finding bbox 无效")
+
+    location_id = result.get("location_id")
+    pose_type = result.get("pose_type")
+    if not isinstance(location_id, str) or not isinstance(pose_type, str):
+        raise HTTPException(
+            status_code=422,
+            detail="shortage 批测结果缺少 location_id 或 pose_type",
+        )
+    try:
+        initial_scan = load_initial_scan(location_id, pose_type)
+    except InitialScanError as error:
+        raise HTTPException(status_code=422, detail=f"读取 Task0 完整图失败: {error}") from error
+
+    component_mask = decode_shortage_mask(finding.get("mask"))
+    if component_mask.shape != initial_scan.rgb.shape[:2]:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "shortage mask 与 Task0 RGB 尺寸不一致: "
+                f"mask={component_mask.shape}, rgb={initial_scan.rgb.shape[:2]}"
+            ),
+        )
+    row_bbox = shortage_finding_row_bbox(result, reference_bbox)
+    try:
+        generated = generate_reference_mask(
+            initial_scan.rgb,
+            reference_bbox,
+            product_name.strip(),
+            component_mask=component_mask,
+            row_bbox=row_bbox,
+        )
+    except ReferenceMaskError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+    binary_mask = np.where(generated.mask > 0, 255, 0).astype(np.uint8)
+    overlay = render_reference_mask_overlay(
+        initial_scan.rgb,
+        binary_mask,
+        reference_bbox,
+        row_bbox,
+        generated.crop_box,
+        generated.selected_bbox,
+    )
+    return {
+        "group": request.group,
+        "record": request.record,
+        "region_index": request.region_index,
+        "product_name": product_name.strip(),
+        "inspection_target_id": initial_scan.inspection_target_id,
+        "pose_type": initial_scan.pose_type,
+        "reference_image_size": [
+            int(initial_scan.rgb.shape[1]),
+            int(initial_scan.rgb.shape[0]),
+        ],
+        "reference_bbox": reference_bbox,
+        "row_bbox": row_bbox,
+        "sam3_prompt": generated.sam_prompt,
+        "crop_box": list(generated.crop_box),
+        "selected_bbox": list(generated.selected_bbox),
+        "selected_score": generated.selected_score,
+        "candidate_count": generated.candidate_count,
+        "mask_pixels": int(np.count_nonzero(binary_mask)),
+        "reference_mask_data_url": encode_web_image(binary_mask),
+        "reference_overlay_data_url": encode_web_image(overlay),
+        "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 1),
+    }
 
 
 @app.get("/api/qwen-review/shortage-batch/file/{relative_path:path}")

@@ -1,9 +1,9 @@
-"""HTTP API for transferring a reference product mask into the current view.
+"""Prepare Task0 product inputs and reference-to-current camera registration.
 
-The inspection endpoint remains an RGB-only semantic stage.  This endpoint is
-the RGB-D geometry stage: it registers a normal reference scene to the current
-shortage/misplaced scene, reconstructs the changed reference object from its
-reference depth, and projects that object into the current head-camera image.
+Place Locate does not estimate an object pose.  It recovers the actual product
+mask in the fixed Task0 image and estimates the 4x4 ``current_from_reference``
+camera transform.  A downstream pose estimator consumes those values, estimates
+the object pose in the Task0 camera frame, and applies the supplied transform.
 """
 
 from __future__ import annotations
@@ -11,8 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import io
-import json
-import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Sequence
 
@@ -41,14 +40,16 @@ else:
 from .pose_transfer import (
     PoseTransferError,
     as_rigid_transform,
-    transfer_reference_pose,
 )
 from .registration import (
     CameraIntrinsics,
     RGBDRegistrationResult,
-    ReprojectedMask,
     register_rgbd_images,
-    reproject_reference_mask,
+)
+from .reference_mask import (
+    ReferenceMaskError,
+    ReferenceMaskResult,
+    generate_reference_mask,
 )
 
 
@@ -56,68 +57,32 @@ TaskType = Literal["SHORTAGE", "MISPLACED"]
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_DEPTH_BYTES = 40 * 1024 * 1024
 DEFAULT_CURRENT_IMAGE_NAME = "current_rgb.jpg"
-INTRINSICS_ENVIRONMENT_NAME = "PLACE_HEAD_CAMERA_INTRINSICS"
+HEAD_CAMERA_FRAME_ID = "head_color_optical_frame"
+HEAD_CAMERA_CALIBRATION_WIDTH = 1280
+HEAD_CAMERA_CALIBRATION_HEIGHT = 720
+HEAD_CAMERA_FX = 910.744324
+HEAD_CAMERA_FY = 910.395020
+HEAD_CAMERA_CX = 650.132690
+HEAD_CAMERA_CY = 381.874634
+HEAD_CAMERA_DISTORTION_MODEL = "plumb_bob"
+HEAD_CAMERA_DISTORTION = (0.0, 0.0, 0.0, 0.0, 0.0)
 MAX_REGISTRATION_RMSE_MM = 20.0
 MIN_REGISTRATION_INLIER_RATIO = 0.5
 MAX_RGB_REPROJECTION_RMSE_PX = 4.0
 
 app = FastAPI(
     title="Place Locate",
-    version="1.0.0",
-    description="Transfer a reference RGB-D product mask into the current view.",
+    version="2.0.0",
+    description=(
+        "Return a Task0 product bbox/mask and the reference-to-current 4x4 "
+        "camera transform for downstream pose estimation."
+    ),
 )
 router = APIRouter()
 
 
-class CameraIntrinsicsInput(BaseModel):
-    """Pinhole calibration; width/height describe its calibration resolution."""
-
-    fx: float = Field(gt=0)
-    fy: float = Field(gt=0)
-    cx: float
-    cy: float
-    width: int | None = Field(default=None, gt=0)
-    height: int | None = Field(default=None, gt=0)
-
-    def resolve(self, image_width: int, image_height: int) -> CameraIntrinsics:
-        calibration_width = self.width or image_width
-        calibration_height = self.height or image_height
-        scale_x = image_width / calibration_width
-        scale_y = image_height / calibration_height
-        return CameraIntrinsics(
-            fx=self.fx * scale_x,
-            fy=self.fy * scale_y,
-            cx=self.cx * scale_x,
-            cy=self.cy * scale_y,
-            width=image_width,
-            height=image_height,
-        )
-
-
-class PoseInput(BaseModel):
-    """Object pose in the normal reference head-camera frame."""
-
-    frame_id: Literal["reference_head_camera"] = "reference_head_camera"
-    unit: Literal["millimeter"] = "millimeter"
-    matrix: list[list[float]]
-
-    @field_validator("matrix")
-    @classmethod
-    def validate_matrix(cls, value: list[list[float]]) -> list[list[float]]:
-        try:
-            return as_rigid_transform(value, name="reference_pose.matrix").tolist()
-        except PoseTransferError as error:
-            raise ValueError(str(error)) from error
-
-
-class PoseOutput(BaseModel):
-    frame_id: Literal["current_head_camera"] = "current_head_camera"
-    unit: Literal["millimeter"] = "millimeter"
-    matrix: list[list[float]]
-
-
-class PlaceLocateRequest(BaseModel):
-    """Current RGB-D plus the identity of a fixed task0 reference scan."""
+class PlaceReferenceMaskRequest(BaseModel):
+    """Inputs needed to recover a product mask in the fixed Task0 image."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -126,11 +91,8 @@ class PlaceLocateRequest(BaseModel):
     location_id: str = Field(min_length=1)
     current_image_base64: str = Field(min_length=1)
     current_depth_image_base64: str = Field(min_length=1)
-    reference_pose: PoseInput
     pose_type: PoseType = ""
     current_image_name: str = DEFAULT_CURRENT_IMAGE_NAME
-    camera_intrinsics: CameraIntrinsicsInput | None = None
-    current_camera_intrinsics: CameraIntrinsicsInput | None = None
     depth_is_bigendian: bool = False
     depth_unit_mm: float = Field(default=1.0, gt=0)
     region_index: int = Field(default=1, ge=1)
@@ -167,14 +129,32 @@ class PlaceLocateRequest(BaseModel):
         return value
 
 
+class PlaceLocateRequest(PlaceReferenceMaskRequest):
+    """Inputs needed for Task0 mask recovery and camera-frame registration."""
+
+
 class PlaceLocateResponse(BaseModel):
-    """Transferred pose plus Pick Locate-compatible mask fields."""
+    """Inputs consumed by downstream reference-image pose estimation."""
 
     product_name: str
     bbox: list[int]
     mask: str
     image_path: str
-    target_pose: PoseOutput
+    rotate_matrix: list[list[float]]
+
+    @field_validator("rotate_matrix")
+    @classmethod
+    def validate_rotate_matrix(
+        cls,
+        value: list[list[float]],
+    ) -> list[list[float]]:
+        try:
+            return as_rigid_transform(
+                value,
+                name="rotate_matrix",
+            ).tolist()
+        except PoseTransferError as error:
+            raise ValueError(str(error)) from error
 
 
 class RegistrationMetrics(BaseModel):
@@ -186,6 +166,34 @@ class RegistrationMetrics(BaseModel):
     reprojection_rmse_px: float
 
 
+class PlaceReferenceMaskDebugResponse(BaseModel):
+    """Reference-mask pipeline output before pose transfer and reprojection."""
+
+    task_type: TaskType
+    product_name: str
+    location_id: str
+    inspection_target_id: str
+    pose_type: PoseType
+    baseline_path: str
+    region_index: int
+    reference_image_size: list[int]
+    current_image_size: list[int]
+    reference_image_base64: str
+    change_mask_reference: str
+    reference_component_mask: str
+    reference_bbox: list[int]
+    row_index: int | None = None
+    row_bbox: list[int] | None = None
+    reference_mask: str
+    reference_mask_source: Literal["sam3", "depth_change"]
+    reference_sam3_prompt: str | None = None
+    reference_sam3_crop_box: list[int] | None = None
+    reference_sam3_bbox: list[float] | None = None
+    reference_sam3_score: float | None = None
+    reference_sam3_candidate_count: int | None = None
+    registration: RegistrationMetrics
+
+
 class PlaceLocateDebugResponse(PlaceLocateResponse):
     task_type: TaskType
     location_id: str
@@ -193,15 +201,17 @@ class PlaceLocateDebugResponse(PlaceLocateResponse):
     baseline_path: str
     region_index: int
     image_size: list[int]
+    current_image_size: list[int]
     reference_bbox: list[int]
     row_index: int | None = None
     row_bbox: list[int] | None = None
-    target_bbox_pixels: list[int]
     reference_mask: str
-    visible_mask: str
-    expected_depth_npy_base64: str
-    projected_point_count: int
-    visible_point_count: int
+    reference_mask_source: Literal["sam3", "depth_change"] = "depth_change"
+    reference_sam3_prompt: str | None = None
+    reference_sam3_crop_box: list[int] | None = None
+    reference_sam3_bbox: list[float] | None = None
+    reference_sam3_score: float | None = None
+    reference_sam3_candidate_count: int | None = None
     registration: RegistrationMetrics
 
 
@@ -287,40 +297,31 @@ def decode_depth_image(
     return depth_mm
 
 
-def _environment_intrinsics() -> CameraIntrinsicsInput | None:
-    encoded = os.getenv(INTRINSICS_ENVIRONMENT_NAME, "").strip()
-    if not encoded:
-        return None
-    try:
-        payload = json.loads(encoded)
-        return CameraIntrinsicsInput.model_validate(payload)
-    except (json.JSONDecodeError, ValueError) as error:
-        raise HTTPException(
-            status_code=500,
-            detail=f"{INTRINSICS_ENVIRONMENT_NAME} is invalid: {error}",
-        ) from error
+def head_camera_intrinsics(image_width: int, image_height: int) -> CameraIntrinsics:
+    """Scale the fixed 1280x720 head-camera calibration to an RGB resolution."""
+
+    scale_x = image_width / HEAD_CAMERA_CALIBRATION_WIDTH
+    scale_y = image_height / HEAD_CAMERA_CALIBRATION_HEIGHT
+    return CameraIntrinsics(
+        fx=HEAD_CAMERA_FX * scale_x,
+        fy=HEAD_CAMERA_FY * scale_y,
+        cx=HEAD_CAMERA_CX * scale_x,
+        cy=HEAD_CAMERA_CY * scale_y,
+        width=image_width,
+        height=image_height,
+    )
 
 
 def resolve_intrinsics(
-    request: PlaceLocateRequest,
     reference_image: np.ndarray,
     current_image: np.ndarray,
 ) -> tuple[CameraIntrinsics, CameraIntrinsics]:
-    reference_input = request.camera_intrinsics or _environment_intrinsics()
-    if reference_input is None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "camera_intrinsics is required unless "
-                f"{INTRINSICS_ENVIRONMENT_NAME} is configured"
-            ),
-        )
     reference_height, reference_width = reference_image.shape[:2]
     current_height, current_width = current_image.shape[:2]
-    reference = reference_input.resolve(reference_width, reference_height)
-    current_input = request.current_camera_intrinsics or reference_input
-    current = current_input.resolve(current_width, current_height)
-    return reference, current
+    return (
+        head_camera_intrinsics(reference_width, reference_height),
+        head_camera_intrinsics(current_width, current_height),
+    )
 
 
 def _bbox_iou_xywh(first: Sequence[int], second: Sequence[int]) -> float:
@@ -480,26 +481,22 @@ def encode_png_base64(image: np.ndarray) -> str:
     return base64.b64encode(encoded.tobytes()).decode("ascii")
 
 
-def encode_npy_base64(array: np.ndarray) -> str:
-    output = io.BytesIO()
-    np.save(output, np.asarray(array), allow_pickle=False)
-    return base64.b64encode(output.getvalue()).decode("ascii")
+def encode_jpeg_base64(image: np.ndarray) -> str:
+    success, encoded = cv2.imencode(
+        ".jpg",
+        np.asarray(image),
+        [cv2.IMWRITE_JPEG_QUALITY, 92],
+    )
+    if not success:
+        raise RuntimeError("failed to encode JPEG")
+    return base64.b64encode(encoded.tobytes()).decode("ascii")
 
 
 def mask_bbox_xyxy(mask: np.ndarray) -> list[int]:
     ys, xs = np.where(np.asarray(mask) > 0)
     if not len(xs):
-        raise PoseTransferError("projected target mask is empty")
+        raise PoseTransferError("reference product mask is empty")
     return [int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)]
-
-
-def normalize_bbox_to_1_1000(bbox: Sequence[int], image_size: Sequence[int]) -> list[int]:
-    width, height = image_size
-    scales = (width, height, width, height)
-    return [
-        max(1, min(1000, round(1 + max(0, min(scale, value)) / scale * 999)))
-        for value, scale in zip(bbox, scales)
-    ]
 
 
 def validate_registration_quality(registration: RGBDRegistrationResult) -> None:
@@ -525,19 +522,40 @@ def validate_registration_quality(registration: RGBDRegistrationResult) -> None:
         raise PoseTransferError("registration quality check failed: " + "; ".join(failures))
 
 
-def build_debug_response(
-    request: PlaceLocateRequest,
+def registration_metrics(registration: RGBDRegistrationResult) -> RegistrationMetrics:
+    return RegistrationMetrics(
+        current_from_reference=registration.current_from_reference.tolist(),
+        rmse_mm=registration.rmse_mm,
+        depth_correspondence_count=registration.depth_correspondence_count,
+        inlier_count=registration.inlier_count,
+        inlier_ratio=registration.inlier_ratio,
+        reprojection_rmse_px=registration.rgb.reprojection_rmse_px,
+    )
+
+
+@dataclass(frozen=True)
+class PreparedReferenceMask:
+    registration: RGBDRegistrationResult
+    reference_bbox: list[int]
+    component_mask: np.ndarray
+    selected_region_index: int
+    matched_row: ShelfRow | None
+    reference_mask: np.ndarray
+    sam3: ReferenceMaskResult | None
+
+
+def prepare_reference_mask(
+    request: PlaceReferenceMaskRequest,
     reference_image: np.ndarray,
     current_image: np.ndarray,
     reference_depth_mm: np.ndarray,
     current_depth_mm: np.ndarray,
     reference_intrinsics: CameraIntrinsics,
     current_intrinsics: CameraIntrinsics,
-    *,
-    inspection_target_id: str,
-    baseline_path: str,
-) -> PlaceLocateDebugResponse:
-    registration: RGBDRegistrationResult = register_rgbd_images(
+) -> PreparedReferenceMask:
+    """Run the shared pipeline through reference-mask generation only."""
+
+    registration = register_rgbd_images(
         reference_image,
         current_image,
         reference_depth_mm,
@@ -557,61 +575,220 @@ def build_debug_response(
     )
     matched_row = row_detection.row_for_bbox(reference_bbox)
     component = constrain_mask_to_shelf_row(component, matched_row)
-    reference_mask = refine_reference_mask_with_depth(
-        component,
-        reference_depth_mm,
-        reference_bbox,
+    reference_sam3: ReferenceMaskResult | None = None
+    if request.task_type == "SHORTAGE":
+        reference_sam3 = generate_reference_mask(
+            reference_image,
+            reference_bbox,
+            request.product_name,
+            component_mask=component,
+            row_bbox=(matched_row.bbox if matched_row is not None else None),
+        )
+        reference_mask = reference_sam3.mask
+    else:
+        reference_mask = refine_reference_mask_with_depth(
+            component,
+            reference_depth_mm,
+            reference_bbox,
+        )
+    return PreparedReferenceMask(
+        registration=registration,
+        reference_bbox=reference_bbox,
+        component_mask=component,
+        selected_region_index=selected_index,
+        matched_row=matched_row,
+        reference_mask=reference_mask,
+        sam3=reference_sam3,
     )
-    projected: ReprojectedMask = reproject_reference_mask(
-        reference_mask,
+
+
+def build_debug_response(
+    request: PlaceLocateRequest,
+    reference_image: np.ndarray,
+    current_image: np.ndarray,
+    reference_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+    reference_intrinsics: CameraIntrinsics,
+    current_intrinsics: CameraIntrinsics,
+    *,
+    inspection_target_id: str,
+    baseline_path: str,
+) -> PlaceLocateDebugResponse:
+    prepared = prepare_reference_mask(
+        request,
+        reference_image,
+        current_image,
         reference_depth_mm,
-        registration.current_from_reference,
+        current_depth_mm,
         reference_intrinsics,
         current_intrinsics,
-        current_depth_mm=current_depth_mm,
     )
-    target_bbox = mask_bbox_xyxy(projected.full_mask)
-    target_pose_matrix = transfer_reference_pose(
-        registration.current_from_reference,
-        request.reference_pose.matrix,
-    )
+    registration = prepared.registration
+    reference_bbox = prepared.reference_bbox
+    matched_row = prepared.matched_row
+    reference_mask = prepared.reference_mask
+    reference_sam3 = prepared.sam3
+    reference_product_bbox = mask_bbox_xyxy(reference_mask)
+    reference_height, reference_width = reference_image.shape[:2]
     current_height, current_width = current_image.shape[:2]
     return PlaceLocateDebugResponse(
         product_name=request.product_name,
-        bbox=normalize_bbox_to_1_1000(
-            target_bbox,
-            [current_width, current_height],
-        ),
-        mask=encode_png_base64(projected.full_mask),
-        image_path=request.current_image_name,
-        target_pose=PoseOutput(
-            frame_id="current_head_camera",
-            matrix=target_pose_matrix.tolist(),
-        ),
+        bbox=reference_product_bbox,
+        mask=encode_png_base64(reference_mask),
+        image_path=baseline_path,
+        rotate_matrix=registration.current_from_reference.tolist(),
         task_type=request.task_type,
         location_id=request.location_id,
         inspection_target_id=inspection_target_id,
         baseline_path=baseline_path,
-        region_index=selected_index,
-        image_size=[current_width, current_height],
+        region_index=prepared.selected_region_index,
+        image_size=[reference_width, reference_height],
+        current_image_size=[current_width, current_height],
         reference_bbox=reference_bbox,
         row_index=matched_row.index if matched_row is not None else None,
         row_bbox=list(matched_row.bbox) if matched_row is not None else None,
-        target_bbox_pixels=target_bbox,
         reference_mask=encode_png_base64(reference_mask),
-        visible_mask=encode_png_base64(projected.visible_mask),
-        expected_depth_npy_base64=encode_npy_base64(projected.expected_depth_mm),
-        projected_point_count=projected.projected_point_count,
-        visible_point_count=projected.visible_point_count,
-        registration=RegistrationMetrics(
-            current_from_reference=registration.current_from_reference.tolist(),
-            rmse_mm=registration.rmse_mm,
-            depth_correspondence_count=registration.depth_correspondence_count,
-            inlier_count=registration.inlier_count,
-            inlier_ratio=registration.inlier_ratio,
-            reprojection_rmse_px=registration.rgb.reprojection_rmse_px,
+        reference_mask_source="sam3" if reference_sam3 is not None else "depth_change",
+        reference_sam3_prompt=(
+            reference_sam3.sam_prompt if reference_sam3 is not None else None
         ),
+        reference_sam3_crop_box=(
+            list(reference_sam3.crop_box) if reference_sam3 is not None else None
+        ),
+        reference_sam3_bbox=(
+            list(reference_sam3.selected_bbox)
+            if reference_sam3 is not None
+            else None
+        ),
+        reference_sam3_score=(
+            reference_sam3.selected_score if reference_sam3 is not None else None
+        ),
+        reference_sam3_candidate_count=(
+            reference_sam3.candidate_count if reference_sam3 is not None else None
+        ),
+        registration=registration_metrics(registration),
     )
+
+
+def build_reference_mask_debug_response(
+    request: PlaceReferenceMaskRequest,
+    reference_image: np.ndarray,
+    current_image: np.ndarray,
+    reference_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+    reference_intrinsics: CameraIntrinsics,
+    current_intrinsics: CameraIntrinsics,
+    *,
+    inspection_target_id: str,
+    baseline_path: str,
+) -> PlaceReferenceMaskDebugResponse:
+    prepared = prepare_reference_mask(
+        request,
+        reference_image,
+        current_image,
+        reference_depth_mm,
+        current_depth_mm,
+        reference_intrinsics,
+        current_intrinsics,
+    )
+    reference_height, reference_width = reference_image.shape[:2]
+    current_height, current_width = current_image.shape[:2]
+    sam3 = prepared.sam3
+    return PlaceReferenceMaskDebugResponse(
+        task_type=request.task_type,
+        product_name=request.product_name,
+        location_id=request.location_id,
+        inspection_target_id=inspection_target_id,
+        pose_type=request.pose_type,
+        baseline_path=baseline_path,
+        region_index=prepared.selected_region_index,
+        reference_image_size=[reference_width, reference_height],
+        current_image_size=[current_width, current_height],
+        reference_image_base64=encode_jpeg_base64(reference_image),
+        change_mask_reference=encode_png_base64(
+            prepared.registration.rgb.change_mask_reference
+        ),
+        reference_component_mask=encode_png_base64(prepared.component_mask),
+        reference_bbox=prepared.reference_bbox,
+        row_index=(
+            prepared.matched_row.index if prepared.matched_row is not None else None
+        ),
+        row_bbox=(
+            list(prepared.matched_row.bbox)
+            if prepared.matched_row is not None
+            else None
+        ),
+        reference_mask=encode_png_base64(prepared.reference_mask),
+        reference_mask_source="sam3" if sam3 is not None else "depth_change",
+        reference_sam3_prompt=(sam3.sam_prompt if sam3 is not None else None),
+        reference_sam3_crop_box=(
+            list(sam3.crop_box) if sam3 is not None else None
+        ),
+        reference_sam3_bbox=(
+            list(sam3.selected_bbox) if sam3 is not None else None
+        ),
+        reference_sam3_score=(sam3.selected_score if sam3 is not None else None),
+        reference_sam3_candidate_count=(
+            sam3.candidate_count if sam3 is not None else None
+        ),
+        registration=registration_metrics(prepared.registration),
+    )
+
+
+def locate_reference_mask_debug(
+    request: PlaceReferenceMaskRequest,
+) -> PlaceReferenceMaskDebugResponse:
+    """Generate the Task0 reference mask without requiring a 6D object pose."""
+
+    try:
+        initial_scan = load_initial_scan(request.location_id, request.pose_type)
+    except InitialScanError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"type": "initial_scan_error", "message": str(error)},
+        ) from error
+    runtime_request = request.model_copy(update={"pose_type": initial_scan.pose_type})
+    reference_image = initial_scan.rgb
+    current_image = decode_color_image(
+        request.current_image_base64,
+        "current_image_base64",
+    )
+    reference_depth = initial_scan.depth_mm
+    current_depth = decode_depth_image(
+        request.current_depth_image_base64,
+        "current_depth_image_base64",
+        current_image.shape[:2],
+        is_bigendian=request.depth_is_bigendian,
+        depth_unit_mm=request.depth_unit_mm,
+    )
+    reference_intrinsics, current_intrinsics = resolve_intrinsics(
+        reference_image,
+        current_image,
+    )
+    try:
+        return build_reference_mask_debug_response(
+            runtime_request,
+            reference_image,
+            current_image,
+            reference_depth,
+            current_depth,
+            reference_intrinsics,
+            current_intrinsics,
+            inspection_target_id=initial_scan.inspection_target_id,
+            baseline_path=str(initial_scan.rgb_path),
+        )
+    except HTTPException:
+        raise
+    except ReferenceMaskError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"type": "reference_mask_failed", "message": str(error)},
+        ) from error
+    except (PoseTransferError, ValueError, cv2.error) as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"type": "place_registration_failed", "message": str(error)},
+        ) from error
 
 
 def locate_place_debug(request: PlaceLocateRequest) -> PlaceLocateDebugResponse:
@@ -637,7 +814,6 @@ def locate_place_debug(request: PlaceLocateRequest) -> PlaceLocateDebugResponse:
         depth_unit_mm=request.depth_unit_mm,
     )
     reference_intrinsics, current_intrinsics = resolve_intrinsics(
-        runtime_request,
         reference_image,
         current_image,
     )
@@ -655,6 +831,11 @@ def locate_place_debug(request: PlaceLocateRequest) -> PlaceLocateDebugResponse:
         )
     except HTTPException:
         raise
+    except ReferenceMaskError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"type": "reference_mask_failed", "message": str(error)},
+        ) from error
     except (PoseTransferError, ValueError, cv2.error) as error:
         raise HTTPException(
             status_code=422,
@@ -670,7 +851,7 @@ def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
         bbox=debug.bbox,
         mask=debug.mask,
         image_path=debug.image_path,
-        target_pose=debug.target_pose,
+        rotate_matrix=debug.rotate_matrix,
     )
 
 
@@ -680,6 +861,16 @@ def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
 )
 def locate_place_debug_api(request: PlaceLocateRequest) -> PlaceLocateDebugResponse:
     return locate_place_debug(request)
+
+
+@router.post(
+    "/perception/place/locate/reference-mask/debug",
+    response_model=PlaceReferenceMaskDebugResponse,
+)
+def locate_reference_mask_debug_api(
+    request: PlaceReferenceMaskRequest,
+) -> PlaceReferenceMaskDebugResponse:
+    return locate_reference_mask_debug(request)
 
 
 app.include_router(router)

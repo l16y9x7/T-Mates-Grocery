@@ -143,6 +143,132 @@ function renderShortageBatchFindings(sample) {
   });
 }
 
+function renderReferenceMaskResult(container, result) {
+  container.replaceChildren();
+  if (!result) {
+    const empty = document.createElement("div");
+    empty.className = "shortage-empty";
+    empty.textContent = "尚未生成 reference mask";
+    container.append(empty);
+    return;
+  }
+
+  const gallery = document.createElement("div");
+  gallery.className = "reference-mask-gallery";
+  [
+    {
+      title: "Task0 原图 + Reference Mask",
+      description: "绿色为最终商品 mask；黄色为缺货 bbox；青色为 SAM crop；红色为选中实例。",
+      url: result.reference_overlay_data_url,
+    },
+    {
+      title: "Reference Mask（二值图）",
+      description: `${result.mask_pixels ?? 0} pixels · 与 Task0 RGB / depth 完全同尺寸`,
+      url: result.reference_mask_data_url,
+    },
+  ].forEach((item) => {
+    const figure = document.createElement("figure");
+    const caption = document.createElement("figcaption");
+    const title = document.createElement("strong");
+    title.textContent = item.title;
+    const description = document.createElement("small");
+    description.textContent = item.description;
+    caption.append(title, description);
+    const image = document.createElement("img");
+    image.src = item.url;
+    image.alt = item.title;
+    figure.append(caption, image);
+    gallery.append(figure);
+  });
+
+  const details = document.createElement("pre");
+  details.className = "reference-mask-details";
+  details.textContent = JSON.stringify({
+    product_name: result.product_name,
+    reference_image_size: result.reference_image_size,
+    reference_bbox_xywh: result.reference_bbox,
+    row_bbox_xywh: result.row_bbox,
+    sam3_prompt: result.sam3_prompt,
+    crop_box_xyxy: result.crop_box,
+    selected_bbox_xyxy: result.selected_bbox,
+    selected_score: result.selected_score,
+    candidate_count: result.candidate_count,
+    mask_pixels: result.mask_pixels,
+    elapsed_ms: result.elapsed_ms,
+  }, null, 2);
+  container.append(gallery, details);
+}
+
+async function generateReferenceMask(sample, finding, controls) {
+  controls.button.disabled = true;
+  controls.status.textContent = "正在读取 Task0 原图并运行 SAM3…";
+  controls.status.className = "reference-mask-status";
+  try {
+    const result = await api("/api/qwen-review/shortage-batch/reference-mask", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        group: sample.group,
+        record: sample.record,
+        region_index: finding.region_index,
+      }),
+    });
+    finding.reference_mask_result = result;
+    renderReferenceMaskResult(controls.result, result);
+    controls.status.textContent = `生成完成 · ${result.mask_pixels} pixels · ${formatMilliseconds(result.elapsed_ms)}`;
+    controls.status.className = "reference-mask-status success";
+  } catch (error) {
+    controls.status.textContent = error.message;
+    controls.status.className = "reference-mask-status error";
+  } finally {
+    controls.button.disabled = false;
+  }
+}
+
+function renderShortageReferenceMasks(sample) {
+  const container = document.querySelector("#shortageReferenceMaskList");
+  container.replaceChildren();
+  const findings = Array.isArray(sample?.findings) ? sample.findings : [];
+  if (!findings.length) {
+    const empty = document.createElement("div");
+    empty.className = "shortage-empty";
+    empty.textContent = "该 record 没有可用于生成 reference mask 的缺货项";
+    container.append(empty);
+    return;
+  }
+  findings.forEach((finding) => {
+    const card = document.createElement("article");
+    card.className = "reference-mask-card";
+    const header = document.createElement("header");
+    const title = document.createElement("h4");
+    title.textContent = `REGION ${finding.region_index} · ${finding.product_name || "未识别商品"}`;
+    const subtitle = document.createElement("p");
+    subtitle.textContent = `reference bbox ${formatBBox(finding.bbox)}`;
+    header.append(title, subtitle);
+
+    const actions = document.createElement("div");
+    actions.className = "reference-mask-actions";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "生成 Reference Mask";
+    button.disabled = !finding.product_name;
+    const maskStatus = document.createElement("span");
+    maskStatus.className = "reference-mask-status";
+    maskStatus.textContent = finding.product_name
+      ? "使用上方该项已有的完整输入生成，不重新执行 shortage 对比。"
+      : "该项尚未识别商品名称，无法选择 SAM3 Prompt。";
+    actions.append(button, maskStatus);
+
+    const result = document.createElement("div");
+    result.className = "reference-mask-result";
+    renderReferenceMaskResult(result, finding.reference_mask_result);
+    const controls = {button, status: maskStatus, result};
+    button.addEventListener("click", () => generateReferenceMask(sample, finding, controls));
+    card.append(header, actions, result);
+    container.append(card);
+  });
+}
+
 function renderQwenImages(finding) {
   const gallery = document.createElement("div");
   gallery.className = "shortage-qwen-image-grid";
@@ -358,6 +484,7 @@ function renderShortageBatchRecord() {
     renderInitialScan();
   }
   renderShortageBatchFindings(sample);
+  renderShortageReferenceMasks(sample);
   renderShortageBatchPrompts(sample);
   const errorMessage = sample.recognition_error?.message || sample.error;
   const statusKind = ["success", "partial", "no_anomaly"].includes(sample.status)

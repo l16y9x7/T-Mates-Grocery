@@ -85,6 +85,25 @@ figure.unavailable .image-unavailable { display: grid; }
 .shortage-finding > img { display: block; width: 100%; height: 210px; object-fit: contain; background: #020609; }
 .shortage-empty { grid-column: 1 / -1; border: 1px dashed #475569; border-radius: 10px; padding: 18px; color: var(--muted); text-align: center; }
 
+.shortage-reference-masks { margin-top: 18px; border-top: 1px solid #28515a; padding-top: 16px; }
+.shortage-reference-masks h3 { margin: 2px 0 0; color: #99f6e4; font-size: 18px; }
+.shortage-reference-masks .section-heading > small { max-width: 700px; color: var(--muted); text-align: right; }
+.shortage-reference-mask-list { display: grid; gap: 16px; }
+.reference-mask-card { border: 1px solid #28515a; border-radius: 11px; background: #08151a; overflow: hidden; }
+.reference-mask-card > header { display: block; margin: 0; padding: 12px 14px; background: #0b2227; }
+.reference-mask-card h4 { margin: 0 0 5px; color: #99f6e4; font-size: 15px; }
+.reference-mask-card header p { font: 12px/1.5 "Cascadia Code", Consolas, monospace; }
+.reference-mask-actions { display: grid; grid-template-columns: minmax(220px, 340px) 1fr; gap: 14px; align-items: center; padding: 14px; }
+.reference-mask-actions button { border-color: #0f766e; background: linear-gradient(135deg, #115e59, #0f766e); }
+.reference-mask-status { color: var(--warning); font-size: 12px; }
+.reference-mask-status.success { color: var(--good); }
+.reference-mask-status.error { color: var(--bad); }
+.reference-mask-result { padding: 0 14px 14px; }
+.reference-mask-gallery { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.reference-mask-gallery figure { border-color: #28515a; }
+.reference-mask-gallery img { display: block; width: 100%; height: auto; min-height: 280px; max-height: 720px; object-fit: contain; background: #020609; }
+.reference-mask-details { margin: 14px 0 0; max-height: 360px; color: #b8f7df; font-size: 12px; }
+
 .shortage-batch-prompts { margin-top: 18px; border-top: 1px solid #4c2c39; padding-top: 16px; }
 .shortage-batch-prompts h3 { margin: 2px 0 0; color: #fecdd3; font-size: 18px; }
 .shortage-batch-prompts .section-heading > small { max-width: 620px; color: var(--muted); text-align: right; }
@@ -119,17 +138,18 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-rad
   .shortage-batch-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .shortage-batch-metrics { grid-column: 1 / -1; }
   .shortage-retry-actions { grid-template-columns: 150px 1fr; }
+  .reference-mask-actions { grid-template-columns: minmax(220px, 340px) 1fr; }
   .shortage-retry-status { grid-column: 1 / -1; }
   header { align-items: start; flex-direction: column; }
 }
 
 @media (max-width: 680px) {
   main { padding: 15px; }
-  .source-grid, .initial-scan-metrics, .shortage-batch-toolbar, .shortage-batch-metrics { grid-template-columns: 1fr; }
+  .source-grid, .initial-scan-metrics, .shortage-batch-toolbar, .shortage-batch-metrics, .reference-mask-actions, .reference-mask-gallery { grid-template-columns: 1fr; }
   .shortage-row-detection, .shortage-qwen-image-grid figure.primary-qwen-input { grid-column: auto; }
   .shortage-retry-actions { grid-template-columns: 1fr; }
   .shortage-retry-status { grid-column: auto; }
   nav { flex-wrap: wrap; }
   .section-heading { flex-direction: column; }
-  .status, .shortage-batch-prompts .section-heading > small { text-align: left; }
+  .status, .shortage-batch-prompts .section-heading > small, .shortage-reference-masks .section-heading > small { text-align: left; }
 }

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspection · Shortage Batch Review</title>
-    <link rel="stylesheet" href="/static/qwen_review.css?v=8" />
+    <link rel="stylesheet" href="/static/qwen_review.css?v=9" />
   </head>
   <body>
     <main>
@@ -125,6 +125,16 @@
           </figure>
         </div>
         <div id="shortageBatchFindingGrid" class="shortage-batch-finding-grid"></div>
+        <section class="shortage-reference-masks" aria-labelledby="shortageReferenceMaskTitle">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">TASK0 · SAM3 · REFERENCE MASK</p>
+              <h3 id="shortageReferenceMaskTitle">生成原图商品 Reference Mask</h3>
+            </div>
+            <small>直接复用本页已识别的商品名、完整图坐标系 bbox、region mask、货位与视角；无需重复上传或重新执行缺货对比。</small>
+          </div>
+          <div id="shortageReferenceMaskList" class="shortage-reference-mask-list"></div>
+        </section>
         <section class="shortage-batch-prompts" aria-labelledby="shortageBatchPromptTitle">
           <div class="section-heading">
             <div>
@@ -137,6 +147,6 @@
         </section>
       </section>
     </main>
-    <script src="/static/qwen_review.js?v=13"></script>
+    <script src="/static/qwen_review.js?v=14"></script>
   </body>
 </html>
