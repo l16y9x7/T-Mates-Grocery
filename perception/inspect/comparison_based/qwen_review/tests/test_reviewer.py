@@ -146,6 +146,9 @@ class QwenReviewerTest(unittest.TestCase):
         )
 
         self.assertEqual(len(result.findings), 1)
+        self.assertEqual(len(result.prompts), 1)
+        self.assertIn("=== SYSTEM ===", result.prompts[0])
+        self.assertIn("CANDIDATE 1:", result.prompts[0])
         self.assertEqual(result.findings[0].shortage_product_name, "绿色奥利奥")
         candidate_call = session.calls[0]
         self.assertEqual(candidate_call[0], "GET")
@@ -680,6 +683,9 @@ class QwenReviewerTest(unittest.TestCase):
                 debug / "result.json",
                 debug / "region_01" / "bbox_expanded.jpg",
                 debug / "region_01" / "prompt.txt",
+                debug / "region_01" / "qwen_image_01.jpg",
+                debug / "region_01" / "qwen_image_02.jpg",
+                debug / "region_01" / "qwen_image_03.jpg",
                 debug / "region_01" / "qwen_raw.txt",
                 debug / "region_01" / "parsed_result.json",
             }

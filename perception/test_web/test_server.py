@@ -114,6 +114,15 @@ class PromptMappingTest(unittest.TestCase):
         self.assertIn('id="shortageBatchGroupSelect"', review_html)
         self.assertIn('id="shortageBatchBaselineImage"', review_html)
         self.assertIn('id="shortageBatchRowImage"', review_html)
+        self.assertIn('id="shortageBatchPromptList"', review_html)
+        self.assertNotIn("缺货检测 → 商品身份完整链路", review_html)
+        self.assertNotIn('id="taskSelect"', review_html)
+        self.assertNotIn('id="constraintTitle"', review_html)
+        self.assertNotIn('id="modelInputs"', review_html)
+        self.assertIn("shortage-qwen-image-grid", review_js)
+        self.assertIn("使用修改后的 Prompt 重试 Qwen", review_js)
+        self.assertIn("Qwen 模型原始返回", review_js)
+        self.assertNotIn("/api/qwen-review/samples", review_js)
         self.assertIn("/api/qwen-review/shortage-batch", review_js)
 
         with tempfile.TemporaryDirectory() as directory:
@@ -130,6 +139,56 @@ class PromptMappingTest(unittest.TestCase):
             overlay_path.write_bytes(b"overlay")
             mask_path.write_bytes(b"mask")
             row_detection_path.write_bytes(b"rows")
+            debug_directory = root / "qwen_debug" / "sample_SHORTAGE_debug"
+            (debug_directory / "region_01").mkdir(parents=True)
+            (debug_directory / "request.json").write_text(
+                json.dumps(
+                    {
+                        "task_type": "SHORTAGE",
+                        "location_id": "H1_B_L1_C01",
+                        "pose_type": "SHELF_VIEW_UPPER",
+                        "bboxes": [[10, 20, 30, 40]],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (debug_directory / "region_01" / "prompt.txt").write_text(
+                "=== SYSTEM ===\ntest prompt",
+                encoding="utf-8",
+            )
+            (debug_directory / "region_01" / "qwen_image_01.jpg").write_bytes(
+                b"reference"
+            )
+            (debug_directory / "region_01" / "qwen_raw.txt").write_text(
+                '{"shortage_product_name":"NFC桔汁","confidence":0.9}',
+                encoding="utf-8",
+            )
+            (debug_directory / "region_01" / "parsed_result.json").write_text(
+                json.dumps(
+                    {
+                        "accepted": True,
+                        "shortage_product_name": "NFC桔汁",
+                        "confidence": 0.9,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (debug_directory / "candidates.json").write_text(
+                json.dumps(
+                    {
+                        "candidates": [
+                            {
+                                "sku_id": "SKU_001",
+                                "name": "NFC桔汁",
+                                "row_numbers": [1],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
             scan_root = root / "task0"
             baseline_path = scan_root / group / "rgb.jpg"
             baseline_path.parent.mkdir(parents=True)
@@ -146,6 +205,8 @@ class PromptMappingTest(unittest.TestCase):
                                 "group": group,
                                 "record": record,
                                 "status": "success",
+                                "location_id": "H1_B_L1_C01",
+                                "pose_type": "SHELF_VIEW_UPPER",
                                 "source_rgb": f"{group}/{record}/rgb.jpg",
                                 "findings": [
                                     {
@@ -192,6 +253,25 @@ class PromptMappingTest(unittest.TestCase):
             "可口可乐罐装",
         )
         self.assertIn("region_01_mask.png", sample["findings"][0]["mask_url"])
+        self.assertEqual(
+            sample["findings"][0]["qwen_prompt"],
+            "=== SYSTEM ===\ntest prompt",
+        )
+        qwen_images = sample["findings"][0]["qwen_images"]
+        self.assertEqual(len(qwen_images), 2)
+        self.assertIn("qwen_image_01.jpg", qwen_images[0]["url"])
+        self.assertEqual(qwen_images[1]["label"], "NFC桔汁")
+        self.assertIn("sku-image/SKU_001", qwen_images[1]["url"])
+        self.assertIn(
+            '"shortage_product_name":"NFC桔汁"',
+            sample["findings"][0]["qwen_original_raw_output"],
+        )
+        self.assertEqual(
+            sample["findings"][0]["qwen_original_parsed_result"][
+                "shortage_product_name"
+            ],
+            "NFC桔汁",
+        )
         self.assertTrue(sample["overlay_url"])
         self.assertIn("row_detection.jpg", sample["row_detection_url"])
         self.assertIn(
@@ -199,6 +279,66 @@ class PromptMappingTest(unittest.TestCase):
             sample["baseline_rgb_url"],
         )
         self.assertEqual(Path(file_response.path), mask_path)
+
+    def test_shortage_batch_qwen_retry_uses_edited_prompt_and_returns_raw(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image_1 = root / "image_01.jpg"
+            image_2 = root / "image_02.jpg"
+            image_1.write_bytes(b"reference")
+            image_2.write_bytes(b"candidate")
+            retry_path = root / "retry.json"
+            prompt = (
+                "=== SYSTEM ===\nmodified system\n\n"
+                "=== USER ===\nlook here\n[IMAGE 1]\nthen candidate\n[IMAGE 2]\n"
+            )
+            raw_output = (
+                '{"shortage_product_name":"NFC桔汁","confidence":0.93}'
+            )
+            captured: dict = {}
+
+            def fake_qwen(system_prompt, user_content, *, temperature):
+                captured["system_prompt"] = system_prompt
+                captured["user_content"] = user_content
+                captured["temperature"] = temperature
+                return raw_output
+
+            with (
+                patch.object(server, "shortage_batch_result", return_value={}),
+                patch.object(server, "shortage_debug_region", return_value={}),
+                patch.object(
+                    server,
+                    "shortage_qwen_image_paths",
+                    return_value=[image_1, image_2],
+                ),
+                patch.object(server, "call_qwen_messages", side_effect=fake_qwen),
+                patch.object(
+                    server,
+                    "shortage_retry_result_path",
+                    return_value=retry_path,
+                ),
+            ):
+                result = server.retry_shortage_batch_qwen(
+                    server.ShortageBatchQwenRetryRequest(
+                        group="H1_B_L_INSPECT_LOWER",
+                        record="record_20260816_010203_123456",
+                        region_index=1,
+                        prompt=prompt,
+                        temperature=0.2,
+                    )
+                )
+
+            saved = json.loads(retry_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(captured["system_prompt"], "modified system")
+        self.assertEqual(captured["temperature"], 0.2)
+        self.assertEqual(
+            [item["type"] for item in captured["user_content"]],
+            ["text", "image_url", "text", "image_url"],
+        )
+        self.assertEqual(result["raw_output"], raw_output)
+        self.assertEqual(result["parsed_result"]["shortage_product_name"], "NFC桔汁")
+        self.assertEqual(saved["prompt_used"], prompt.strip())
 
     def test_sorting_batch_gallery_lists_and_serves_rgb_depth_and_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

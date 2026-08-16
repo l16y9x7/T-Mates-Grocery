@@ -39,6 +39,16 @@ DEPTH_CHANGE_THRESHOLD_MM = 60.0
 MIN_DEPTH_VALID_PIXELS = 50
 MIN_DEPTH_VALID_RATIO = 0.02
 MIN_DEPTH_FARTHER_RATIO = 0.20
+MIN_DEPTH_PROMOTION_AREA_RATIO = 0.005
+MAX_DEPTH_PROMOTION_AREA_RATIO = 0.20
+MIN_DEPTH_PROMOTION_RGB_PIXELS = 10
+MIN_DEPTH_PROMOTION_RGB_RATIO = 0.05
+MIN_DEPTH_PROMOTION_NEAR_RATIO = 0.15
+MIN_DEPTH_PROMOTION_ROW_OVERLAP = 0.80
+DEPTH_PROMOTION_BORDER_RATIO = 0.015
+DEPTH_PROMOTION_RGB_DILATION_RATIO = 0.011
+DEPTH_PROMOTION_MAX_ASPECT_RATIO = 5.0
+DEPTH_PROMOTION_DUPLICATE_IOU = 0.20
 
 
 def load_inspect_api() -> ModuleType:
@@ -266,6 +276,149 @@ def depth_support_for_finding(
     }
 
 
+def _bbox_iou(first: list[int], second: list[int]) -> float:
+    ax, ay, aw, ah = (int(value) for value in first)
+    bx, by, bw, bh = (int(value) for value in second)
+    intersection_width = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    intersection_height = max(0, min(ay + ah, by + bh) - max(ay, by))
+    intersection = intersection_width * intersection_height
+    union = aw * ah + bw * bh - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _maximum_row_overlap_ratio(
+    bbox: list[int],
+    row_bboxes: list[list[int]],
+) -> float:
+    _, y, _, height = bbox
+    if height <= 0:
+        return 0.0
+    bottom = y + height
+    return max(
+        (
+            max(0, min(bottom, row_y + row_height) - max(y, row_y)) / height
+            for _, row_y, _, row_height in row_bboxes
+        ),
+        default=0.0,
+    )
+
+
+def promote_depth_components(
+    photometric_mask: np.ndarray,
+    depth_change_mask: np.ndarray,
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+    row_bboxes: list[list[int]],
+    existing_findings: list[Any],
+) -> list[tuple[Any, dict[str, Any], np.ndarray]]:
+    """Promote large depth holes that retain nearby fragmented RGB evidence."""
+
+    height, width = depth_change_mask.shape
+    image_area = height * width
+    minimum_area = max(50, round(image_area * MIN_DEPTH_PROMOTION_AREA_RATIO))
+    maximum_area = max(minimum_area, round(image_area * MAX_DEPTH_PROMOTION_AREA_RATIO))
+    border_clearance = max(
+        2,
+        round(min(height, width) * DEPTH_PROMOTION_BORDER_RATIO),
+    )
+    dilation_radius = max(
+        2,
+        round(min(height, width) * DEPTH_PROMOTION_RGB_DILATION_RATIO),
+    )
+    kernel_size = dilation_radius * 2 + 1
+    rgb_binary = np.asarray(photometric_mask) > 0
+    rgb_near = cv2.dilate(
+        rgb_binary.astype(np.uint8),
+        cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (kernel_size, kernel_size),
+        ),
+    ) > 0
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (depth_change_mask > 0).astype(np.uint8),
+        8,
+    )
+    promoted: list[tuple[Any, dict[str, Any], np.ndarray]] = []
+    occupied = [list(finding.bbox) for finding in existing_findings]
+    delta = current_depth_mm - baseline_depth_mm
+    for label in range(1, component_count):
+        x, y, box_width, box_height, area = (
+            int(value) for value in stats[label]
+        )
+        if not minimum_area <= area <= maximum_area:
+            continue
+        if min(
+            x,
+            y,
+            width - (x + box_width),
+            height - (y + box_height),
+        ) < border_clearance:
+            continue
+        aspect_ratio = max(
+            box_width / max(1, box_height),
+            box_height / max(1, box_width),
+        )
+        if aspect_ratio > DEPTH_PROMOTION_MAX_ASPECT_RATIO:
+            continue
+        bbox = [x, y, box_width, box_height]
+        row_overlap = _maximum_row_overlap_ratio(bbox, row_bboxes)
+        if row_overlap < MIN_DEPTH_PROMOTION_ROW_OVERLAP:
+            continue
+        component = labels == label
+        rgb_pixels = int(np.count_nonzero(component & rgb_binary))
+        required_rgb_pixels = max(
+            MIN_DEPTH_PROMOTION_RGB_PIXELS,
+            round(area * MIN_DEPTH_PROMOTION_RGB_RATIO),
+        )
+        nearby_rgb_pixels = int(np.count_nonzero(component & rgb_near))
+        nearby_rgb_ratio = nearby_rgb_pixels / area
+        if (
+            rgb_pixels < required_rgb_pixels
+            or nearby_rgb_ratio < MIN_DEPTH_PROMOTION_NEAR_RATIO
+        ):
+            continue
+        if any(
+            _bbox_iou(bbox, existing_bbox) >= DEPTH_PROMOTION_DUPLICATE_IOU
+            for existing_bbox in occupied
+        ):
+            continue
+        component_mask = np.where(component, 255, 0).astype(np.uint8)
+        component_deltas = delta[component]
+        support = {
+            "applicable": True,
+            "accepted": True,
+            "promoted": True,
+            "reason": "large depth hole with nearby RGB difference fragments",
+            "changed_pixels": rgb_pixels,
+            "valid_pixels": area,
+            "required_valid_pixels": minimum_area,
+            "farther_pixels": area,
+            "farther_ratio": 1.0,
+            "median_delta_mm": (
+                round(float(np.median(component_deltas)), 1)
+                if component_deltas.size
+                else None
+            ),
+            "threshold_mm": DEPTH_CHANGE_THRESHOLD_MM,
+            "depth_component_pixels": area,
+            "required_depth_component_pixels": minimum_area,
+            "rgb_evidence_pixels": rgb_pixels,
+            "required_rgb_evidence_pixels": required_rgb_pixels,
+            "nearby_rgb_evidence_pixels": nearby_rgb_pixels,
+            "nearby_rgb_evidence_ratio": round(nearby_rgb_ratio, 4),
+            "row_overlap_ratio": round(row_overlap, 4),
+        }
+        finding = INSPECT_API.Finding(
+            bbox=bbox,
+            center=[x + box_width // 2, y + box_height // 2],
+            sources=["depth_rgb_fusion"],
+            votes=1,
+        )
+        promoted.append((finding, support, component_mask))
+        occupied.append(bbox)
+    return promoted
+
+
 def filter_execution_with_depth(
     execution: Any,
     baseline_depth_mm: np.ndarray,
@@ -320,17 +473,45 @@ def filter_execution_with_depth(
         for finding in execution.response.findings
     ]
     kept_pairs = [
-        (finding, support)
+        (
+            finding,
+            support,
+            clipped_region_mask(execution.review_mask, finding.bbox),
+        )
         for finding, support in zip(execution.response.findings, supports)
         if support["accepted"]
     ]
-    kept_findings = [finding for finding, _ in kept_pairs]
-    kept_supports = [support for _, support in kept_pairs]
+    original_kept_count = len(kept_pairs)
+    promotion_error: str | None = None
+    row_bboxes: list[list[int]] = []
+    try:
+        row_detection = INSPECT_API.detect_rows(
+            execution.review_image,
+            INSPECT_API.RowDetectionConfig(
+                target_size=None,
+                pose_type=execution.response.pose_type,
+            ),
+        )
+        row_bboxes = [list(row.bbox) for row in row_detection.rows]
+    except (ValueError, cv2.error) as error:
+        promotion_error = f"{type(error).__name__}: {error}"
+    promotions = promote_depth_components(
+        execution.review_mask,
+        depth_change_mask,
+        baseline_aligned,
+        current_aligned,
+        row_bboxes,
+        [finding for finding, _, _ in kept_pairs],
+    )
+    kept_pairs.extend(promotions)
+    kept_pairs.sort(key=lambda pair: (pair[0].bbox[1], pair[0].bbox[0]))
+    kept_findings = [finding for finding, _, _ in kept_pairs]
+    kept_supports = [support for _, support, _ in kept_pairs]
     filtered_mask = np.zeros(execution.review_mask.shape, dtype=np.uint8)
-    for finding in kept_findings:
+    for _, _, region_mask in kept_pairs:
         filtered_mask = cv2.bitwise_or(
             filtered_mask,
-            clipped_region_mask(execution.review_mask, finding.bbox),
+            region_mask,
         )
     response = execution.response.model_copy(
         update={
@@ -350,9 +531,14 @@ def filter_execution_with_depth(
             "applied": True,
             "input_findings": len(supports),
             "kept_findings": len(kept_findings),
-            "rejected_findings": len(supports) - len(kept_findings),
+            "rejected_findings": len(supports) - original_kept_count,
+            "promoted_findings": len(promotions),
+            "promotion_row_count": len(row_bboxes),
+            "promotion_error": promotion_error,
             "depth_change_threshold_mm": DEPTH_CHANGE_THRESHOLD_MM,
             "minimum_farther_ratio": MIN_DEPTH_FARTHER_RATIO,
+            "minimum_promotion_area_ratio": MIN_DEPTH_PROMOTION_AREA_RATIO,
+            "minimum_promotion_rgb_ratio": MIN_DEPTH_PROMOTION_RGB_RATIO,
         },
         depth_change_mask,
     )
@@ -460,6 +646,7 @@ def run_record(
         )
         response = execution.response
         reviewed_by_region: dict[int, Any] = {}
+        prompt_by_region: dict[int, str] = {}
         recognition_error: dict[str, str] | None = None
         if response.findings and not detection_only:
             try:
@@ -473,6 +660,10 @@ def run_record(
                 )
                 reviewed_by_region = {
                     finding.region_index: finding for finding in review.findings
+                }
+                prompt_by_region = {
+                    region_index: prompt
+                    for region_index, prompt in enumerate(review.prompts, start=1)
                 }
             except INSPECT_API.QwenReviewError as error:
                 recognition_error = {
@@ -507,6 +698,7 @@ def run_record(
                     "mask_pixels": int(np.count_nonzero(region_mask)),
                     "depth_support": depth_support,
                     "product_name": product_name,
+                    "qwen_prompt": prompt_by_region.get(region_index),
                     "confidence": (
                         reviewed.confidence if reviewed is not None else None
                     ),

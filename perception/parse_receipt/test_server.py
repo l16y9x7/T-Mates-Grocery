@@ -14,6 +14,7 @@ from urllib.error import URLError
 from PIL import Image
 from starlette.requests import Request as StarletteRequest
 
+import local_parse
 import server
 
 
@@ -118,6 +119,42 @@ class ReceiptServerTests(unittest.TestCase):
         self.assertEqual(
             items, [{"name": "NFC桔汁", "specification": "500ml"}]
         )
+
+    def test_recognize_frame_raw_returns_unmodified_model_content(self) -> None:
+        model_content = (
+            '  [{"name":"NFC桔汁","specification":"500ml"}]\n'
+        )
+        qwen = {
+            "choices": [{"message": {"content": model_content}}]
+        }
+        with patch("server._request_qwen", return_value=qwen):
+            raw_output = server.recognize_frame_raw(jpeg_bytes(), settings())
+        self.assertEqual(raw_output, model_content)
+
+    def test_local_parse_main_displays_raw_and_parsed_qwen_output(self) -> None:
+        result = local_parse.LocalParseResult(
+            qwen_raw_output=(
+                '[{"name":"NFC桔汁","specification":"500ml"},'
+                '{"name":"蒙牛纯牛奶","specification":"250ml"}]'
+            ),
+            qwen_parsed_items=[
+                {"name": "NFC桔汁", "specification": "500ml"},
+                {"name": "蒙牛纯牛奶", "specification": "250ml"},
+            ],
+            product_names=["NFC桔汁", "蒙牛纯牛奶"],
+        )
+        output = io.StringIO()
+        with (
+            patch("local_parse.parse_image_file_detailed", return_value=result),
+            patch("sys.stdout", output),
+        ):
+            exit_code = local_parse.main(["receipt.jpg"])
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(output.getvalue())
+        self.assertEqual(payload["qwen_raw_output"], result.qwen_raw_output)
+        self.assertEqual(payload["qwen_parsed_items"], result.qwen_parsed_items)
+        self.assertEqual(payload["product_names"], result.product_names)
 
     def test_qwen_schema_allows_only_name_and_specification(self) -> None:
         self.assertEqual(

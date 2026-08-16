@@ -170,6 +170,86 @@ class ShortageBatchTest(unittest.TestCase):
         self.assertEqual(supports, [])
         self.assertEqual(summary["rejected_findings"], 1)
 
+    def test_depth_filter_promotes_large_hole_with_rgb_fragments(self) -> None:
+        image = np.full((72, 128, 3), 80, dtype=np.uint8)
+        photometric_mask = np.zeros((72, 128), dtype=np.uint8)
+        photometric_mask[42:50, 36:54] = 255
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H1_B_L1_C01",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=False,
+            image_size=[128, 72],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=photometric_mask,
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        baseline_depth = np.full((72, 128), 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[35:55, 30:60] = 1100
+        rows = SimpleNamespace(
+            rows=[SimpleNamespace(bbox=(0, 0, 128, 72))],
+        )
+
+        with patch.object(batch.INSPECT_API, "detect_rows", return_value=rows):
+            filtered, supports, summary, _ = batch.filter_execution_with_depth(
+                execution,
+                baseline_depth,
+                current_depth,
+            )
+
+        self.assertEqual(len(filtered.response.findings), 1)
+        self.assertEqual(filtered.response.findings[0].bbox, [30, 35, 30, 20])
+        self.assertEqual(
+            filtered.response.findings[0].sources,
+            ["depth_rgb_fusion"],
+        )
+        self.assertEqual(int(np.count_nonzero(filtered.review_mask)), 600)
+        self.assertTrue(supports[0]["promoted"])
+        self.assertEqual(summary["promoted_findings"], 1)
+
+    def test_depth_filter_does_not_promote_depth_without_rgb_evidence(self) -> None:
+        image = np.full((72, 128, 3), 80, dtype=np.uint8)
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H1_B_L1_C01",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=False,
+            image_size=[128, 72],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=np.zeros((72, 128), dtype=np.uint8),
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        baseline_depth = np.full((72, 128), 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[35:55, 30:60] = 1100
+        rows = SimpleNamespace(
+            rows=[SimpleNamespace(bbox=(0, 0, 128, 72))],
+        )
+
+        with patch.object(batch.INSPECT_API, "detect_rows", return_value=rows):
+            filtered, supports, summary, _ = batch.filter_execution_with_depth(
+                execution,
+                baseline_depth,
+                current_depth,
+            )
+
+        self.assertEqual(filtered.response.findings, [])
+        self.assertEqual(supports, [])
+        self.assertEqual(summary["promoted_findings"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

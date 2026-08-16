@@ -79,6 +79,11 @@ SHORTAGE_BATCH_ROOT = DATA_ROOT / "2026-08-16-self-collect-shortage-grouped"
 SHORTAGE_BATCH_SUMMARY_PATH = (
     SHORTAGE_BATCH_ROOT / "shortage_inspection_batch_results.json"
 )
+SHORTAGE_DEBUG_INDEX_CACHE_KEY: tuple[str, int] | None = None
+SHORTAGE_DEBUG_INDEX_CACHE: dict[
+    tuple[str, str, tuple[tuple[int, ...], ...]],
+    tuple[dict[str, object], ...],
+] = {}
 INITIAL_SCAN_DIRECTORY_PATTERN = re.compile(
     r"^(?P<target>H[12]_[FB]_[LR]_INSPECT)_(?P<pose>UPPER|LOWER)$"
 )
@@ -124,6 +129,14 @@ class SavedQwenInferRequest(BaseModel):
     pair_number: int = Field(ge=1)
     region_index: int = Field(ge=1)
     stage: str | None = None
+    prompt: str
+    temperature: float = Field(default=0.0, ge=0, le=2)
+
+
+class ShortageBatchQwenRetryRequest(BaseModel):
+    group: str
+    record: str
+    region_index: int = Field(ge=1)
     prompt: str
     temperature: float = Field(default=0.0, ge=0, le=2)
 
@@ -357,6 +370,327 @@ def shortage_batch_baseline_url(group: object) -> str | None:
     )
 
 
+def shortage_prompt_key(
+    location_id: object,
+    pose_type: object,
+    bboxes: object,
+) -> tuple[str, str, tuple[tuple[int, ...], ...]] | None:
+    if not isinstance(location_id, str) or not isinstance(pose_type, str):
+        return None
+    if not isinstance(bboxes, list):
+        return None
+    try:
+        normalized_bboxes = tuple(
+            tuple(int(value) for value in bbox)
+            for bbox in bboxes
+            if isinstance(bbox, list)
+        )
+    except (TypeError, ValueError):
+        return None
+    if len(normalized_bboxes) != len(bboxes):
+        return None
+    return location_id, pose_type, normalized_bboxes
+
+
+def load_shortage_debug_index() -> dict[
+    tuple[str, str, tuple[tuple[int, ...], ...]],
+    tuple[dict[str, object], ...],
+]:
+    """Index saved Qwen prompts and ordered image inputs for batch review."""
+
+    debug_root = SHORTAGE_BATCH_ROOT / "qwen_debug"
+    if not debug_root.is_dir():
+        return {}
+    global SHORTAGE_DEBUG_INDEX_CACHE_KEY, SHORTAGE_DEBUG_INDEX_CACHE
+    cache_key = (str(debug_root.resolve()), debug_root.stat().st_mtime_ns)
+    if cache_key == SHORTAGE_DEBUG_INDEX_CACHE_KEY:
+        return SHORTAGE_DEBUG_INDEX_CACHE
+    debug_index: dict[
+        tuple[str, str, tuple[tuple[int, ...], ...]],
+        tuple[dict[str, object], ...],
+    ] = {}
+    for request_path in sorted(debug_root.glob("*/request.json")):
+        try:
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if request.get("task_type") != "SHORTAGE":
+            continue
+        bboxes = request.get("bboxes")
+        key = shortage_prompt_key(
+            request.get("location_id"),
+            request.get("pose_type"),
+            bboxes,
+        )
+        if key is None or not isinstance(bboxes, list):
+            continue
+        try:
+            candidate_payload = json.loads(
+                (request_path.parent / "candidates.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+        except (OSError, json.JSONDecodeError):
+            candidate_payload = {}
+        all_candidates = candidate_payload.get("candidates", [])
+        if not isinstance(all_candidates, list):
+            all_candidates = []
+        row_constraints = request.get("row_constraints", [])
+        if not isinstance(row_constraints, list):
+            row_constraints = []
+        regions: list[dict[str, object]] = []
+        for region_index in range(1, len(bboxes) + 1):
+            region_directory = request_path.parent / f"region_{region_index:02d}"
+            prompt_path = region_directory / "prompt.txt"
+            try:
+                prompt = prompt_path.read_text(encoding="utf-8")
+            except OSError:
+                prompt = None
+            try:
+                raw_output = (region_directory / "qwen_raw.txt").read_text(
+                    encoding="utf-8"
+                )
+            except OSError:
+                raw_output = None
+            try:
+                parsed_result = json.loads(
+                    (region_directory / "parsed_result.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+            except (OSError, json.JSONDecodeError):
+                parsed_result = None
+            constraint = (
+                row_constraints[region_index - 1]
+                if region_index <= len(row_constraints)
+                and isinstance(row_constraints[region_index - 1], dict)
+                else {}
+            )
+            row_index = constraint.get("row_index")
+            candidates = [
+                dict(candidate)
+                for candidate in all_candidates
+                if isinstance(candidate, dict)
+                and (
+                    not isinstance(row_index, int)
+                    or row_index in candidate.get("row_numbers", [])
+                )
+            ]
+            exact_images = sorted(region_directory.glob("qwen_image_*.*"))
+            regions.append(
+                {
+                    "prompt": prompt,
+                    "raw_output": raw_output,
+                    "parsed_result": parsed_result,
+                    "region_image": (
+                        exact_images[0]
+                        if exact_images
+                        else region_directory / "bbox_expanded.jpg"
+                    ),
+                    "candidate_images": exact_images[1:],
+                    "candidates": candidates,
+                }
+            )
+        debug_index[key] = tuple(regions)
+    SHORTAGE_DEBUG_INDEX_CACHE_KEY = cache_key
+    SHORTAGE_DEBUG_INDEX_CACHE = debug_index
+    return debug_index
+
+
+def shortage_sku_image_url(sku_id: object) -> str | None:
+    if not isinstance(sku_id, str) or not sku_id.strip():
+        return None
+    return (
+        "/api/qwen-review/shortage-batch/sku-image/"
+        f"{quote(sku_id.strip(), safe='')}"
+        f"?v={SKU_CATALOG_PATH.stat().st_mtime_ns}"
+    )
+
+
+def resolve_shortage_sku_image(sku_id: str) -> Path:
+    catalog = load_json_file(SKU_CATALOG_PATH, "SKU 商品目录")
+    products = catalog.get("products", [])
+    product = next(
+        (
+            item
+            for item in products
+            if isinstance(item, dict)
+            and str(item.get("sku_id", "")).upper() == sku_id.upper()
+        ),
+        None,
+    )
+    images = product.get("images", []) if isinstance(product, dict) else []
+    if not images or not isinstance(images[0], str):
+        raise HTTPException(status_code=404, detail="SKU 候选图片不存在")
+    logical_path = PureWindowsPath(images[0].replace("/", "\\"))
+    if logical_path.is_absolute() or ".." in logical_path.parts:
+        raise HTTPException(status_code=500, detail="SKU 候选图片路径不合法")
+    relative_parts = list(logical_path.parts)
+    if not relative_parts or relative_parts[0].lower() != "images":
+        raise HTTPException(status_code=500, detail="SKU 候选图片路径不属于 images")
+    filename = Path(*relative_parts[1:]).with_suffix(".jpg")
+    images_root = (SKU_CATALOG_PATH.parent / "images_new").resolve()
+    image_path = (images_root / filename).resolve()
+    if not image_path.is_relative_to(images_root) or not image_path.is_file():
+        raise HTTPException(status_code=404, detail="SKU 候选图片文件不存在")
+    return image_path
+
+
+def shortage_qwen_images(
+    debug_region: dict[str, object],
+    version: int,
+) -> list[dict[str, object]]:
+    images: list[dict[str, object]] = []
+    region_image = debug_region.get("region_image")
+    if isinstance(region_image, Path) and region_image.is_file():
+        relative_path = region_image.relative_to(SHORTAGE_BATCH_ROOT.resolve())
+        images.append(
+            {
+                "image_index": 1,
+                "kind": "reference_region",
+                "label": "缺货前 reference 局部图",
+                "description": "缺货 bbox 对应的原商品区域",
+                "url": shortage_batch_file_url(relative_path.as_posix(), version),
+            }
+        )
+    candidates = debug_region.get("candidates", [])
+    exact_candidate_images = debug_region.get("candidate_images", [])
+    if not isinstance(candidates, list):
+        candidates = []
+    if not isinstance(exact_candidate_images, list):
+        exact_candidate_images = []
+    for candidate_index, candidate in enumerate(candidates, start=1):
+        if not isinstance(candidate, dict):
+            continue
+        exact_image = (
+            exact_candidate_images[candidate_index - 1]
+            if candidate_index <= len(exact_candidate_images)
+            else None
+        )
+        if isinstance(exact_image, Path) and exact_image.is_file():
+            relative_path = exact_image.relative_to(SHORTAGE_BATCH_ROOT.resolve())
+            image_url = shortage_batch_file_url(relative_path.as_posix(), version)
+        else:
+            image_url = shortage_sku_image_url(candidate.get("sku_id"))
+        images.append(
+            {
+                "image_index": candidate_index + 1,
+                "kind": "candidate",
+                "label": candidate.get("name") or "未知候选",
+                "description": candidate.get("sku_id") or "",
+                "url": image_url,
+            }
+        )
+    return images
+
+
+def shortage_qwen_image_paths(debug_region: dict[str, object]) -> list[Path]:
+    image_paths: list[Path] = []
+    region_image = debug_region.get("region_image")
+    if isinstance(region_image, Path) and region_image.is_file():
+        image_paths.append(region_image)
+    candidates = debug_region.get("candidates", [])
+    exact_candidate_images = debug_region.get("candidate_images", [])
+    if not isinstance(candidates, list):
+        candidates = []
+    if not isinstance(exact_candidate_images, list):
+        exact_candidate_images = []
+    for candidate_index, candidate in enumerate(candidates):
+        if not isinstance(candidate, dict):
+            continue
+        exact_image = (
+            exact_candidate_images[candidate_index]
+            if candidate_index < len(exact_candidate_images)
+            else None
+        )
+        if isinstance(exact_image, Path) and exact_image.is_file():
+            image_paths.append(exact_image)
+            continue
+        sku_id = candidate.get("sku_id")
+        if not isinstance(sku_id, str):
+            raise HTTPException(status_code=500, detail="Qwen 候选缺少 sku_id")
+        image_paths.append(resolve_shortage_sku_image(sku_id))
+    return image_paths
+
+
+def shortage_batch_result(group: str, record: str) -> dict:
+    if not SHORTAGE_BATCH_SUMMARY_PATH.is_file():
+        raise HTTPException(status_code=404, detail="shortage 批测汇总不存在")
+    summary = load_json_file(SHORTAGE_BATCH_SUMMARY_PATH, "shortage 批测汇总")
+    result = next(
+        (
+            item
+            for item in summary.get("results", [])
+            if isinstance(item, dict)
+            and item.get("group") == group
+            and item.get("record") == record
+        ),
+        None,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="shortage 批测 record 不存在")
+    return result
+
+
+def shortage_debug_region(result: dict, region_index: int) -> dict[str, object]:
+    findings = [
+        finding
+        for finding in result.get("findings", [])
+        if isinstance(finding, dict)
+    ]
+    if not any(finding.get("region_index") == region_index for finding in findings):
+        raise HTTPException(status_code=404, detail="shortage finding 不存在")
+    key = shortage_prompt_key(
+        result.get("location_id"),
+        result.get("pose_type"),
+        [finding.get("bbox") for finding in findings],
+    )
+    regions = load_shortage_debug_index().get(key, ())
+    if not 0 < region_index <= len(regions):
+        raise HTTPException(status_code=404, detail="找不到该 finding 的 Qwen 调试输入")
+    return regions[region_index - 1]
+
+
+def shortage_retry_result_path(
+    result: dict,
+    region_index: int,
+) -> Path:
+    group = result.get("group")
+    record = result.get("record")
+    if not isinstance(group, str) or not isinstance(record, str):
+        raise HTTPException(status_code=500, detail="shortage 批测结果缺少 group/record")
+    relative_path = (
+        f"{group}/{record}/shortage_inspection/"
+        f"qwen_retry_region_{region_index:02d}.json"
+    )
+    return resolve_descendant(SHORTAGE_BATCH_ROOT, relative_path)
+
+
+def build_shortage_retry_messages(
+    prompt: str,
+    image_paths: list[Path],
+) -> tuple[str, list[dict]]:
+    system_prompt, user_prompt = validate_saved_prompt(prompt)
+    validate_saved_prompt_images(prompt, len(image_paths))
+    content: list[dict] = []
+    for part in re.split(r"(\[IMAGE\s+\d+\])", user_prompt):
+        marker = re.fullmatch(r"\[IMAGE\s+(\d+)\]", part)
+        if marker is None:
+            if part:
+                content.append({"type": "text", "text": part})
+            continue
+        path = image_paths[int(marker.group(1)) - 1]
+        media_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{encoded}"},
+            }
+        )
+    return system_prompt, content
+
+
 @app.get("/api/qwen-review/shortage-batch")
 def list_shortage_batch_results() -> dict:
     if not SHORTAGE_BATCH_SUMMARY_PATH.is_file():
@@ -374,6 +708,15 @@ def list_shortage_batch_results() -> dict:
     raw_results = summary.get("results", [])
     if not isinstance(raw_results, list):
         raise HTTPException(status_code=500, detail="shortage 批测汇总缺少 results")
+    has_findings = any(
+        isinstance(raw_result, dict)
+        and any(
+            isinstance(finding, dict)
+            for finding in raw_result.get("findings", [])
+        )
+        for raw_result in raw_results
+    )
+    debug_index = load_shortage_debug_index() if has_findings else {}
     for raw_result in raw_results:
         if not isinstance(raw_result, dict):
             continue
@@ -382,6 +725,16 @@ def list_shortage_batch_results() -> dict:
         if not isinstance(artifacts, dict):
             artifacts = {}
         findings = []
+        fallback_key = shortage_prompt_key(
+            result.get("location_id"),
+            result.get("pose_type"),
+            [
+                finding.get("bbox")
+                for finding in result.get("findings", [])
+                if isinstance(finding, dict)
+            ],
+        )
+        debug_regions = debug_index.get(fallback_key, ())
         for raw_finding in result.get("findings", []):
             if not isinstance(raw_finding, dict):
                 continue
@@ -389,6 +742,44 @@ def list_shortage_batch_results() -> dict:
             finding["mask_url"] = shortage_batch_file_url(
                 finding.get("mask"),
                 version,
+            )
+            region_index = finding.get("region_index")
+            debug_region = (
+                debug_regions[region_index - 1]
+                if isinstance(region_index, int)
+                and 0 < region_index <= len(debug_regions)
+                else None
+            )
+            if (
+                not finding.get("qwen_prompt")
+                and isinstance(debug_region, dict)
+                and isinstance(debug_region.get("prompt"), str)
+            ):
+                finding["qwen_prompt"] = debug_region["prompt"]
+            finding["qwen_images"] = (
+                shortage_qwen_images(debug_region, version)
+                if isinstance(debug_region, dict)
+                else []
+            )
+            finding["qwen_original_raw_output"] = (
+                debug_region.get("raw_output")
+                if isinstance(debug_region, dict)
+                else None
+            )
+            finding["qwen_original_parsed_result"] = (
+                debug_region.get("parsed_result")
+                if isinstance(debug_region, dict)
+                else None
+            )
+            retry_path = (
+                shortage_retry_result_path(result, region_index)
+                if isinstance(region_index, int)
+                else None
+            )
+            finding["last_qwen_retry"] = (
+                load_json_file(retry_path, "Qwen 重试结果")
+                if retry_path is not None and retry_path.is_file()
+                else None
             )
             findings.append(finding)
         result["findings"] = findings
@@ -432,6 +823,68 @@ def list_shortage_batch_results() -> dict:
     }
 
 
+@app.post("/api/qwen-review/shortage-batch/retry")
+def retry_shortage_batch_qwen(request: ShortageBatchQwenRetryRequest) -> dict:
+    request_started_at = time.perf_counter()
+    prompt = request.prompt.strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt 不能为空")
+    result = shortage_batch_result(request.group, request.record)
+    debug_region = shortage_debug_region(result, request.region_index)
+    image_paths = shortage_qwen_image_paths(debug_region)
+    if not image_paths:
+        raise HTTPException(status_code=404, detail="找不到该 finding 的 Qwen 输入图片")
+    system_prompt, user_content = build_shortage_retry_messages(
+        prompt,
+        image_paths,
+    )
+    qwen_started_at = time.perf_counter()
+    try:
+        raw_output = call_qwen_messages(
+            system_prompt,
+            user_content,
+            temperature=request.temperature,
+        )
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail=f"Qwen3 请求失败: {error}") from error
+    except (KeyError, IndexError, TypeError, ValueError) as error:
+        raise HTTPException(status_code=502, detail=f"Qwen3 响应格式错误: {error}") from error
+    qwen_finished_at = time.perf_counter()
+    try:
+        parsed_result = parse_first_json(raw_output)
+        parse_error = None
+    except (TypeError, ValueError) as error:
+        parsed_result = None
+        parse_error = str(error)
+    response_ready_at = time.perf_counter()
+    retry_result = {
+        "group": request.group,
+        "record": request.record,
+        "region_index": request.region_index,
+        "temperature": request.temperature,
+        "prompt_used": prompt,
+        "image_count": len(image_paths),
+        "parsed_result": parsed_result,
+        "raw_output": raw_output,
+        "parse_error": parse_error,
+        "qwen_elapsed_ms": round(
+            (qwen_finished_at - qwen_started_at) * 1000,
+            1,
+        ),
+        "backend_elapsed_ms": round(
+            (response_ready_at - request_started_at) * 1000,
+            1,
+        ),
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    write_json_atomic(
+        shortage_retry_result_path(result, request.region_index),
+        retry_result,
+        "Qwen shortage 重试结果",
+    )
+    return retry_result
+
+
 @app.get("/api/qwen-review/shortage-batch/file/{relative_path:path}")
 def get_shortage_batch_file(relative_path: str) -> FileResponse:
     path = resolve_descendant(SHORTAGE_BATCH_ROOT, relative_path)
@@ -439,6 +892,12 @@ def get_shortage_batch_file(relative_path: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="shortage 批测文件不存在")
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     return FileResponse(path, media_type=media_type)
+
+
+@app.get("/api/qwen-review/shortage-batch/sku-image/{sku_id}")
+def get_shortage_batch_sku_image(sku_id: str) -> FileResponse:
+    image_path = resolve_shortage_sku_image(sku_id)
+    return FileResponse(image_path, media_type="image/jpeg")
 
 
 @app.get("/api/qwen-review/samples")

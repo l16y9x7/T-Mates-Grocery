@@ -353,6 +353,12 @@ def recognize_frame(
 ) -> list[dict[str, str | None]]:
     """Recognize one receipt from exactly one in-memory image frame."""
 
+    return parse_qwen_items(recognize_frame_raw(frame, settings))
+
+
+def recognize_frame_raw(frame: bytes, settings: Settings) -> str:
+    """Return Qwen's unmodified message.content for one receipt image."""
+
     content: list[dict[str, Any]] = [
         {"type": "text", "text": USER_PROMPT},
         {
@@ -385,7 +391,7 @@ def recognize_frame(
             "qwen_response_error",
             "Qwen 的 message.content 不是字符串。",
         )
-    return parse_qwen_items(model_content)
+    return model_content
 
 
 def image_bytes_to_data_url(raw: bytes) -> str:

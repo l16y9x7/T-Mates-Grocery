@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import sys
 from pathlib import Path
@@ -15,6 +16,13 @@ else:
     if str(PERCEPTION_ROOT) not in sys.path:
         sys.path.insert(0, str(PERCEPTION_ROOT))
     from parse_receipt import server
+
+
+@dataclass(frozen=True)
+class LocalParseResult:
+    qwen_raw_output: str
+    qwen_parsed_items: list[dict[str, str | None]]
+    product_names: list[str]
 
 
 def read_image_file(image_path: str | Path) -> bytes:
@@ -47,19 +55,32 @@ def parse_image_file(
 ) -> server.ParseReceiptResponse:
     """Run the same recognition and SKU matching stages as /perception/parse."""
 
+    result = parse_image_file_detailed(image_path, settings)
+    return server.ParseReceiptResponse(product_names=result.product_names)
+
+
+def parse_image_file_detailed(
+    image_path: str | Path,
+    settings: server.Settings | None = None,
+) -> LocalParseResult:
+    """Return raw Qwen output, parsed items, and canonical SKU names."""
+
     configured = settings or server.Settings.from_env()
-    recognized_items = server.recognize_frame(
+    qwen_raw_output = server.recognize_frame_raw(
         read_image_file(image_path),
         configured,
     )
+    recognized_items = server.parse_qwen_items(qwen_raw_output)
     if len(recognized_items) != 2:
         raise server.ServiceError(
             502,
             "qwen_output_error",
             f"Qwen 必须识别出两个商品，当前得到 {len(recognized_items)} 个。",
         )
-    return server.ParseReceiptResponse(
-        product_names=server.lookup_sku_items(recognized_items, configured)
+    return LocalParseResult(
+        qwen_raw_output=qwen_raw_output,
+        qwen_parsed_items=recognized_items,
+        product_names=server.lookup_sku_items(recognized_items, configured),
     )
 
 
@@ -102,7 +123,7 @@ def _error_payload(error: Exception) -> dict[str, object]:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        result = parse_image_file(args.image)
+        result = parse_image_file_detailed(args.image)
     except (OSError, ValueError, server.ServiceError) as error:
         print(
             json.dumps(_error_payload(error), ensure_ascii=False, indent=2),
@@ -112,7 +133,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(
         json.dumps(
-            {"product_names": result.product_names},
+            {
+                "qwen_raw_output": result.qwen_raw_output,
+                "qwen_parsed_items": result.qwen_parsed_items,
+                "product_names": result.product_names,
+            },
             ensure_ascii=False,
             indent=2,
         )

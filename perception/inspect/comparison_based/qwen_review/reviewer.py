@@ -116,6 +116,7 @@ class QwenReviewResult:
     raw_response: str
     candidate_names: tuple[str, ...]
     debug_directory: Path | None = None
+    prompts: tuple[str, ...] = ()
 
 
 class QwenReviewer:
@@ -234,6 +235,7 @@ class QwenReviewer:
             )
         findings: list[ReviewedFinding] = []
         raw_responses: list[Any] = []
+        prompts: list[str] = []
         # Intentionally review each bbox in an independent Qwen request. This
         # keeps the model's task local and avoids cross-region bookkeeping.
         for region_index, (bbox, row_constraint) in enumerate(
@@ -287,13 +289,16 @@ class QwenReviewer:
                         else None
                     ),
                 )
+                readable_prompt = _payload_as_readable_prompt(payload)
+                prompts.append(readable_prompt)
                 if region_directory is not None:
                     region_directory.mkdir(parents=True, exist_ok=True)
                     _write_image(region_directory / "bbox_expanded.jpg", region_image)
                     _write_text(
                         region_directory / "prompt.txt",
-                        _payload_as_readable_prompt(payload),
+                        readable_prompt,
                     )
+                    _write_payload_debug_images(region_directory, payload)
                 raw = self._request_qwen(payload)
                 raw_responses.append(raw)
                 if region_directory is not None:
@@ -382,6 +387,12 @@ class QwenReviewer:
                         else None
                     ),
                     misplaced_stage="expected_product",
+                )
+                prompts.append(
+                    "=== MISPLACED PRODUCT STAGE ===\n"
+                    f"{_payload_as_readable_prompt(misplaced_payload)}\n\n"
+                    "=== EXPECTED PRODUCT STAGE ===\n"
+                    f"{_payload_as_readable_prompt(expected_payload)}"
                 )
                 if region_directory is not None:
                     _write_stage_debug_input(
@@ -480,6 +491,7 @@ class QwenReviewer:
             raw_response=json.dumps(raw_responses, ensure_ascii=False),
             candidate_names=tuple(candidate.name for candidate in candidates),
             debug_directory=debug_directory,
+            prompts=tuple(prompts),
         )
 
     def _fetch_retrieval_candidate_images(
@@ -989,6 +1001,46 @@ def _write_image(path: Path, image: np.ndarray) -> None:
             "debug_artifact",
             f"无法写入 Qwen 调试图片: {path}",
         ) from error
+
+
+def _write_payload_debug_images(
+    region_directory: Path,
+    payload: dict[str, Any],
+) -> None:
+    """Persist the exact encoded image inputs in their Qwen message order."""
+
+    image_index = 0
+    for item in payload["messages"][1]["content"]:
+        if item.get("type") != "image_url":
+            continue
+        image_index += 1
+        url = item.get("image_url", {}).get("url", "")
+        match = re.fullmatch(
+            r"data:(image/[a-zA-Z0-9.+-]+);base64,(.+)",
+            str(url),
+            re.DOTALL,
+        )
+        if match is None:
+            raise QwenReviewError(
+                "debug_artifact",
+                f"Qwen IMAGE {image_index} 不是可保存的 data URL",
+            )
+        media_type, encoded = match.groups()
+        suffix = {
+            "image/jpeg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+        }.get(media_type.lower(), ".img")
+        try:
+            image_bytes = base64.b64decode(encoded, validate=True)
+            (region_directory / f"qwen_image_{image_index:02d}{suffix}").write_bytes(
+                image_bytes
+            )
+        except (OSError, ValueError) as error:
+            raise QwenReviewError(
+                "debug_artifact",
+                f"无法保存 Qwen IMAGE {image_index}",
+            ) from error
 
 
 def _write_stage_debug_input(

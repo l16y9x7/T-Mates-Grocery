@@ -96,6 +96,17 @@ Qwen 内部输出只允许：
 
 Qwen 没有识别出两个商品时，接口返回识别错误，不返回残缺结果。
 
+## 本地图片调试
+
+不经过相机、直接识别本地小票图片：
+
+```powershell
+python .\parse_receipt\local_parse.py "C:\path\receipt.jpg"
+```
+
+命令输出包含 `qwen_raw_output`（模型原始 `message.content`）、
+`qwen_parsed_items`（解析后的名称和规格）以及最终的 `product_names`。
+
 失败响应包含可用于定位上下游故障的结构化信息，并通过 `X-Request-ID` 响应头返回
 同一个请求编号。例如相机服务不可达时：
 
