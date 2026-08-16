@@ -494,6 +494,17 @@ class PromptMappingTest(unittest.TestCase):
         self.assertEqual(result["parsed_result"]["product_name"], "NFC桔汁")
         self.assertEqual(saved["prompt_used"], prompt.strip())
 
+    def test_write_json_atomic_creates_missing_parent_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "shortage_inspection" / "retry" / "result.json"
+
+            server.write_json_atomic(path, {"ok": True}, "测试结果")
+
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8")),
+                {"ok": True},
+            )
+
     def test_sorting_batch_gallery_lists_and_serves_rgb_depth_and_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

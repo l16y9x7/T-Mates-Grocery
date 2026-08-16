@@ -106,6 +106,13 @@ MAX_RECOVERY_VISUAL_DIFFERENCE = 85.0
 RECOVERY_LEFT_EDGE_CLEARANCE_RATIO = 0.04
 RECOVERY_RIGHT_EDGE_CLEARANCE_RATIO = 0.15
 MAX_FRONT_RGB_FALLBACK_CHROMA_DOMINANCE_RATIO = 0.80
+ROW_FOREGROUND_DEPTH_PERCENTILE = 25.0
+ROW_FOREGROUND_DEPTH_MARGIN_RATIO = 0.50
+MIN_ROW_FOREGROUND_DEPTH_MARGIN_MM = 400.0
+MAX_ROW_FOREGROUND_DEPTH_MARGIN_MM = 800.0
+MIN_ROW_FOREGROUND_DEPTH_SAMPLES = 200
+MIN_PROMOTED_BASELINE_FOREGROUND_PIXELS = 50
+MIN_PROMOTED_BASELINE_FOREGROUND_RATIO = 0.50
 FIXED_LAYOUT_REFERENCE_SIZE = (1280, 720)
 H2_BACK_LEFT_UPPER_SLOT_DEPTH_THRESHOLD_MM = 20.0
 MIN_H2_BACK_LEFT_UPPER_SLOT_FARTHER_RATIO = 0.25
@@ -1498,6 +1505,86 @@ def merge_fragmented_candidates(
     return merged
 
 
+def _promoted_baseline_foreground_support(
+    *,
+    support: dict[str, Any],
+    region_mask: np.ndarray,
+    baseline_depth_mm: np.ndarray,
+    row: Any,
+    shelf_span: tuple[int, int],
+) -> dict[str, Any]:
+    """Check that a promoted hole starts on the row's product-depth plane."""
+
+    promoted = bool(
+        support.get("promoted")
+        or support.get("fixed_layout_depth_promotion")
+        or support.get("low_contrast_promotion")
+    )
+    if not promoted:
+        return {"applicable": False, "accepted": True}
+
+    image_height, image_width = baseline_depth_mm.shape
+    row_y = max(0, int(row.bbox[1]))
+    row_bottom = min(image_height, row_y + int(row.bbox[3]))
+    span_left = max(0, min(image_width, int(shelf_span[0])))
+    span_right = max(span_left, min(image_width, int(shelf_span[1])))
+    row_depth = baseline_depth_mm[row_y:row_bottom, span_left:span_right]
+    row_valid = row_depth[np.isfinite(row_depth) & (row_depth > 0)]
+    if row_valid.size < MIN_ROW_FOREGROUND_DEPTH_SAMPLES:
+        return {
+            "applicable": False,
+            "accepted": True,
+            "reason": "insufficient valid baseline row depth",
+            "row_valid_pixels": int(row_valid.size),
+        }
+
+    foreground_anchor = float(
+        np.percentile(row_valid, ROW_FOREGROUND_DEPTH_PERCENTILE)
+    )
+    foreground_margin = float(
+        np.clip(
+            foreground_anchor * ROW_FOREGROUND_DEPTH_MARGIN_RATIO,
+            MIN_ROW_FOREGROUND_DEPTH_MARGIN_MM,
+            MAX_ROW_FOREGROUND_DEPTH_MARGIN_MM,
+        )
+    )
+    foreground_limit = foreground_anchor + foreground_margin
+    candidate = (
+        (np.asarray(region_mask) > 0)
+        & np.isfinite(baseline_depth_mm)
+        & (baseline_depth_mm > 0)
+    )
+    candidate_depth = baseline_depth_mm[candidate]
+    if candidate_depth.size < MIN_PROMOTED_BASELINE_FOREGROUND_PIXELS:
+        return {
+            "applicable": False,
+            "accepted": True,
+            "reason": "insufficient valid promoted-mask baseline depth",
+            "row_valid_pixels": int(row_valid.size),
+            "candidate_valid_pixels": int(candidate_depth.size),
+            "row_foreground_anchor_mm": round(foreground_anchor, 1),
+            "row_foreground_limit_mm": round(foreground_limit, 1),
+        }
+
+    foreground_pixels = int(np.count_nonzero(candidate_depth <= foreground_limit))
+    foreground_ratio = foreground_pixels / int(candidate_depth.size)
+    return {
+        "applicable": True,
+        "accepted": foreground_ratio >= MIN_PROMOTED_BASELINE_FOREGROUND_RATIO,
+        "row_valid_pixels": int(row_valid.size),
+        "candidate_valid_pixels": int(candidate_depth.size),
+        "candidate_baseline_median_mm": round(float(np.median(candidate_depth)), 1),
+        "row_foreground_anchor_mm": round(foreground_anchor, 1),
+        "row_foreground_margin_mm": round(foreground_margin, 1),
+        "row_foreground_limit_mm": round(foreground_limit, 1),
+        "baseline_foreground_pixels": foreground_pixels,
+        "baseline_foreground_ratio": round(foreground_ratio, 4),
+        "minimum_baseline_foreground_ratio": (
+            MIN_PROMOTED_BASELINE_FOREGROUND_RATIO
+        ),
+    }
+
+
 def recover_closed_depth_candidate(
     *,
     execution: Any,
@@ -1756,6 +1843,13 @@ def filter_shelf_interference_candidates(
             and width_ratio >= MIN_STACKED_COLUMN_WIDTH_RATIO
             and window_farther_ratio >= MIN_STACKED_COLUMN_FARTHER_RATIO
         )
+        baseline_foreground_support = _promoted_baseline_foreground_support(
+            support=support,
+            region_mask=region_mask,
+            baseline_depth_mm=baseline_depth_mm,
+            row=row,
+            shelf_span=shelf_span,
+        )
 
         reasons: list[str] = []
         if row_overlap < MIN_CANDIDATE_ROW_OVERLAP_RATIO:
@@ -1872,6 +1966,13 @@ def filter_shelf_interference_candidates(
             and window_farther_ratio < 0.60
         ):
             reasons.append("back-view open-row candidate resembles shelf floor")
+        if (
+            baseline_foreground_support.get("applicable") is True
+            and baseline_foreground_support.get("accepted") is not True
+        ):
+            reasons.append(
+                "promoted candidate baseline depth is behind the row foreground"
+            )
 
         metrics = {
             "accepted": not reasons,
@@ -1894,6 +1995,7 @@ def filter_shelf_interference_candidates(
                 if floor_similarity is not None
                 else None
             ),
+            "baseline_foreground_depth_filter": baseline_foreground_support,
             "reasons": reasons,
         }
         updated_support = {**support, "shelf_interference_filter": metrics}
@@ -2492,6 +2594,10 @@ def filter_execution_with_depth(
             ),
             "maximum_open_row_movement_balance_ratio": (
                 MAX_OPEN_ROW_MOVEMENT_BALANCE_RATIO
+            ),
+            "row_foreground_depth_percentile": ROW_FOREGROUND_DEPTH_PERCENTILE,
+            "minimum_promoted_baseline_foreground_ratio": (
+                MIN_PROMOTED_BASELINE_FOREGROUND_RATIO
             ),
         },
         depth_change_mask,

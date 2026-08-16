@@ -1328,7 +1328,6 @@ def _shortage_candidate_number_mapping_text(
         f"{candidate_number}: {candidate.name}"
         for candidate_number, candidate in enumerate(candidates, start=1)
     )
-    lines.append("所有输出商品名必须从以上名称中逐字选择。")
     return "\n".join(lines)
 
 

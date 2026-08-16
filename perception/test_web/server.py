@@ -2810,6 +2810,7 @@ def load_json_file(path: Path, label: str) -> dict:
 def write_text_atomic(path: Path, value: str, label: str) -> None:
     temporary_path = path.with_suffix(path.suffix + ".tmp")
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path.write_text(value, encoding="utf-8")
         temporary_path.replace(path)
     except OSError as error:

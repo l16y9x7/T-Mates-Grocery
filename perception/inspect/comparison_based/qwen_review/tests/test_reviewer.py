@@ -171,6 +171,7 @@ class QwenReviewerTest(unittest.TestCase):
         self.assertIn("1: 绿色奥利奥", serialized)
         self.assertIn("2: 棕色奥利奥", serialized)
         self.assertIn("候选（与下方标准图拼图上方数字一致）", serialized)
+        self.assertNotIn("所有输出商品名必须从以上名称中逐字选择。", serialized)
         self.assertNotIn("sku_id=SKU_A", serialized)
         self.assertNotIn("location_id=H1_F_L2_C03", serialized)
         user_content = qwen_payload["messages"][1]["content"]
