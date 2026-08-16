@@ -828,7 +828,10 @@ def build_qwen_payload(
                 ),
             },
             _numpy_image_content(region_image),
-            {"type": "text", "text": _candidate_names_text(candidates)},
+            {
+                "type": "text",
+                "text": _candidate_number_mapping_text(candidates),
+            },
         ]
     elif misplaced_stage == "misplaced_product":
         content = [
@@ -862,46 +865,33 @@ def build_qwen_payload(
             "MISPLACED requires misplaced_stage=misplaced_product or expected_product"
         )
 
-    if task_type == "SHORTAGE":
-        content.append({"type": "text", "text": "下面是候选 SKU 标准图："})
-        for candidate_index, candidate in enumerate(candidates, start=1):
-            content.extend(
-                [
-                    {
-                        "type": "text",
-                        "text": f"CANDIDATE {candidate_index}: {candidate.name};",
-                    },
-                    _bytes_image_content(candidate.image, candidate.media_type),
-                ]
+    sheets = (
+        list(candidate_sheets)
+        if candidate_sheets is not None
+        else build_candidate_contact_sheets(candidates)
+    )
+    if candidates and not sheets:
+        raise QwenReviewError("payload_assembly", "候选 SKU 拼图为空")
+    content.append(
+        {
+            "type": "text",
+            "text": (
+                "下面是候选 SKU 标准图拼图；每格上方数字与候选 SKU 编号一致。"
+            ),
+        }
+    )
+    for sheet_index, sheet in enumerate(sheets, start=1):
+        if len(sheets) > 1:
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        f"拼图 {sheet_index}：SKU {sheet.first_candidate_number}"
+                        f"-{sheet.last_candidate_number}"
+                    ),
+                }
             )
-    else:
-        sheets = (
-            list(candidate_sheets)
-            if candidate_sheets is not None
-            else build_candidate_contact_sheets(candidates)
-        )
-        if candidates and not sheets:
-            raise QwenReviewError("payload_assembly", "候选 SKU 拼图为空")
-        content.append(
-            {
-                "type": "text",
-                "text": (
-                    "下面是候选 SKU 标准图拼图；每格上方数字与候选 SKU 编号一致。"
-                ),
-            }
-        )
-        for sheet_index, sheet in enumerate(sheets, start=1):
-            if len(sheets) > 1:
-                content.append(
-                    {
-                        "type": "text",
-                        "text": (
-                            f"拼图 {sheet_index}：SKU {sheet.first_candidate_number}"
-                            f"-{sheet.last_candidate_number}"
-                        ),
-                    }
-                )
-            content.append(_bytes_image_content(sheet.image, sheet.media_type))
+        content.append(_bytes_image_content(sheet.image, sheet.media_type))
     content.append(
         {
             "type": "text",
@@ -1314,14 +1304,6 @@ def _candidate_rows_text(rows: Sequence[Sequence[dict[str, str]]]) -> str:
     return "\n".join(lines)
 
 
-def _candidate_names_text(candidates: Sequence[CandidateProduct]) -> str:
-    names = "、".join(candidate.name for candidate in candidates)
-    return (
-        f"候选商品：{names or '（空）'}\n"
-        "所有输出商品名必须从以上名称中逐字选择。"
-    )
-
-
 def _candidate_number_mapping_text(
     candidates: Sequence[CandidateProduct],
 ) -> str:
@@ -1352,7 +1334,7 @@ def _expected_candidate_number_mapping_text(
 def build_candidate_contact_sheets(
     candidates: Sequence[CandidateProduct],
 ) -> list[CandidateContactSheet]:
-    """Pack MISPLACED reference images into numbered, bounded-size grids."""
+    """Pack candidate reference images into numbered, bounded-size grids."""
 
     max_candidates_per_sheet = CONTACT_SHEET_COLUMNS * CONTACT_SHEET_MAX_ROWS
     sheets: list[CandidateContactSheet] = []

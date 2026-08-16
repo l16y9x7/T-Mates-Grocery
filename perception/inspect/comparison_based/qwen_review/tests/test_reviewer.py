@@ -150,7 +150,7 @@ class QwenReviewerTest(unittest.TestCase):
         self.assertEqual(len(result.findings), 1)
         self.assertEqual(len(result.prompts), 1)
         self.assertIn("=== SYSTEM ===", result.prompts[0])
-        self.assertIn("CANDIDATE 1:", result.prompts[0])
+        self.assertIn("SKU 1:", result.prompts[0])
         self.assertEqual(result.findings[0].shortage_product_name, "绿色奥利奥")
         candidate_call = session.calls[0]
         self.assertEqual(candidate_call[0], "GET")
@@ -168,8 +168,9 @@ class QwenReviewerTest(unittest.TestCase):
         qwen_payload = session.calls[-1][2]["json"]
         serialized = json.dumps(qwen_payload, ensure_ascii=False)
         self.assertNotIn("同列后排仍可见", serialized)
-        self.assertIn("候选商品：绿色奥利奥、棕色奥利奥", serialized)
-        self.assertIn("CANDIDATE 1: 绿色奥利奥;", serialized)
+        self.assertIn("SKU 1: 绿色奥利奥", serialized)
+        self.assertIn("SKU 2: 棕色奥利奥", serialized)
+        self.assertIn("每格上方数字与候选 SKU 编号一致", serialized)
         self.assertNotIn("sku_id=SKU_A", serialized)
         self.assertNotIn("location_id=H1_F_L2_C03", serialized)
         user_content = qwen_payload["messages"][1]["content"]
@@ -188,7 +189,7 @@ class QwenReviewerTest(unittest.TestCase):
         )
         self.assertGreater(int(region_image[110, 40, 1]), 120)
         self.assertLess(int(region_image[110, 40, 0]), 40)
-        self.assertIn("候选商品：", user_content[2]["text"])
+        self.assertIn("候选 SKU 编号", user_content[2]["text"])
         self.assertIn("绿色奥利奥", serialized)
         self.assertIn("棕色奥利奥", serialized)
         self.assertNotIn("BEFORE", serialized)
@@ -197,6 +198,17 @@ class QwenReviewerTest(unittest.TestCase):
         system_prompt = qwen_payload["messages"][0]["content"]
         self.assertIn("shortage_product_name", system_prompt)
         self.assertNotIn("misplaced_product_name", system_prompt)
+        image_items = [item for item in user_content if item["type"] == "image_url"]
+        self.assertEqual(len(image_items), 2)
+        sheet_bytes = base64.b64decode(
+            image_items[1]["image_url"]["url"].split(",", 1)[1]
+        )
+        sheet_image = cv2.imdecode(
+            np.frombuffer(sheet_bytes, dtype=np.uint8),
+            cv2.IMREAD_COLOR,
+        )
+        self.assertIsNotNone(sheet_image)
+        self.assertGreater(sheet_image.shape[1], sheet_image.shape[0])
 
     def test_inspection_target_uses_view_candidate_endpoint(self) -> None:
         session = FakeSession(
@@ -684,8 +696,8 @@ class QwenReviewerTest(unittest.TestCase):
         for call in qwen_calls:
             content = call[2]["json"]["messages"][1]["content"]
             image_items = [item for item in content if item["type"] == "image_url"]
-            # One expanded bbox crop plus one standard image for each candidate.
-            self.assertEqual(len(image_items), 3)
+            # One expanded bbox crop plus one numbered candidate contact sheet.
+            self.assertEqual(len(image_items), 2)
 
     def test_debug_directory_saves_prompt_crop_and_results(self) -> None:
         session = FakeSession(
@@ -740,7 +752,6 @@ class QwenReviewerTest(unittest.TestCase):
                 debug / "region_01" / "prompt.txt",
                 debug / "region_01" / "qwen_image_01.jpg",
                 debug / "region_01" / "qwen_image_02.jpg",
-                debug / "region_01" / "qwen_image_03.jpg",
                 debug / "region_01" / "qwen_raw.txt",
                 debug / "region_01" / "parsed_result.json",
             }
