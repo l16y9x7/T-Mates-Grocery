@@ -265,7 +265,7 @@ class ShortageBatchTest(unittest.TestCase):
             )
 
         self.assertEqual(len(filtered.response.findings), 1)
-        self.assertEqual(filtered.response.findings[0].bbox, [25, 25, 30, 30])
+        self.assertEqual(filtered.response.findings[0].bbox, [25, 20, 30, 50])
         self.assertEqual(int(np.count_nonzero(filtered.review_mask)), 900)
         self.assertTrue(supports[0]["refined"])
         self.assertEqual(supports[0]["original_bbox"], [20, 20, 80, 50])
@@ -584,6 +584,387 @@ class ShortageBatchTest(unittest.TestCase):
         self.assertEqual(filtered.response.findings, [])
         self.assertEqual(supports, [])
         self.assertEqual(summary["promoted_findings"], 0)
+
+    def test_shelf_filter_rejects_back_left_outside_shelf_candidate(self) -> None:
+        image = np.full((100, 200, 3), 90, dtype=np.uint8)
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H2_B_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=True,
+            image_size=[200, 100],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=np.zeros((100, 200), dtype=np.uint8),
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        finding = batch.INSPECT_API.Finding(
+            bbox=[10, 20, 40, 50],
+            center=[30, 45],
+            sources=["depth_rgb_fusion"],
+            votes=1,
+        )
+        row = SimpleNamespace(index=1, bbox=(0, 0, 200, 100), lower_rail_index=0)
+        rail = SimpleNamespace(line=(40, 90, 190, 90), y_center=90)
+        baseline_depth = np.full((100, 200), 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[20:70, 10:50] = 1100
+
+        kept, rejected = batch.filter_shelf_interference_candidates(
+            [(finding, {"promoted": True}, np.zeros((100, 200), dtype=np.uint8))],
+            execution=execution,
+            baseline_image=image,
+            baseline_depth_mm=baseline_depth,
+            current_depth_mm=current_depth,
+            rows=[row],
+            rails=[rail],
+        )
+
+        self.assertEqual(kept, [])
+        self.assertEqual(len(rejected), 1)
+        self.assertLess(rejected[0]["shelf_overlap_ratio"], 0.75)
+
+    def test_shelf_filter_rejects_open_row_shift_pair(self) -> None:
+        image = np.full((100, 200, 3), 90, dtype=np.uint8)
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H2_F_R_INSPECT",
+            pose_type="SHELF_VIEW_LOWER",
+            task_type="SHORTAGE",
+            has_anomaly=True,
+            image_size=[200, 100],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=np.zeros((100, 200), dtype=np.uint8),
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        finding = batch.INSPECT_API.Finding(
+            bbox=[50, 25, 20, 45],
+            center=[60, 47],
+            sources=["comparison_based"],
+            votes=1,
+        )
+        row = SimpleNamespace(index=3, bbox=(0, 0, 200, 100), lower_rail_index=None)
+        rail = SimpleNamespace(line=(0, 0, 180, 0), y_center=0)
+        baseline_depth = np.full((100, 200), 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[25:70, 50:70] = 1100
+        current_depth[25:70, 72:92] = 700
+
+        kept, rejected = batch.filter_shelf_interference_candidates(
+            [(finding, {"refined": True}, np.zeros((100, 200), dtype=np.uint8))],
+            execution=execution,
+            baseline_image=image,
+            baseline_depth_mm=baseline_depth,
+            current_depth_mm=current_depth,
+            rows=[row],
+            rails=[rail],
+        )
+
+        self.assertEqual(kept, [])
+        self.assertEqual(len(rejected), 1)
+        self.assertGreater(rejected[0]["movement_balance_ratio"], 0.55)
+
+    def test_merge_fragmented_candidates_joins_one_product_column(self) -> None:
+        row = SimpleNamespace(index=1, bbox=(0, 0, 200, 100), lower_rail_index=0)
+        first = batch.INSPECT_API.Finding(
+            bbox=[60, 10, 30, 25],
+            center=[75, 22],
+            sources=["comparison_based"],
+            votes=1,
+        )
+        second = batch.INSPECT_API.Finding(
+            bbox=[58, 40, 32, 35],
+            center=[74, 57],
+            sources=["depth_rgb_fusion"],
+            votes=1,
+        )
+        first_mask = np.zeros((100, 200), dtype=np.uint8)
+        second_mask = first_mask.copy()
+        first_mask[10:35, 60:90] = 255
+        second_mask[40:75, 58:90] = 255
+
+        merged = batch.merge_fragmented_candidates(
+            [
+                (first, {"refined": True}, first_mask),
+                (second, {"promoted": True}, second_mask),
+            ],
+            [row],
+        )
+
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0][0].bbox, [58, 10, 32, 65])
+        self.assertIn("merged_fragments", merged[0][1])
+        self.assertEqual(int(np.count_nonzero(merged[0][2])), 1870)
+
+    def test_closed_depth_recovery_joins_fragmented_silhouette(self) -> None:
+        baseline = np.full((200, 300, 3), 80, dtype=np.uint8)
+        current = baseline.copy()
+        current[30:100, 50:115] = 130
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H2_F_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=False,
+            image_size=[300, 200],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=current,
+            review_mask=np.zeros((200, 300), dtype=np.uint8),
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        baseline_depth = np.full((200, 300), 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[30:100, 50:80] = 1100
+        current_depth[30:100, 85:115] = 1100
+        depth_mask = np.where(
+            current_depth - baseline_depth > 60,
+            255,
+            0,
+        ).astype(np.uint8)
+        row = SimpleNamespace(index=1, bbox=(0, 0, 300, 200), lower_rail_index=0)
+        rail = SimpleNamespace(line=(0, 190, 280, 190), y_center=190)
+
+        recovered = batch.recover_closed_depth_candidate(
+            execution=execution,
+            baseline_image=baseline,
+            depth_change_mask=depth_mask,
+            baseline_depth_mm=baseline_depth,
+            current_depth_mm=current_depth,
+            rows=[row],
+            rails=[rail],
+        )
+
+        self.assertIsNotNone(recovered)
+        assert recovered is not None
+        self.assertLessEqual(recovered[0].bbox[0], 50)
+        self.assertGreaterEqual(recovered[0].bbox[2], 65)
+        self.assertTrue(recovered[1]["closed_depth_recovery"])
+
+    def test_lower_shelf_roi_crops_sides_and_follows_rail_span(self) -> None:
+        rows = [
+            SimpleNamespace(index=1, bbox=(0, 0, 200, 50), lower_rail_index=0),
+            SimpleNamespace(index=2, bbox=(0, 50, 200, 50), lower_rail_index=1),
+        ]
+        rails = [
+            SimpleNamespace(line=(0, 49, 180, 49), y_center=49),
+            SimpleNamespace(line=(10, 99, 160, 99), y_center=99),
+        ]
+
+        mask = batch._build_shelf_roi_mask(
+            (100, 200),
+            rows,
+            rails,
+            "SHELF_VIEW_LOWER",
+        )
+
+        self.assertEqual(int(mask[25, 19]), 0)
+        self.assertEqual(int(mask[25, 20]), 255)
+        self.assertEqual(int(mask[75, 155]), 255)
+        self.assertEqual(int(mask[75, 156]), 0)
+
+    def test_front_right_depth_balance_is_diagnostic_not_hard_rejection(self) -> None:
+        image = np.full((120, 200, 3), 90, dtype=np.uint8)
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H1_F_R_INSPECT",
+            pose_type="SHELF_VIEW_LOWER",
+            task_type="SHORTAGE",
+            has_anomaly=True,
+            image_size=[200, 120],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=np.zeros((120, 200), dtype=np.uint8),
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        finding = batch.INSPECT_API.Finding(
+            bbox=[70, 40, 45, 55],
+            center=[92, 67],
+            sources=["comparison_based"],
+            votes=1,
+        )
+        region_mask = np.zeros((120, 200), dtype=np.uint8)
+        region_mask[40:95, 70:115] = 255
+        baseline_depth = np.full((120, 200), 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[40:95, 60:92] = 1080
+        current_depth[40:95, 93:125] = 720
+        row = SimpleNamespace(index=2, bbox=(0, 30, 200, 80), lower_rail_index=0)
+        rail = SimpleNamespace(line=(0, 109, 199, 109), y_center=109)
+
+        kept, rejected = batch.filter_shelf_interference_candidates(
+            [(finding, {"refined": True}, region_mask)],
+            execution=execution,
+            baseline_image=None,
+            baseline_depth_mm=baseline_depth,
+            current_depth_mm=current_depth,
+            rows=[row],
+            rails=[rail],
+        )
+
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(rejected, [])
+
+    def test_candidate_mostly_on_rail_is_rejected(self) -> None:
+        image = np.full((100, 200, 3), 90, dtype=np.uint8)
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H1_F_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=True,
+            image_size=[200, 100],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=np.zeros((100, 200), dtype=np.uint8),
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        finding = batch.INSPECT_API.Finding(
+            bbox=[70, 92, 45, 20],
+            center=[92, 102],
+            sources=["comparison_based"],
+            votes=1,
+        )
+        region_mask = np.zeros((100, 200), dtype=np.uint8)
+        region_mask[92:100, 70:115] = 255
+        depth = np.full((100, 200), 900, dtype=np.float32)
+        row = SimpleNamespace(index=1, bbox=(0, 0, 200, 95), lower_rail_index=0)
+        rail = SimpleNamespace(line=(0, 94, 199, 94), y_center=94)
+
+        kept, rejected = batch.filter_shelf_interference_candidates(
+            [(finding, {"rgb_fallback": True}, region_mask)],
+            execution=execution,
+            baseline_image=None,
+            baseline_depth_mm=depth,
+            current_depth_mm=depth.copy(),
+            rows=[row],
+            rails=[rail],
+        )
+
+        self.assertEqual(kept, [])
+        self.assertIn("shelf rail", rejected[0]["reasons"][0])
+
+    def test_back_left_fixed_slot_depth_recovers_hidden_stack_shortage(self) -> None:
+        image = np.full((720, 1280, 3), 90, dtype=np.uint8)
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H2_B_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=False,
+            image_size=[1280, 720],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=np.zeros((720, 1280), dtype=np.uint8),
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        baseline_depth = np.full((720, 1280), 1000, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[145:250, 350:525] = 1040
+
+        promoted = batch.promote_fixed_layout_depth_slot(
+            execution=execution,
+            photometric_mask=execution.review_mask,
+            baseline_depth_mm=baseline_depth,
+            current_depth_mm=current_depth,
+        )
+
+        self.assertIsNotNone(promoted)
+        assert promoted is not None
+        self.assertEqual(promoted[0].bbox, [335, 125, 210, 145])
+        self.assertEqual(promoted[1]["slot_index"], 2)
+        self.assertTrue(promoted[1]["fixed_layout_depth_promotion"])
+
+    def test_front_left_fixed_slot_uses_local_depth_offset_and_rgb_evidence(self) -> None:
+        image = np.full((720, 1280, 3), 90, dtype=np.uint8)
+        review_mask = np.zeros((720, 1280), dtype=np.uint8)
+        review_mask[20:220, 450:600] = 255
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H2_F_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=False,
+            image_size=[1280, 720],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=review_mask,
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        baseline_depth = np.full((720, 1280), 1000, dtype=np.float32)
+        current_depth = np.full((720, 1280), 960, dtype=np.float32)
+        current_depth[0:240, 430:625] = 1040
+
+        promoted = batch.promote_fixed_layout_depth_slot(
+            execution=execution,
+            photometric_mask=review_mask,
+            baseline_depth_mm=baseline_depth,
+            current_depth_mm=current_depth,
+        )
+
+        self.assertIsNotNone(promoted)
+        assert promoted is not None
+        self.assertEqual(promoted[0].bbox, [430, 0, 195, 240])
+        self.assertEqual(promoted[1]["slot_index"], 3)
+        self.assertGreater(promoted[1]["slot_score_mm"], 10)
+
+    def test_front_left_fixed_slot_requires_rgb_change_evidence(self) -> None:
+        image = np.full((720, 1280, 3), 90, dtype=np.uint8)
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H2_F_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=False,
+            image_size=[1280, 720],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=np.zeros((720, 1280), dtype=np.uint8),
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        depth = np.full((720, 1280), 1000, dtype=np.float32)
+
+        promoted = batch.promote_fixed_layout_depth_slot(
+            execution=execution,
+            photometric_mask=execution.review_mask,
+            baseline_depth_mm=depth,
+            current_depth_mm=depth.copy(),
+        )
+
+        self.assertIsNone(promoted)
 
 
 if __name__ == "__main__":

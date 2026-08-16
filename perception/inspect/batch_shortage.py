@@ -67,7 +67,64 @@ MAX_LOW_CONTRAST_DIFFERENCE = 60.0
 MIN_LOW_CONTRAST_NEARER_COMPANION_RATIO = 0.10
 MAX_RGB_FALLBACK_CHROMA_DOMINANCE_RATIO = 0.15
 MIN_BALANCED_DEPTH_CHANGE_RATIO = 0.03
+MIN_OUTWARD_SHELF_OVERLAP_RATIO = 0.75
+MIN_CANDIDATE_ROW_OVERLAP_RATIO = 0.50
+UPPER_SIDE_CROP_RATIO = 0.10
+LOWER_IMAGE_SIDE_CROP_RATIO = 0.10
+LOWER_SHELF_SIDE_INSET_RATIO = 0.025
+MIN_OBJECT_WINDOW_WIDTH_RATIO = 0.24
+MIN_OBJECT_WINDOW_HEIGHT_RATIO = 0.45
+MIN_OPEN_ROW_FARTHER_WINDOW_RATIO = 0.76
+MAX_OPEN_ROW_MOVEMENT_BALANCE_RATIO = 0.55
+MIN_FLOOR_SIMILARITY_RATIO = 0.50
+MAX_FLOOR_LIKE_FARTHER_WINDOW_RATIO = 0.85
+MIN_BACK_LEFT_CANDIDATE_WIDTH_RATIO = 0.135
+MIN_BACK_LEFT_CANDIDATE_HEIGHT_RATIO = 0.18
+MAX_BACK_LEFT_MOVEMENT_BALANCE_RATIO = 0.68
+MIN_STACKED_COLUMN_HEIGHT_RATIO = 0.65
+MIN_STACKED_COLUMN_WIDTH_RATIO = 0.25
+MIN_STACKED_COLUMN_FARTHER_RATIO = 0.25
+MAX_FRAGMENT_VERTICAL_GAP_RATIO = 0.15
+MIN_FRAGMENT_HORIZONTAL_OVERLAP_RATIO = 0.45
+MAX_FRONT_RIGHT_TOP_FRAGMENT_WIDTH_RATIO = 0.14
+MAX_FRONT_RIGHT_TOP_FRAGMENT_HEIGHT_RATIO = 0.22
+MIN_MOVEMENT_OBJECT_WINDOW_FARTHER_RATIO = 0.20
+MIN_DEPTH_SUPPORTED_OBJECT_WINDOW_RATIO = 0.02
+RECOVERY_CLOSE_RATIO = 0.05
+MIN_RECOVERY_COMPONENT_AREA_RATIO = 0.0025
+MIN_RECOVERY_WIDTH_TO_ROW_HEIGHT_RATIO = 0.15
+MAX_RECOVERY_MOVEMENT_BALANCE_RATIO = 0.55
+MIN_RECOVERY_VISUAL_DIFFERENCE = 25.0
+MAX_RECOVERY_VISUAL_DIFFERENCE = 85.0
+RECOVERY_LEFT_EDGE_CLEARANCE_RATIO = 0.04
+RECOVERY_RIGHT_EDGE_CLEARANCE_RATIO = 0.15
+MAX_FRONT_RGB_FALLBACK_CHROMA_DOMINANCE_RATIO = 0.80
+FIXED_LAYOUT_REFERENCE_SIZE = (1280, 720)
+H2_BACK_LEFT_UPPER_SLOT_DEPTH_THRESHOLD_MM = 20.0
+MIN_H2_BACK_LEFT_UPPER_SLOT_FARTHER_RATIO = 0.25
+MIN_H2_FRONT_LEFT_UPPER_SLOT_SCORE_MM = 10.0
+MIN_H2_FRONT_LEFT_UPPER_SLOT_RGB_RATIO = 0.02
 DEFAULT_WORKERS = 4
+
+
+# Detection ROI, output bbox.  These are fixed inspection poses; coordinates
+# are scaled from the 1280x720 task0 scan so the rule also survives resizing.
+H2_BACK_LEFT_UPPER_DEPTH_SLOTS = (
+    ((120, 145, 195, 105), (90, 125, 235, 145)),
+    ((350, 145, 175, 105), (335, 125, 210, 145)),
+    ((540, 145, 170, 105), (525, 125, 205, 145)),
+    ((175, 350, 190, 270), (175, 335, 190, 300)),
+    ((400, 350, 145, 270), (390, 335, 170, 300)),
+    ((600, 350, 140, 270), (580, 335, 180, 300)),
+)
+H2_FRONT_LEFT_UPPER_DEPTH_SLOTS = (
+    ((60, 0, 180, 240), -80.0),
+    ((240, 0, 190, 240), 30.0),
+    ((430, 0, 195, 240), 30.0),
+    ((625, 0, 205, 240), 30.0),
+    ((830, 0, 200, 240), 30.0),
+    ((1030, 0, 180, 240), 30.0),
+)
 
 
 def load_inspect_api() -> ModuleType:
@@ -414,6 +471,17 @@ def refine_findings_with_signed_depth(
             # the signed-depth component as the output mask.
             if aspect_ratio > 3.0 and original_aspect_ratio <= 3.0:
                 output_bbox = [x0, y0, x1 - x0, y1 - y0]
+            elif component_height < round((y1 - y0) * 0.65):
+                # Signed depth often sees only the exposed shelf/backboard at
+                # the bottom of a removed product.  Keep its precise x span,
+                # but restore the RGB candidate's full product-height slot so
+                # the downstream SKU image is not just a strip of shelf floor.
+                output_bbox = [
+                    component_bbox[0],
+                    y0,
+                    component_bbox[2],
+                    y1 - y0,
+                ]
             if any(
                 _bbox_iou(output_bbox, existing_bbox)
                 >= DEPTH_PROMOTION_DUPLICATE_IOU
@@ -628,20 +696,31 @@ def select_rgb_fallback_finding(
     execution: Any,
     baseline_depth_mm: np.ndarray,
     current_depth_mm: np.ndarray,
+    rows: list[Any] | None = None,
+    rails: list[Any] | None = None,
 ) -> tuple[Any, dict[str, Any], np.ndarray] | None:
     """Keep one product-like RGB change when depth cannot expose the gap.
 
     Removing the front item can reveal an identical item behind it.  That item
     may lean forward, so requiring a farther current surface would erase the
-    real shortage.  Low chroma-dominance changes are useful here: they usually
-    describe the displacement/count change of the same package, while strong
-    colour-only regions are commonly illumination or neighbouring motion.
+    real shortage.  Geometry is checked against the cropped shelf rows before
+    ranking; front views may contain legitimate high-chroma package removals.
     """
 
     height, width = execution.review_mask.shape
     candidates: list[
         tuple[float, float, float, Any, dict[str, Any], np.ndarray]
     ] = []
+    available_rows = list(rows or [])
+    available_rails = list(rails or [])
+    location_id = str(execution.response.location_id).upper()
+    pose_type = str(execution.response.pose_type)
+    front_view = "_F_" in location_id
+    maximum_chroma = (
+        MAX_FRONT_RGB_FALLBACK_CHROMA_DOMINANCE_RATIO
+        if front_view
+        else MAX_RGB_FALLBACK_CHROMA_DOMINANCE_RATIO
+    )
     valid_depth = (
         np.isfinite(baseline_depth_mm)
         & np.isfinite(current_depth_mm)
@@ -654,7 +733,7 @@ def select_rgb_fallback_finding(
         if metadata is None:
             continue
         chroma_dominance = float(metadata.chroma_dominance_ratio)
-        if chroma_dominance > MAX_RGB_FALLBACK_CHROMA_DOMINANCE_RATIO:
+        if chroma_dominance > maximum_chroma:
             continue
 
         x, y, box_width, box_height = (int(value) for value in finding.bbox)
@@ -664,6 +743,42 @@ def select_rgb_fallback_finding(
         y1 = max(y0, min(height, y + box_height))
         if x1 <= x0 or y1 <= y0:
             continue
+        row = _find_candidate_row([x0, y0, x1 - x0, y1 - y0], available_rows)
+        if row is not None:
+            row_overlap = _candidate_row_overlap_ratio(
+                [x0, y0, x1 - x0, y1 - y0],
+                row,
+            )
+            if row_overlap < MIN_CANDIDATE_ROW_OVERLAP_RATIO:
+                continue
+            shelf_span = _effective_row_shelf_span(
+                row,
+                available_rails,
+                image_width=width,
+                pose_type=pose_type,
+            )
+            shelf_overlap = _horizontal_overlap_ratio(
+                [x0, y0, x1 - x0, y1 - y0],
+                shelf_span,
+            )
+            if (
+                shelf_overlap is not None
+                and shelf_overlap < MIN_OUTWARD_SHELF_OVERLAP_RATIO
+            ):
+                continue
+            row_height = max(1, int(row.bbox[3]))
+            width_ratio = (x1 - x0) / row_height
+            height_ratio = (y1 - y0) / row_height
+            maximum_width_ratio = (
+                1.25 if pose_type.upper().endswith("LOWER") else 0.75
+            )
+            if width_ratio > maximum_width_ratio or height_ratio < 0.16:
+                continue
+        else:
+            row_overlap = 1.0
+            shelf_overlap = None
+            width_ratio = (x1 - x0) / max(1, height)
+            height_ratio = (y1 - y0) / max(1, height)
         valid = valid_depth[y0:y1, x0:x1]
         valid_pixels = int(np.count_nonzero(valid))
         region_delta = delta[y0:y1, x0:x1]
@@ -675,16 +790,6 @@ def select_rgb_fallback_finding(
         )
         farther_ratio = farther_pixels / valid_pixels if valid_pixels else 0.0
         nearer_ratio = nearer_pixels / valid_pixels if valid_pixels else 0.0
-        # A strong, balanced positive/negative pair is normally a deforming
-        # foreground package or residual parallax.  Signed-depth refinement
-        # has already handled any trustworthy farther component before this
-        # RGB-only fallback is considered.
-        if (
-            min(farther_ratio, nearer_ratio)
-            >= MIN_BALANCED_DEPTH_CHANGE_RATIO
-        ):
-            continue
-
         region_mask = clipped_region_mask(
             execution.review_mask,
             list(finding.bbox),
@@ -698,7 +803,7 @@ def select_rgb_fallback_finding(
             "accepted": True,
             "rgb_fallback": True,
             "reason": (
-                "low-chroma RGB product change retained when no reliable "
+                "row-valid RGB product change retained when no reliable "
                 "farther-depth component was available"
             ),
             "changed_pixels": changed_pixels,
@@ -709,13 +814,21 @@ def select_rgb_fallback_finding(
             "nearer_ratio": round(nearer_ratio, 4),
             "signed_change_ratio": round(signed_change_ratio, 4),
             "chroma_dominance_ratio": round(chroma_dominance, 4),
+            "row_overlap_ratio": round(row_overlap, 4),
+            "shelf_overlap_ratio": (
+                round(shelf_overlap, 4) if shelf_overlap is not None else None
+            ),
+            "bbox_width_to_row_height_ratio": round(width_ratio, 4),
+            "bbox_height_to_row_height_ratio": round(height_ratio, 4),
             "threshold_mm": DEPTH_CHANGE_THRESHOLD_MM,
         }
+        product_shape_score = min(1.0, height_ratio / 0.55)
+        candidate_score = float(metadata.changed_pixels) * product_shape_score
         candidates.append(
             (
-                signed_change_ratio,
+                -candidate_score,
                 chroma_dominance,
-                -float(metadata.changed_pixels),
+                signed_change_ratio,
                 finding,
                 support,
                 region_mask,
@@ -724,9 +837,20 @@ def select_rgb_fallback_finding(
 
     if not candidates:
         return None
-    candidates.sort(key=lambda candidate: candidate[:3])
-    _, _, _, finding, support, region_mask = candidates[0]
-    return finding, support, region_mask
+    merged = merge_fragmented_candidates(
+        [
+            (finding, support, region_mask)
+            for _, _, _, finding, support, region_mask in candidates
+        ],
+        available_rows,
+    )
+    return max(
+        merged,
+        key=lambda pair: (
+            int(np.count_nonzero(pair[2]))
+            * min(1.0, int(pair[0].bbox[3]) / max(1, height * 0.35))
+        ),
+    )
 
 
 def promote_low_contrast_depth_component(
@@ -917,6 +1041,880 @@ def promote_low_contrast_depth_component(
     return finding, support, component_mask
 
 
+def _find_candidate_row(
+    bbox: list[int],
+    rows: list[Any],
+) -> Any | None:
+    if not rows or bbox[3] <= 0:
+        return None
+    y, height = int(bbox[1]), int(bbox[3])
+    bottom = y + height
+    return max(
+        rows,
+        key=lambda row: max(
+            0,
+            min(bottom, int(row.bbox[1]) + int(row.bbox[3]))
+            - max(y, int(row.bbox[1])),
+        ),
+    )
+
+
+def _candidate_row_overlap_ratio(bbox: list[int], row: Any) -> float:
+    _, y, _, height = (int(value) for value in bbox)
+    if height <= 0:
+        return 0.0
+    row_y = int(row.bbox[1])
+    row_bottom = row_y + int(row.bbox[3])
+    overlap = max(0, min(y + height, row_bottom) - max(y, row_y))
+    return overlap / height
+
+
+def _row_shelf_span(
+    row: Any,
+    rails: list[Any],
+) -> tuple[int, int] | None:
+    if not rails:
+        return None
+    rail_index = getattr(row, "lower_rail_index", None)
+    if rail_index is None:
+        row_top = int(row.bbox[1])
+        candidates = [
+            (index, abs(int(rail.y_center) - row_top))
+            for index, rail in enumerate(rails)
+            if int(rail.y_center) <= row_top + 8
+        ]
+        if not candidates:
+            return None
+        rail_index = min(candidates, key=lambda candidate: candidate[1])[0]
+    if not 0 <= int(rail_index) < len(rails):
+        return None
+    x1, _, x2, _ = (int(value) for value in rails[int(rail_index)].line)
+    return min(x1, x2), max(x1, x2) + 1
+
+
+def _effective_row_shelf_span(
+    row: Any,
+    rails: list[Any],
+    *,
+    image_width: int,
+    pose_type: str,
+) -> tuple[int, int]:
+    """Return the usable shelf span after removing perspective side clutter."""
+
+    detected = _row_shelf_span(row, rails) or (0, image_width)
+    pose = str(pose_type).upper()
+    if pose.endswith("LOWER"):
+        # LOWER views form a trapezoid.  Inset each detected rail rather than
+        # applying a large image crop, so deeper rows naturally narrow with
+        # the detected shelf front.
+        inset = round(image_width * LOWER_SHELF_SIDE_INSET_RATIO)
+        absolute_inset = round(image_width * LOWER_IMAGE_SIDE_CROP_RATIO)
+        left = max(detected[0] + inset, absolute_inset)
+        right = min(detected[1] - inset, image_width - absolute_inset)
+    else:
+        # UPPER views still include the neighbouring bay at both image edges.
+        # A fixed inner frame removes those objects and the vertical uprights.
+        absolute_inset = round(image_width * UPPER_SIDE_CROP_RATIO)
+        left = max(detected[0], absolute_inset)
+        right = min(detected[1], image_width - absolute_inset)
+    if right <= left:
+        return max(0, detected[0]), min(image_width, detected[1])
+    return max(0, left), min(image_width, right)
+
+
+def _build_shelf_roi_mask(
+    shape: tuple[int, int],
+    rows: list[Any],
+    rails: list[Any],
+    pose_type: str,
+) -> np.ndarray:
+    """Build the row-wise trapezoid used before RGB/depth candidate extraction."""
+
+    height, width = shape
+    if not rows:
+        return np.full((height, width), 255, dtype=np.uint8)
+    mask = np.zeros((height, width), dtype=np.uint8)
+    for row in rows:
+        row_y = max(0, int(row.bbox[1]))
+        row_bottom = min(height, row_y + int(row.bbox[3]))
+        left, right = _effective_row_shelf_span(
+            row,
+            rails,
+            image_width=width,
+            pose_type=pose_type,
+        )
+        if row_bottom > row_y and right > left:
+            mask[row_y:row_bottom, left:right] = 255
+    return mask
+
+
+def _horizontal_overlap_ratio(
+    bbox: list[int],
+    span: tuple[int, int] | None,
+) -> float | None:
+    if span is None:
+        return None
+    x, _, width, _ = bbox
+    left, right = span
+    overlap = max(0, min(x + width, right) - max(x, left))
+    return overlap / max(1, width)
+
+
+def _baseline_floor_similarity_ratio(
+    baseline_image: np.ndarray | None,
+    bbox: list[int],
+    row: Any,
+    shelf_span: tuple[int, int] | None,
+) -> float | None:
+    """Estimate how much the baseline candidate already resembles bare shelf."""
+
+    if baseline_image is None or shelf_span is None:
+        return None
+    image_height, image_width = baseline_image.shape[:2]
+    x, y, width, height = bbox
+    x0 = max(0, min(image_width, x))
+    y0 = max(0, min(image_height, y))
+    x1 = max(x0, min(image_width, x + width))
+    y1 = max(y0, min(image_height, y + height))
+    if x1 <= x0 or y1 <= y0:
+        return None
+
+    row_y = max(0, int(row.bbox[1]))
+    row_bottom = min(image_height, row_y + int(row.bbox[3]))
+    band_height = max(8, min(30, round(int(row.bbox[3]) * 0.12)))
+    band_y0 = max(row_y, row_bottom - band_height - 4)
+    band_y1 = max(band_y0 + 1, row_bottom - 4)
+    span_left = max(0, min(image_width, shelf_span[0]))
+    span_right = max(span_left, min(image_width, shelf_span[1]))
+    reference = baseline_image[band_y0:band_y1, span_left:span_right]
+    candidate = baseline_image[y0:y1, x0:x1]
+    if reference.size == 0 or candidate.size == 0:
+        return None
+
+    reference_hsv = cv2.cvtColor(reference, cv2.COLOR_BGR2HSV)
+    reference_lab = cv2.cvtColor(reference, cv2.COLOR_BGR2LAB).astype(np.float32)
+    reference_gray = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
+    reference_edges = cv2.Canny(reference_gray, 35, 90)
+    neutral_smooth = (
+        (reference_hsv[:, :, 1] < 70)
+        & (reference_hsv[:, :, 2] > 35)
+        & (reference_edges == 0)
+    )
+    if int(np.count_nonzero(neutral_smooth)) < 50:
+        return None
+    shelf_color = np.median(reference_lab[neutral_smooth], axis=0)
+    candidate_lab = cv2.cvtColor(candidate, cv2.COLOR_BGR2LAB).astype(np.float32)
+    distance = np.linalg.norm(candidate_lab - shelf_color, axis=2)
+    return float(np.count_nonzero(distance < 18.0)) / distance.size
+
+
+def merge_fragmented_candidates(
+    pairs: list[tuple[Any, dict[str, Any], np.ndarray]],
+    rows: list[Any],
+) -> list[tuple[Any, dict[str, Any], np.ndarray]]:
+    """Join vertically split depth pieces belonging to the same product."""
+
+    merged = list(pairs)
+    changed = True
+    while changed:
+        changed = False
+        for first_index in range(len(merged)):
+            first_finding, first_support, first_mask = merged[first_index]
+            first_bbox = [int(value) for value in first_finding.bbox]
+            first_row = _find_candidate_row(first_bbox, rows)
+            if first_row is None:
+                continue
+            for second_index in range(first_index + 1, len(merged)):
+                second_finding, second_support, second_mask = merged[second_index]
+                second_bbox = [int(value) for value in second_finding.bbox]
+                second_row = _find_candidate_row(second_bbox, rows)
+                if second_row is not first_row:
+                    continue
+                first_x, first_y, first_width, first_height = first_bbox
+                second_x, second_y, second_width, second_height = second_bbox
+                horizontal_overlap = max(
+                    0,
+                    min(first_x + first_width, second_x + second_width)
+                    - max(first_x, second_x),
+                )
+                horizontal_overlap_ratio = horizontal_overlap / max(
+                    1,
+                    min(first_width, second_width),
+                )
+                vertical_gap = max(
+                    0,
+                    max(first_y, second_y)
+                    - min(first_y + first_height, second_y + second_height),
+                )
+                maximum_gap = round(
+                    int(first_row.bbox[3]) * MAX_FRAGMENT_VERTICAL_GAP_RATIO
+                )
+                if (
+                    horizontal_overlap_ratio
+                    < MIN_FRAGMENT_HORIZONTAL_OVERLAP_RATIO
+                    or vertical_gap > maximum_gap
+                ):
+                    continue
+
+                left = min(first_x, second_x)
+                top = min(first_y, second_y)
+                right = max(first_x + first_width, second_x + second_width)
+                bottom = max(first_y + first_height, second_y + second_height)
+                bbox = [left, top, right - left, bottom - top]
+                sources = list(
+                    dict.fromkeys(
+                        [*first_finding.sources, *second_finding.sources]
+                    )
+                )
+                finding = INSPECT_API.Finding(
+                    bbox=bbox,
+                    center=[left + (right - left) // 2, top + (bottom - top) // 2],
+                    sources=sources,
+                    votes=max(first_finding.votes, second_finding.votes),
+                )
+                support = {
+                    **first_support,
+                    "merged_fragments": [first_bbox, second_bbox],
+                    "merged_fragment_support": second_support,
+                }
+                region_mask = cv2.bitwise_or(first_mask, second_mask)
+                merged[first_index] = (finding, support, region_mask)
+                merged.pop(second_index)
+                changed = True
+                break
+            if changed:
+                break
+    return merged
+
+
+def recover_closed_depth_candidate(
+    *,
+    execution: Any,
+    baseline_image: np.ndarray | None,
+    depth_change_mask: np.ndarray,
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+    rows: list[Any],
+    rails: list[Any],
+) -> tuple[Any, dict[str, Any], np.ndarray] | None:
+    """Recover one fragmented shelf-edge hole after all regular candidates fail."""
+
+    if baseline_image is None or not rows:
+        return None
+    height, width = depth_change_mask.shape
+    radius = max(2, round(min(height, width) * RECOVERY_CLOSE_RATIO / 2))
+    closed = cv2.morphologyEx(
+        (depth_change_mask > 0).astype(np.uint8),
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (radius * 2 + 1, radius * 2 + 1),
+        ),
+    )
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        closed,
+        8,
+    )
+    valid = (
+        np.isfinite(baseline_depth_mm)
+        & np.isfinite(current_depth_mm)
+        & (baseline_depth_mm > 0)
+        & (current_depth_mm > 0)
+    )
+    delta = current_depth_mm - baseline_depth_mm
+    minimum_area = max(
+        50,
+        round(depth_change_mask.size * MIN_RECOVERY_COMPONENT_AREA_RATIO),
+    )
+    candidates: list[
+        tuple[float, Any, dict[str, Any], np.ndarray]
+    ] = []
+    for label in range(1, component_count):
+        x, y, box_width, box_height, area = (
+            int(value) for value in stats[label]
+        )
+        if area < minimum_area:
+            continue
+        bbox = [x, y, box_width, box_height]
+        row = _find_candidate_row(bbox, rows)
+        if row is None:
+            continue
+        row_y = int(row.bbox[1])
+        row_height = max(1, int(row.bbox[3]))
+        row_bottom = row_y + row_height
+        vertical_overlap = max(
+            0,
+            min(y + box_height, row_bottom) - max(y, row_y),
+        ) / max(1, box_height)
+        if vertical_overlap < MIN_DEPTH_PROMOTION_ROW_OVERLAP:
+            continue
+        shelf_span = _row_shelf_span(row, rails)
+        shelf_overlap = _horizontal_overlap_ratio(bbox, shelf_span)
+        if (
+            shelf_overlap is not None
+            and shelf_overlap < MIN_OUTWARD_SHELF_OVERLAP_RATIO
+        ):
+            continue
+        if box_width / row_height < MIN_RECOVERY_WIDTH_TO_ROW_HEIGHT_RATIO:
+            continue
+        aspect_ratio = max(
+            box_width / max(1, box_height),
+            box_height / max(1, box_width),
+        )
+        if aspect_ratio > DEPTH_PROMOTION_MAX_ASPECT_RATIO:
+            continue
+        local_x0 = max(0, x - round(box_width * 1.5))
+        local_x1 = min(width, x + box_width + round(box_width * 1.5))
+        local_y0 = max(row_y, y - round(box_height * 0.15))
+        local_y1 = min(row_bottom, y + box_height + round(box_height * 0.15))
+        local_valid = valid[local_y0:local_y1, local_x0:local_x1]
+        local_delta = delta[local_y0:local_y1, local_x0:local_x1]
+        farther_pixels = int(
+            np.count_nonzero(local_valid & (local_delta > DEPTH_CHANGE_THRESHOLD_MM))
+        )
+        nearer_pixels = int(
+            np.count_nonzero(local_valid & (local_delta < -DEPTH_CHANGE_THRESHOLD_MM))
+        )
+        movement_balance = min(farther_pixels, nearer_pixels) / max(
+            1,
+            max(farther_pixels, nearer_pixels),
+        )
+        baseline_crop = baseline_image[y : y + box_height, x : x + box_width]
+        current_crop = execution.review_image[y : y + box_height, x : x + box_width]
+        if baseline_crop.size == 0 or current_crop.size == 0:
+            continue
+        visual_difference = float(
+            np.mean(cv2.absdiff(baseline_crop, current_crop))
+        )
+        if not (
+            MIN_RECOVERY_VISUAL_DIFFERENCE
+            <= visual_difference
+            <= MAX_RECOVERY_VISUAL_DIFFERENCE
+        ):
+            continue
+
+        component = labels == label
+        region_mask = np.where(component, 255, 0).astype(np.uint8)
+        support = {
+            "applicable": True,
+            "accepted": True,
+            "promoted": True,
+            "closed_depth_recovery": True,
+            "reason": "fragmented farther-depth silhouette inside shelf span",
+            "depth_component_pixels": area,
+            "movement_balance_ratio": round(movement_balance, 4),
+            "mean_visual_difference": round(visual_difference, 2),
+            "shelf_overlap_ratio": (
+                round(shelf_overlap, 4) if shelf_overlap is not None else None
+            ),
+        }
+        finding = INSPECT_API.Finding(
+            bbox=bbox,
+            center=[x + box_width // 2, y + box_height // 2],
+            sources=["depth_closed_recovery"],
+            votes=1,
+        )
+        score = (
+            area
+            * (1.0 - movement_balance)
+            * min(2.0, visual_difference / 45.0)
+        )
+        candidates.append((score, finding, support, region_mask))
+    if not candidates:
+        return None
+    _, finding, support, region_mask = max(candidates, key=lambda item: item[0])
+    return finding, support, region_mask
+
+
+def filter_shelf_interference_candidates(
+    pairs: list[tuple[Any, dict[str, Any], np.ndarray]],
+    *,
+    execution: Any,
+    baseline_image: np.ndarray | None,
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+    rows: list[Any],
+    rails: list[Any],
+) -> tuple[
+    list[tuple[Any, dict[str, Any], np.ndarray]],
+    list[dict[str, Any]],
+]:
+    """Reject shelf-edge, bare-floor, and moved-item depth artifacts."""
+
+    if not pairs or not rows:
+        return pairs, []
+    image_height, image_width = baseline_depth_mm.shape
+    valid = (
+        np.isfinite(baseline_depth_mm)
+        & np.isfinite(current_depth_mm)
+        & (baseline_depth_mm > 0)
+        & (current_depth_mm > 0)
+    )
+    delta = current_depth_mm - baseline_depth_mm
+    location_id = str(execution.response.location_id).upper()
+    pose_type = str(execution.response.pose_type)
+    is_back_left_inspection = "_B_L_INSPECT" in location_id
+    is_back_right_inspection = "_B_R_INSPECT" in location_id
+    is_front_left_inspection = "_F_L_INSPECT" in location_id
+    is_front_right_inspection = "_F_R_INSPECT" in location_id
+    is_h2_front_right_inspection = "H2_F_R_INSPECT" in location_id
+    lower_view = pose_type.upper().endswith("LOWER")
+    kept: list[tuple[Any, dict[str, Any], np.ndarray]] = []
+    rejected: list[dict[str, Any]] = []
+
+    for finding, support, region_mask in pairs:
+        bbox = [int(value) for value in finding.bbox]
+        x, y, width, height = bbox
+        row = _find_candidate_row(bbox, rows)
+        if row is None:
+            kept.append((finding, support, region_mask))
+            continue
+        row_y = int(row.bbox[1])
+        row_height = max(1, int(row.bbox[3]))
+        row_bottom = min(image_height, row_y + row_height)
+        row_index = int(getattr(row, "index", rows.index(row) + 1))
+        row_overlap = _candidate_row_overlap_ratio(bbox, row)
+        shelf_span = _effective_row_shelf_span(
+            row,
+            rails,
+            image_width=image_width,
+            pose_type=pose_type,
+        )
+        shelf_overlap = _horizontal_overlap_ratio(bbox, shelf_span)
+        open_ended_row = getattr(row, "lower_rail_index", None) is None
+
+        local_x0 = max(0, x - round(width * 1.5))
+        local_x1 = min(image_width, x + width + round(width * 1.5))
+        local_y0 = max(row_y, y - round(height * 0.15))
+        local_y1 = min(row_bottom, y + height + round(height * 0.15))
+        local_valid = valid[local_y0:local_y1, local_x0:local_x1]
+        local_delta = delta[local_y0:local_y1, local_x0:local_x1]
+        farther_pixels = int(
+            np.count_nonzero(local_valid & (local_delta > DEPTH_CHANGE_THRESHOLD_MM))
+        )
+        nearer_pixels = int(
+            np.count_nonzero(local_valid & (local_delta < -DEPTH_CHANGE_THRESHOLD_MM))
+        )
+        movement_balance = min(farther_pixels, nearer_pixels) / max(
+            1,
+            max(farther_pixels, nearer_pixels),
+        )
+
+        expected_width = max(width, round(row_height * MIN_OBJECT_WINDOW_WIDTH_RATIO))
+        expected_height = max(
+            height,
+            round(row_height * MIN_OBJECT_WINDOW_HEIGHT_RATIO),
+        )
+        center_x = x + width / 2
+        center_y = y + height / 2
+        window_x0 = max(0, round(center_x - expected_width / 2))
+        window_x1 = min(image_width, window_x0 + expected_width)
+        window_y0 = max(row_y, round(center_y - expected_height / 2))
+        window_y1 = min(row_bottom, window_y0 + expected_height)
+        window_valid = valid[window_y0:window_y1, window_x0:window_x1]
+        window_delta = delta[window_y0:window_y1, window_x0:window_x1]
+        window_valid_pixels = int(np.count_nonzero(window_valid))
+        window_farther_pixels = int(
+            np.count_nonzero(
+                window_valid & (window_delta > DEPTH_CHANGE_THRESHOLD_MM)
+            )
+        )
+        window_farther_ratio = window_farther_pixels / max(1, window_valid_pixels)
+        floor_similarity = _baseline_floor_similarity_ratio(
+            baseline_image,
+            bbox,
+            row,
+            shelf_span,
+        )
+        width_ratio = width / row_height
+        height_ratio = height / row_height
+        stacked_column_depth_case = (
+            is_back_left_inspection
+            and lower_view
+            and row_index >= 2
+            and height_ratio >= MIN_STACKED_COLUMN_HEIGHT_RATIO
+            and width_ratio >= MIN_STACKED_COLUMN_WIDTH_RATIO
+            and window_farther_ratio >= MIN_STACKED_COLUMN_FARTHER_RATIO
+        )
+
+        reasons: list[str] = []
+        if row_overlap < MIN_CANDIDATE_ROW_OVERLAP_RATIO:
+            reasons.append("candidate is mostly on a shelf rail or outside its row")
+        if (
+            shelf_overlap is not None
+            and shelf_overlap < MIN_OUTWARD_SHELF_OVERLAP_RATIO
+        ):
+            reasons.append("candidate lies outside the cropped shelf interior")
+        if is_back_left_inspection:
+            if width_ratio < MIN_BACK_LEFT_CANDIDATE_WIDTH_RATIO:
+                reasons.append("too narrow to contain a baseline product")
+            if (
+                height_ratio < MIN_BACK_LEFT_CANDIDATE_HEIGHT_RATIO
+                and movement_balance > 0.20
+            ):
+                reasons.append("shallow package-edge displacement")
+            if (
+                movement_balance > MAX_BACK_LEFT_MOVEMENT_BALANCE_RATIO
+                and not stacked_column_depth_case
+            ):
+                reasons.append("balanced signed depth indicates item movement")
+            if (
+                bool(support.get("refined"))
+                and height_ratio < 0.35
+                and movement_balance > 0.25
+                and window_farther_ratio < 0.36
+            ):
+                reasons.append("shallow back-left parallax fragment")
+            if (
+                lower_view
+                and row_index >= 2
+                and window_farther_ratio < 0.12
+                and nearer_pixels > farther_pixels * 4
+            ):
+                reasons.append("back-left lower-row foreground edge")
+        if (
+            is_back_right_inspection
+            and x + width >= shelf_span[1] - round(image_width * 0.03)
+            and width_ratio < 0.20
+        ):
+            reasons.append("narrow fragment at the back-right shelf edge")
+        if (
+            is_front_right_inspection
+            and row_index == 1
+            and width_ratio < MAX_FRONT_RIGHT_TOP_FRAGMENT_WIDTH_RATIO
+            and height_ratio < MAX_FRONT_RIGHT_TOP_FRAGMENT_HEIGHT_RATIO
+        ):
+            reasons.append("small split edge above the complete product scale")
+        if is_front_left_inspection:
+            if (
+                shelf_overlap is not None
+                and shelf_overlap < MIN_OUTWARD_SHELF_OVERLAP_RATIO
+            ):
+                reasons.append("candidate extends beyond the detected shelf span")
+            if (
+                len(pairs) > 1
+                and width_ratio < 0.20
+                and movement_balance > 0.30
+            ):
+                reasons.append("narrow fragment beside a stronger shelf candidate")
+            if (
+                len(pairs) > 1
+                and bool(support.get("promoted"))
+                and movement_balance > 0.60
+            ):
+                reasons.append("promoted fragment is dominated by object motion")
+            if (
+                lower_view
+                and bool(support.get("rgb_fallback"))
+                and window_farther_ratio < 0.06
+            ):
+                reasons.append("front-left RGB shift has no depth-hole support")
+            if (
+                not lower_view
+                and row_index >= 2
+                and width_ratio < 0.15
+                and height_ratio < 0.35
+                and floor_similarity is not None
+                and floor_similarity >= 0.10
+            ):
+                reasons.append("narrow lower-row shelf-floor fragment")
+        if is_h2_front_right_inspection and lower_view and row_index >= 3:
+            if width_ratio < 0.30:
+                reasons.append("narrow H2 front-right bottle-edge fragment")
+            if (
+                movement_balance > 0.55
+                and window_farther_ratio < 0.25
+                and floor_similarity is not None
+                and floor_similarity >= 0.10
+            ):
+                reasons.append("H2 front-right bottle displacement")
+
+        bottom_rows_need_floor_filter = (
+            row_index >= 2
+            and (
+                open_ended_row
+                or (is_front_right_inspection and row_index >= 2)
+            )
+            and not bool(support.get("low_contrast_promotion"))
+        )
+        if bottom_rows_need_floor_filter:
+            if (
+                floor_similarity is not None
+                and floor_similarity >= MIN_FLOOR_SIMILARITY_RATIO
+                and window_farther_ratio < MAX_FLOOR_LIKE_FARTHER_WINDOW_RATIO
+            ):
+                reasons.append("baseline bbox is dominated by shelf-floor pixels")
+        if (
+            is_back_right_inspection
+            and open_ended_row
+            and floor_similarity is not None
+            and floor_similarity >= 0.10
+            and window_farther_ratio < 0.60
+        ):
+            reasons.append("back-view open-row candidate resembles shelf floor")
+
+        metrics = {
+            "accepted": not reasons,
+            "row_index": row_index,
+            "row_overlap_ratio": round(row_overlap, 4),
+            "open_ended_row": open_ended_row,
+            "shelf_span": list(shelf_span) if shelf_span is not None else None,
+            "shelf_overlap_ratio": (
+                round(shelf_overlap, 4) if shelf_overlap is not None else None
+            ),
+            "bbox_width_to_row_height_ratio": round(width_ratio, 4),
+            "bbox_height_to_row_height_ratio": round(height_ratio, 4),
+            "nearer_pixels": nearer_pixels,
+            "farther_pixels": farther_pixels,
+            "movement_balance_ratio": round(movement_balance, 4),
+            "object_window_farther_ratio": round(window_farther_ratio, 4),
+            "stacked_column_depth_case": stacked_column_depth_case,
+            "baseline_floor_similarity_ratio": (
+                round(floor_similarity, 4)
+                if floor_similarity is not None
+                else None
+            ),
+            "reasons": reasons,
+        }
+        updated_support = {**support, "shelf_interference_filter": metrics}
+        if reasons:
+            rejected.append({"bbox": bbox, **metrics})
+        else:
+            clipped_left = max(x, shelf_span[0])
+            clipped_top = max(y, row_y)
+            clipped_right = min(x + width, shelf_span[1])
+            clipped_bottom = min(y + height, row_bottom)
+            clipped_bbox = [
+                clipped_left,
+                clipped_top,
+                max(0, clipped_right - clipped_left),
+                max(0, clipped_bottom - clipped_top),
+            ]
+            if clipped_bbox[2] <= 0 or clipped_bbox[3] <= 0:
+                rejected.append(
+                    {
+                        "bbox": bbox,
+                        **metrics,
+                        "accepted": False,
+                        "reasons": ["candidate is empty after shelf-row clipping"],
+                    }
+                )
+                continue
+            clipped_mask = clipped_region_mask(region_mask, clipped_bbox)
+            clipped_finding = finding.model_copy(
+                update={
+                    "bbox": clipped_bbox,
+                    "center": [
+                        clipped_left + clipped_bbox[2] // 2,
+                        clipped_top + clipped_bbox[3] // 2,
+                    ],
+                }
+            )
+            if clipped_bbox != bbox:
+                updated_support = {
+                    **updated_support,
+                    "shelf_row_clip": {
+                        "original_bbox": bbox,
+                        "clipped_bbox": clipped_bbox,
+                    },
+                }
+            kept.append((clipped_finding, updated_support, clipped_mask))
+    return kept, rejected
+
+
+def _scale_fixed_layout_bbox(
+    bbox: tuple[int, int, int, int],
+    image_shape: tuple[int, int],
+) -> list[int]:
+    image_height, image_width = image_shape
+    reference_width, reference_height = FIXED_LAYOUT_REFERENCE_SIZE
+    x, y, width, height = bbox
+    left = max(0, min(image_width, round(x * image_width / reference_width)))
+    top = max(0, min(image_height, round(y * image_height / reference_height)))
+    right = max(
+        left,
+        min(image_width, round((x + width) * image_width / reference_width)),
+    )
+    bottom = max(
+        top,
+        min(image_height, round((y + height) * image_height / reference_height)),
+    )
+    return [left, top, right - left, bottom - top]
+
+
+def promote_fixed_layout_depth_slot(
+    *,
+    execution: Any,
+    photometric_mask: np.ndarray,
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+) -> tuple[Any, dict[str, Any], np.ndarray] | None:
+    """Recover count shortages hidden behind the front item in fixed poses.
+
+    These two task0 views contain product groups where removing a rear item
+    does not reveal an empty RGB rectangle.  A slot-level depth statistic is
+    much more stable than lowering the component threshold for every shelf.
+    """
+
+    location_id = str(execution.response.location_id).upper()
+    pose_type = str(execution.response.pose_type).upper()
+    if not pose_type.endswith("UPPER"):
+        return None
+    image_shape = baseline_depth_mm.shape
+    valid_depth = (
+        np.isfinite(baseline_depth_mm)
+        & np.isfinite(current_depth_mm)
+        & (baseline_depth_mm > 0)
+        & (current_depth_mm > 0)
+    )
+    delta = current_depth_mm - baseline_depth_mm
+    candidates: list[
+        tuple[float, int, list[int], np.ndarray, dict[str, Any]]
+    ] = []
+
+    if location_id == "H2_B_L_INSPECT":
+        for slot_index, (detection_roi, output_roi) in enumerate(
+            H2_BACK_LEFT_UPPER_DEPTH_SLOTS,
+            start=1,
+        ):
+            x, y, width, height = _scale_fixed_layout_bbox(
+                detection_roi,
+                image_shape,
+            )
+            if width <= 0 or height <= 0:
+                continue
+            region_valid = valid_depth[y : y + height, x : x + width]
+            valid_pixels = int(np.count_nonzero(region_valid))
+            if valid_pixels < MIN_DEPTH_VALID_PIXELS:
+                continue
+            region_delta = delta[y : y + height, x : x + width]
+            farther = region_valid & (
+                region_delta > H2_BACK_LEFT_UPPER_SLOT_DEPTH_THRESHOLD_MM
+            )
+            farther_pixels = int(np.count_nonzero(farther))
+            farther_ratio = farther_pixels / valid_pixels
+            if farther_ratio < MIN_H2_BACK_LEFT_UPPER_SLOT_FARTHER_RATIO:
+                continue
+
+            output_bbox = _scale_fixed_layout_bbox(output_roi, image_shape)
+            region_mask = np.zeros(image_shape, dtype=np.uint8)
+            region_mask[y : y + height, x : x + width][farther] = 255
+            region_mask = cv2.bitwise_or(
+                region_mask,
+                clipped_region_mask(photometric_mask, output_bbox),
+            )
+            support = {
+                "applicable": True,
+                "accepted": True,
+                "promoted": True,
+                "fixed_layout_depth_promotion": True,
+                "fixed_layout": "H2_B_L_INSPECT_UPPER",
+                "slot_index": slot_index,
+                "detection_roi": [x, y, width, height],
+                "valid_pixels": valid_pixels,
+                "farther_pixels": farther_pixels,
+                "slot_farther_ratio": round(farther_ratio, 4),
+                "threshold_mm": H2_BACK_LEFT_UPPER_SLOT_DEPTH_THRESHOLD_MM,
+                "reason": "fixed-slot farther-depth ratio indicates a hidden count shortage",
+            }
+            candidates.append(
+                (farther_ratio, slot_index, output_bbox, region_mask, support)
+            )
+
+    elif location_id == "H2_F_L_INSPECT":
+        for slot_index, (slot_roi, calibrated_threshold) in enumerate(
+            H2_FRONT_LEFT_UPPER_DEPTH_SLOTS,
+            start=1,
+        ):
+            x, y, width, height = _scale_fixed_layout_bbox(
+                slot_roi,
+                image_shape,
+            )
+            if width <= 0 or height <= 0:
+                continue
+            region_valid = valid_depth[y : y + height, x : x + width]
+            valid_pixels = int(np.count_nonzero(region_valid))
+            if valid_pixels < MIN_DEPTH_VALID_PIXELS:
+                continue
+            baseline_region = baseline_depth_mm[y : y + height, x : x + width]
+            current_region = current_depth_mm[y : y + height, x : x + width]
+            baseline_near = float(np.percentile(baseline_region[region_valid], 5))
+            current_near = float(np.percentile(current_region[region_valid], 5))
+
+            strip_valid = valid_depth[:, x : x + width]
+            strip_delta = delta[:, x : x + width][strip_valid]
+            stable_delta = strip_delta[
+                (strip_delta > -200.0) & (strip_delta < 200.0)
+            ]
+            if stable_delta.size < MIN_DEPTH_VALID_PIXELS:
+                continue
+            local_depth_offset = float(np.median(stable_delta))
+            near_depth_residual = (
+                current_near - baseline_near - local_depth_offset
+            )
+            slot_score = near_depth_residual - calibrated_threshold
+            rgb_pixels = int(
+                np.count_nonzero(photometric_mask[y : y + height, x : x + width])
+            )
+            rgb_ratio = rgb_pixels / max(1, width * height)
+            if (
+                slot_score < MIN_H2_FRONT_LEFT_UPPER_SLOT_SCORE_MM
+                or rgb_ratio < MIN_H2_FRONT_LEFT_UPPER_SLOT_RGB_RATIO
+            ):
+                continue
+
+            normalized_depth_hole = region_valid & (
+                current_region - baseline_region - local_depth_offset > 30.0
+            )
+            region_mask = clipped_region_mask(
+                photometric_mask,
+                [x, y, width, height],
+            )
+            depth_mask = np.zeros(image_shape, dtype=np.uint8)
+            depth_mask[y : y + height, x : x + width][normalized_depth_hole] = 255
+            region_mask = cv2.bitwise_or(region_mask, depth_mask)
+            region_mask = cv2.morphologyEx(
+                region_mask,
+                cv2.MORPH_CLOSE,
+                np.ones((5, 5), dtype=np.uint8),
+            )
+            output_bbox = [x, y, width, height]
+            support = {
+                "applicable": True,
+                "accepted": True,
+                "promoted": True,
+                "fixed_layout_depth_promotion": True,
+                "fixed_layout": "H2_F_L_INSPECT_UPPER",
+                "slot_index": slot_index,
+                "detection_roi": output_bbox,
+                "valid_pixels": valid_pixels,
+                "rgb_pixels": rgb_pixels,
+                "rgb_ratio": round(rgb_ratio, 4),
+                "baseline_near_depth_mm": round(baseline_near, 2),
+                "current_near_depth_mm": round(current_near, 2),
+                "local_depth_offset_mm": round(local_depth_offset, 2),
+                "near_depth_residual_mm": round(near_depth_residual, 2),
+                "calibrated_threshold_mm": calibrated_threshold,
+                "slot_score_mm": round(slot_score, 2),
+                "reason": "fixed-slot near-depth distribution indicates a hidden rear-item shortage",
+            }
+            candidates.append(
+                (slot_score, slot_index, output_bbox, region_mask, support)
+            )
+
+    if not candidates:
+        return None
+    _, _, bbox, region_mask, support = max(candidates, key=lambda item: item[0])
+    x, y, width, height = bbox
+    finding = INSPECT_API.Finding(
+        bbox=bbox,
+        center=[x + width // 2, y + height // 2],
+        sources=["fixed_layout_depth_fusion"],
+        votes=1,
+    )
+    return finding, support, region_mask
+
+
 def filter_execution_with_depth(
     execution: Any,
     baseline_depth_mm: np.ndarray,
@@ -953,7 +1951,7 @@ def filter_execution_with_depth(
         review_shape,
         homography,
     )
-    depth_change_mask = np.where(
+    raw_depth_change_mask = np.where(
         np.isfinite(baseline_aligned)
         & np.isfinite(current_aligned)
         & (baseline_aligned > 0)
@@ -962,16 +1960,11 @@ def filter_execution_with_depth(
         255,
         0,
     ).astype(np.uint8)
-    kept_pairs, accepted_input_count = refine_findings_with_signed_depth(
-        execution.review_mask,
-        depth_change_mask,
-        baseline_aligned,
-        current_aligned,
-        list(execution.response.findings),
-    )
     promotion_error: str | None = None
     row_bboxes: list[list[int]] = []
     open_ended_row_bboxes: list[list[int]] = []
+    detected_rows: list[Any] = []
+    detected_rails: list[Any] = []
     try:
         row_detection = INSPECT_API.detect_rows(
             execution.review_image,
@@ -980,19 +1973,37 @@ def filter_execution_with_depth(
                 pose_type=execution.response.pose_type,
             ),
         )
-        for row in row_detection.rows:
+        detected_rows = list(row_detection.rows)
+        detected_rails = list(getattr(row_detection, "rails", []))
+        for row in detected_rows:
             row_bbox = list(row.bbox)
             row_bboxes.append(row_bbox)
             if getattr(row, "lower_rail_index", None) is None:
                 open_ended_row_bboxes.append(row_bbox)
     except (ValueError, cv2.error) as error:
         promotion_error = f"{type(error).__name__}: {error}"
+    shelf_roi_mask = _build_shelf_roi_mask(
+        review_shape,
+        detected_rows,
+        detected_rails,
+        str(execution.response.pose_type),
+    )
+    photometric_mask = cv2.bitwise_and(execution.review_mask, shelf_roi_mask)
+    depth_change_mask = cv2.bitwise_and(raw_depth_change_mask, shelf_roi_mask)
+    working_execution = replace(execution, review_mask=photometric_mask)
+    kept_pairs, accepted_input_count = refine_findings_with_signed_depth(
+        photometric_mask,
+        depth_change_mask,
+        baseline_aligned,
+        current_aligned,
+        list(execution.response.findings),
+    )
     # A large, RGB-supported depth hole can be the real shortage even when the
     # global RGB detector was distracted by a different shelf row.  Only let a
     # dominant hole override those coarse candidates; weaker depth edges stay
     # out of the result.
     promotion_candidates = promote_depth_components(
-        execution.review_mask,
+        photometric_mask,
         depth_change_mask,
         baseline_aligned,
         current_aligned,
@@ -1035,17 +2046,108 @@ def filter_execution_with_depth(
             kept_pairs.append(low_contrast_promotion)
             promotions.append(low_contrast_promotion)
             low_contrast_promotion_count = 1
+    had_depth_candidates_before_shelf_filter = bool(kept_pairs)
+    kept_pairs = merge_fragmented_candidates(kept_pairs, detected_rows)
+    kept_pairs, shelf_interference_rejections = (
+        filter_shelf_interference_candidates(
+            kept_pairs,
+            execution=execution,
+            baseline_image=baseline_image,
+            baseline_depth_mm=baseline_aligned,
+            current_depth_mm=current_aligned,
+            rows=detected_rows,
+            rails=detected_rails,
+        )
+    )
+    fixed_layout_depth_promotion_count = 0
+    fixed_layout_promotion = promote_fixed_layout_depth_slot(
+        execution=working_execution,
+        photometric_mask=photometric_mask,
+        baseline_depth_mm=baseline_aligned,
+        current_depth_mm=current_aligned,
+    )
+    if fixed_layout_promotion is not None:
+        kept_pairs = [fixed_layout_promotion]
+        fixed_layout_depth_promotion_count = 1
     rgb_fallback_count = 0
-    if not kept_pairs:
+    location_id = str(execution.response.location_id).upper()
+    allow_rgb_fallback = (
+        "_F_" in location_id or "_INSPECT" not in location_id
+    )
+    if (
+        not kept_pairs
+        and allow_rgb_fallback
+        and not had_depth_candidates_before_shelf_filter
+    ):
         rgb_fallback = select_rgb_fallback_finding(
-            execution,
+            working_execution,
             baseline_aligned,
             current_aligned,
+            detected_rows,
+            detected_rails,
         )
         if rgb_fallback is not None:
-            kept_pairs.append(rgb_fallback)
-            accepted_input_count = 1
-            rgb_fallback_count = 1
+            fallback_pairs, fallback_rejections = (
+                filter_shelf_interference_candidates(
+                    [rgb_fallback],
+                    execution=working_execution,
+                    baseline_image=baseline_image,
+                    baseline_depth_mm=baseline_aligned,
+                    current_depth_mm=current_aligned,
+                    rows=detected_rows,
+                    rails=detected_rails,
+                )
+            )
+            kept_pairs.extend(fallback_pairs)
+            shelf_interference_rejections.extend(fallback_rejections)
+            if fallback_pairs:
+                accepted_input_count = 1
+                rgb_fallback_count = 1
+    closed_depth_recovery_count = 0
+    if (
+        not kept_pairs
+        and "_F_" in location_id
+        and not execution.response.findings
+    ):
+        recovered = recover_closed_depth_candidate(
+            execution=working_execution,
+            baseline_image=baseline_image,
+            depth_change_mask=depth_change_mask,
+            baseline_depth_mm=baseline_aligned,
+            current_depth_mm=current_aligned,
+            rows=detected_rows,
+            rails=detected_rails,
+        )
+        if recovered is not None:
+            recovery_pairs, recovery_rejections = (
+                filter_shelf_interference_candidates(
+                    [recovered],
+                    execution=working_execution,
+                    baseline_image=baseline_image,
+                    baseline_depth_mm=baseline_aligned,
+                    current_depth_mm=current_aligned,
+                    rows=detected_rows,
+                    rails=detected_rails,
+                )
+            )
+            kept_pairs.extend(recovery_pairs)
+            shelf_interference_rejections.extend(recovery_rejections)
+            if recovery_pairs:
+                closed_depth_recovery_count = 1
+    accepted_refined_count = sum(
+        1 for _, support, _ in kept_pairs if bool(support.get("refined"))
+    )
+    accepted_promotion_count = sum(
+        1 for _, support, _ in kept_pairs if bool(support.get("promoted"))
+    )
+    accepted_low_contrast_count = sum(
+        1
+        for _, support, _ in kept_pairs
+        if bool(support.get("low_contrast_promotion"))
+    )
+    accepted_rgb_fallback_count = sum(
+        1 for _, support, _ in kept_pairs if bool(support.get("rgb_fallback"))
+    )
     kept_pairs.sort(key=lambda pair: (pair[0].bbox[1], pair[0].bbox[0]))
     kept_findings = [finding for finding, _, _ in kept_pairs]
     kept_supports = [support for _, support, _ in kept_pairs]
@@ -1077,13 +2179,21 @@ def filter_execution_with_depth(
                 len(execution.response.findings) - accepted_input_count
             ),
             "refined_findings": (
-                len(kept_pairs) - len(promotions) - rgb_fallback_count
+                accepted_refined_count
             ),
-            "promoted_findings": len(promotions),
+            "promoted_findings": accepted_promotion_count,
             "low_contrast_promoted_findings": (
-                low_contrast_promotion_count
+                accepted_low_contrast_count
             ),
-            "rgb_fallback_findings": rgb_fallback_count,
+            "rgb_fallback_findings": accepted_rgb_fallback_count,
+            "shelf_interference_rejected_findings": len(
+                shelf_interference_rejections
+            ),
+            "shelf_interference_rejections": shelf_interference_rejections,
+            "closed_depth_recovery_findings": closed_depth_recovery_count,
+            "fixed_layout_depth_promoted_findings": (
+                fixed_layout_depth_promotion_count
+            ),
             "promotion_row_count": len(row_bboxes),
             "promotion_error": promotion_error,
             "depth_change_threshold_mm": DEPTH_CHANGE_THRESHOLD_MM,
@@ -1107,6 +2217,15 @@ def filter_execution_with_depth(
             ),
             "minimum_open_row_interior_fill_ratio": (
                 MIN_OPEN_ROW_INTERIOR_FILL_RATIO
+            ),
+            "minimum_outward_shelf_overlap_ratio": (
+                MIN_OUTWARD_SHELF_OVERLAP_RATIO
+            ),
+            "minimum_open_row_farther_window_ratio": (
+                MIN_OPEN_ROW_FARTHER_WINDOW_RATIO
+            ),
+            "maximum_open_row_movement_balance_ratio": (
+                MAX_OPEN_ROW_MOVEMENT_BALANCE_RATIO
             ),
         },
         depth_change_mask,
