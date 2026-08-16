@@ -165,6 +165,7 @@ class AlgorithmExecution:
     result: AlgorithmResult
     review_image: np.ndarray | None = None
     review_mask: np.ndarray | None = None
+    review_homography: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,7 @@ class InspectionExecution:
     response: InspectResponse
     review_image: np.ndarray
     review_mask: np.ndarray
+    review_homography: np.ndarray | None = None
 
 
 class InspectionAlgorithm(Protocol):
@@ -220,6 +222,11 @@ class ComparisonBasedAlgorithm:
             ),
             review_image=result.aligned_current,
             review_mask=result.mask,
+            review_homography=(
+                np.asarray(result.alignment.homography, dtype=np.float64)
+                if result.alignment.homography is not None
+                else None
+            ),
         )
 
 
@@ -303,6 +310,11 @@ class InspectionPipeline:
             ),
             review_image=review_image,
             review_mask=review_mask,
+            review_homography=(
+                review_execution.review_homography
+                if review_execution is not None
+                else None
+            ),
         )
 
 

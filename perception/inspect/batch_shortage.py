@@ -8,6 +8,7 @@ import json
 import re
 import sys
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
@@ -34,6 +35,10 @@ GROUP_PATTERN = re.compile(
     r"^(?P<target>H[12]_[FB]_[LR]_INSPECT)_(?P<pose>UPPER|LOWER)$"
 )
 RECORD_PATTERN = re.compile(r"^record_\d{8}_\d{6}_\d{6}$")
+DEPTH_CHANGE_THRESHOLD_MM = 60.0
+MIN_DEPTH_VALID_PIXELS = 50
+MIN_DEPTH_VALID_RATIO = 0.02
+MIN_DEPTH_FARTHER_RATIO = 0.20
 
 
 def load_inspect_api() -> ModuleType:
@@ -94,7 +99,10 @@ def write_image(path: Path, image: np.ndarray) -> None:
     encoded.tofile(path)
 
 
-def validate_depth(record_directory: Path, image_shape: tuple[int, int]) -> tuple[Path, int]:
+def validate_depth(
+    record_directory: Path,
+    image_shape: tuple[int, int],
+) -> tuple[Path, int, np.ndarray]:
     depth_path = record_directory / "depth_mm.npy"
     try:
         depth = np.load(depth_path, allow_pickle=False)
@@ -106,8 +114,9 @@ def validate_depth(record_directory: Path, image_shape: tuple[int, int]) -> tupl
         )
     if not np.issubdtype(depth.dtype, np.number):
         raise RuntimeError(f"深度必须是数值数组: {depth_path}")
-    valid_pixels = int(np.count_nonzero(np.isfinite(depth) & (depth > 0)))
-    return depth_path, valid_pixels
+    depth_mm = depth.astype(np.float32)
+    valid_pixels = int(np.count_nonzero(np.isfinite(depth_mm) & (depth_mm > 0)))
+    return depth_path, valid_pixels, depth_mm
 
 
 def parse_group_name(group_name: str) -> tuple[str, str]:
@@ -186,6 +195,167 @@ def clipped_region_mask(mask: np.ndarray, bbox: list[int]) -> np.ndarray:
     y1 = max(y0, min(mask.shape[0], y + height))
     output[y0:y1, x0:x1] = mask[y0:y1, x0:x1]
     return output
+
+
+def align_depth_to_review(
+    depth_mm: np.ndarray,
+    review_shape: tuple[int, int],
+    homography: np.ndarray | None = None,
+) -> np.ndarray:
+    """Resize and optionally warp RGB-aligned depth into review coordinates."""
+
+    height, width = review_shape
+    resized = cv2.resize(
+        np.asarray(depth_mm, dtype=np.float32),
+        (width, height),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    if homography is None:
+        return resized
+    matrix = np.asarray(homography, dtype=np.float64)
+    if matrix.shape != (3, 3) or not np.isfinite(matrix).all():
+        raise RuntimeError("RGB 配准矩阵不是有效的 3x3 homography")
+    return cv2.warpPerspective(
+        resized,
+        matrix,
+        (width, height),
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+
+
+def depth_support_for_finding(
+    photometric_mask: np.ndarray,
+    bbox: list[int],
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+) -> dict[str, Any]:
+    """Measure whether an RGB change is supported by a farther current surface."""
+
+    region_mask = clipped_region_mask(photometric_mask, bbox) > 0
+    changed_pixels = int(np.count_nonzero(region_mask))
+    valid = (
+        region_mask
+        & np.isfinite(baseline_depth_mm)
+        & np.isfinite(current_depth_mm)
+        & (baseline_depth_mm > 0)
+        & (current_depth_mm > 0)
+    )
+    valid_pixels = int(np.count_nonzero(valid))
+    required_pixels = max(
+        MIN_DEPTH_VALID_PIXELS,
+        round(changed_pixels * MIN_DEPTH_VALID_RATIO),
+    )
+    applicable = valid_pixels >= required_pixels
+    deltas = current_depth_mm[valid] - baseline_depth_mm[valid]
+    farther_pixels = int(np.count_nonzero(deltas > DEPTH_CHANGE_THRESHOLD_MM))
+    farther_ratio = farther_pixels / valid_pixels if valid_pixels else 0.0
+    return {
+        "applicable": applicable,
+        "accepted": (not applicable) or farther_ratio >= MIN_DEPTH_FARTHER_RATIO,
+        "changed_pixels": changed_pixels,
+        "valid_pixels": valid_pixels,
+        "required_valid_pixels": required_pixels,
+        "farther_pixels": farther_pixels,
+        "farther_ratio": round(farther_ratio, 4),
+        "median_delta_mm": (
+            round(float(np.median(deltas)), 1) if deltas.size else None
+        ),
+        "threshold_mm": DEPTH_CHANGE_THRESHOLD_MM,
+    }
+
+
+def filter_execution_with_depth(
+    execution: Any,
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+) -> tuple[Any, list[dict[str, Any]], dict[str, Any], np.ndarray]:
+    """Reject illumination-only RGB regions when aligned depth contradicts shortage."""
+
+    review_shape = execution.review_image.shape[:2]
+    baseline_aligned = align_depth_to_review(baseline_depth_mm, review_shape)
+    homography = getattr(execution, "review_homography", None)
+    if homography is None:
+        return (
+            execution,
+            [
+                {
+                    "applicable": False,
+                    "accepted": True,
+                    "reason": "RGB alignment homography unavailable",
+                }
+                for _ in execution.response.findings
+            ],
+            {
+                "applied": False,
+                "input_findings": len(execution.response.findings),
+                "kept_findings": len(execution.response.findings),
+                "rejected_findings": 0,
+                "reason": "RGB alignment homography unavailable",
+            },
+            np.zeros(review_shape, dtype=np.uint8),
+        )
+    current_aligned = align_depth_to_review(
+        current_depth_mm,
+        review_shape,
+        homography,
+    )
+    depth_change_mask = np.where(
+        np.isfinite(baseline_aligned)
+        & np.isfinite(current_aligned)
+        & (baseline_aligned > 0)
+        & (current_aligned > 0)
+        & ((current_aligned - baseline_aligned) > DEPTH_CHANGE_THRESHOLD_MM),
+        255,
+        0,
+    ).astype(np.uint8)
+    supports = [
+        depth_support_for_finding(
+            execution.review_mask,
+            finding.bbox,
+            baseline_aligned,
+            current_aligned,
+        )
+        for finding in execution.response.findings
+    ]
+    kept_pairs = [
+        (finding, support)
+        for finding, support in zip(execution.response.findings, supports)
+        if support["accepted"]
+    ]
+    kept_findings = [finding for finding, _ in kept_pairs]
+    kept_supports = [support for _, support in kept_pairs]
+    filtered_mask = np.zeros(execution.review_mask.shape, dtype=np.uint8)
+    for finding in kept_findings:
+        filtered_mask = cv2.bitwise_or(
+            filtered_mask,
+            clipped_region_mask(execution.review_mask, finding.bbox),
+        )
+    response = execution.response.model_copy(
+        update={
+            "findings": kept_findings,
+            "has_anomaly": bool(kept_findings),
+        }
+    )
+    filtered = replace(
+        execution,
+        response=response,
+        review_mask=filtered_mask,
+    )
+    return (
+        filtered,
+        kept_supports,
+        {
+            "applied": True,
+            "input_findings": len(supports),
+            "kept_findings": len(kept_findings),
+            "rejected_findings": len(supports) - len(kept_findings),
+            "depth_change_threshold_mm": DEPTH_CHANGE_THRESHOLD_MM,
+            "minimum_farther_ratio": MIN_DEPTH_FARTHER_RATIO,
+        },
+        depth_change_mask,
+    )
 
 
 def build_overlay(
@@ -267,7 +437,7 @@ def run_record(
     }
     try:
         current = read_image(rgb_path)
-        depth_path, valid_depth_pixels = validate_depth(
+        depth_path, valid_depth_pixels, current_depth_mm = validate_depth(
             record_directory,
             current.shape[:2],
         )
@@ -279,6 +449,14 @@ def run_record(
             current,
             location_id=entry["location_id"],
             pose_type=entry["pose_type"],
+        )
+        raw_finding_count = len(execution.response.findings)
+        execution, depth_supports, depth_filter, depth_change_mask = (
+            filter_execution_with_depth(
+                execution,
+                initial_scan.depth_mm,
+                current_depth_mm,
+            )
         )
         response = execution.response
         reviewed_by_region: dict[int, Any] = {}
@@ -304,7 +482,10 @@ def run_record(
 
         combined_mask = np.zeros(execution.review_mask.shape, dtype=np.uint8)
         findings: list[dict[str, Any]] = []
-        for region_index, finding in enumerate(response.findings, start=1):
+        for region_index, (finding, depth_support) in enumerate(
+            zip(response.findings, depth_supports),
+            start=1,
+        ):
             region_mask = clipped_region_mask(execution.review_mask, finding.bbox)
             combined_mask = cv2.bitwise_or(combined_mask, region_mask)
             mask_path = output_directory / f"region_{region_index:02d}_mask.png"
@@ -324,6 +505,7 @@ def run_record(
                     "votes": finding.votes,
                     "mask": relative_path(mask_path, data_root),
                     "mask_pixels": int(np.count_nonzero(region_mask)),
+                    "depth_support": depth_support,
                     "product_name": product_name,
                     "confidence": (
                         reviewed.confidence if reviewed is not None else None
@@ -334,13 +516,27 @@ def run_record(
         output_directory.mkdir(parents=True, exist_ok=True)
         aligned_path = output_directory / "aligned_current.jpg"
         combined_mask_path = output_directory / "combined_mask.png"
+        depth_change_mask_path = output_directory / "depth_change_mask.png"
         overlay_path = output_directory / "overlay.jpg"
+        row_detection_path = output_directory / "row_detection.jpg"
         write_image(aligned_path, execution.review_image)
         write_image(combined_mask_path, combined_mask)
+        write_image(depth_change_mask_path, depth_change_mask)
         write_image(
             overlay_path,
             build_overlay(execution.review_image, combined_mask, findings),
         )
+        row_detection_data: dict[str, Any] | None = None
+        row_detection_error: str | None = None
+        try:
+            row_detection = INSPECT_API.detect_rows(
+                execution.review_image,
+                INSPECT_API.RowDetectionConfig(pose_type=entry["pose_type"]),
+            )
+            row_detection_data = row_detection.as_dict()
+            write_image(row_detection_path, row_detection.draw())
+        except (ValueError, cv2.error) as error:
+            row_detection_error = f"{type(error).__name__}: {error}"
 
         recognized_count = sum(
             1 for finding in findings if finding.get("product_name")
@@ -371,13 +567,26 @@ def run_record(
                     ),
                     None,
                 ),
+                "raw_finding_count": raw_finding_count,
+                "depth_filter": depth_filter,
+                "row_detection": row_detection_data,
+                "row_detection_error": row_detection_error,
                 "findings": findings,
                 "recognized_count": recognized_count,
                 "recognition_error": recognition_error,
                 "artifacts": {
                     "aligned_current": relative_path(aligned_path, data_root),
                     "combined_mask": relative_path(combined_mask_path, data_root),
+                    "depth_change_mask": relative_path(
+                        depth_change_mask_path,
+                        data_root,
+                    ),
                     "overlay": relative_path(overlay_path, data_root),
+                    "row_detection": (
+                        relative_path(row_detection_path, data_root)
+                        if row_detection_path.is_file()
+                        else None
+                    ),
                 },
             }
         )

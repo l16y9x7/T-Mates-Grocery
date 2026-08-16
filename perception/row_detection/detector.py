@@ -39,7 +39,7 @@ class RowDetectionConfig:
     min_rail_span_ratio: float = 0.34
     max_rail_height_ratio: float = 0.12
     merge_y_gap_ratio: float = 0.010
-    nearby_rail_merge_ratio: float = 0.12
+    nearby_rail_merge_ratio: float = 0.14
     nearby_rail_min_horizontal_overlap: float = 0.65
     min_product_row_height_ratio: float = 0.075
     include_trailing_row: bool = False

@@ -340,6 +340,23 @@ def shortage_batch_file_url(relative_path: object, version: int) -> str | None:
     )
 
 
+def shortage_batch_baseline_url(group: object) -> str | None:
+    """Return the fixed task0 RGB paired with a shortage collection group."""
+
+    if not isinstance(group, str):
+        return None
+    try:
+        baseline_path = resolve_initial_scan_for_web(group) / "rgb.jpg"
+    except HTTPException:
+        return None
+    if not baseline_path.is_file():
+        return None
+    return (
+        f"/api/qwen-review/initial-scan/{quote(group, safe='')}/source"
+        f"?v={baseline_path.stat().st_mtime_ns}"
+    )
+
+
 @app.get("/api/qwen-review/shortage-batch")
 def list_shortage_batch_results() -> dict:
     if not SHORTAGE_BATCH_SUMMARY_PATH.is_file():
@@ -379,6 +396,9 @@ def list_shortage_batch_results() -> dict:
             result.get("source_rgb"),
             version,
         )
+        result["baseline_rgb_url"] = shortage_batch_baseline_url(
+            result.get("group"),
+        )
         result["aligned_current_url"] = shortage_batch_file_url(
             artifacts.get("aligned_current"),
             version,
@@ -389,6 +409,10 @@ def list_shortage_batch_results() -> dict:
         )
         result["overlay_url"] = shortage_batch_file_url(
             artifacts.get("overlay"),
+            version,
+        )
+        result["row_detection_url"] = shortage_batch_file_url(
+            artifacts.get("row_detection"),
             version,
         )
         samples.append(result)

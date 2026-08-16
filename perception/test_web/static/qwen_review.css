@@ -54,7 +54,9 @@ a { color: #c4b5fd; }
 .shortage-batch-metrics > div { border: 1px solid #3f2d3a; border-radius: 9px; background: #140b12; padding: 9px 11px; }
 .shortage-batch-metrics dt { color: var(--muted); font-size: 11px; }
 .shortage-batch-metrics dd { margin: 5px 0 0; color: #fecdd3; font: 700 13px/1.3 "Cascadia Code", Consolas, monospace; overflow-wrap: anywhere; }
-.source-grid.shortage-batch-images { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.source-grid.shortage-batch-images { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.shortage-row-detection { grid-column: 1 / -1; }
+.shortage-row-detection img { max-height: 620px; object-fit: contain; }
 .shortage-batch-finding-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 12px; margin-top: 14px; }
 .shortage-finding { border: 1px solid #4c2c39; border-radius: 11px; background: #0c1018; overflow: hidden; }
 .shortage-finding header { display: block; margin: 0; padding: 11px 12px; background: #1a1018; }
@@ -153,6 +155,7 @@ figure.unavailable .image-unavailable { display: grid; }
   .shortage-batch-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .shortage-batch-metrics { grid-column: 1 / -1; }
   .source-grid.shortage-batch-images { grid-template-columns: 1fr; }
+  .shortage-row-detection { grid-column: auto; }
   .constraint-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .result-layout { grid-template-columns: 1fr; }
   header { align-items: start; flex-direction: column; }

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Inspection · Qwen Review</title>
-    <link rel="stylesheet" href="/static/qwen_review.css?v=5" />
+    <link rel="stylesheet" href="/static/qwen_review.css?v=7" />
   </head>
   <body>
     <main>
@@ -88,6 +88,16 @@
           </dl>
         </div>
         <div class="source-grid shortage-batch-images">
+          <figure id="shortageBatchBaselineFigure">
+            <figcaption>
+              <strong>Baseline RGB</strong>
+              <small>缺货前 task0 初始扫描图</small>
+            </figcaption>
+            <div class="source-image-wrap">
+              <img id="shortageBatchBaselineImage" alt="缺货前初始扫描图" />
+              <span class="image-unavailable">暂无初始图</span>
+            </div>
+          </figure>
           <figure id="shortageBatchSourceFigure">
             <figcaption>
               <strong>Current RGB</strong>
@@ -116,6 +126,16 @@
             <div class="source-image-wrap">
               <img id="shortageBatchMaskImage" alt="缺货组合 mask" />
               <span class="image-unavailable">暂无 mask</span>
+            </div>
+          </figure>
+          <figure id="shortageBatchRowFigure" class="shortage-row-detection">
+            <figcaption>
+              <strong>Row detection</strong>
+              <small id="shortageBatchRowSummary">当前对齐图的 ROW / RAIL 检测结果</small>
+            </figcaption>
+            <div class="source-image-wrap">
+              <img id="shortageBatchRowImage" alt="当前图货架行检测结果" />
+              <span class="image-unavailable">暂无 row_detection 结果</span>
             </div>
           </figure>
         </div>
@@ -328,6 +348,6 @@
         </div>
       </section>
     </main>
-    <script src="/static/qwen_review.js?v=9"></script>
+    <script src="/static/qwen_review.js?v=11"></script>
   </body>
 </html>

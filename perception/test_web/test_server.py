@@ -112,6 +112,8 @@ class PromptMappingTest(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('id="shortageBatchGroupSelect"', review_html)
+        self.assertIn('id="shortageBatchBaselineImage"', review_html)
+        self.assertIn('id="shortageBatchRowImage"', review_html)
         self.assertIn("/api/qwen-review/shortage-batch", review_js)
 
         with tempfile.TemporaryDirectory() as directory:
@@ -123,9 +125,15 @@ class PromptMappingTest(unittest.TestCase):
             source_path = root / group / record / "rgb.jpg"
             overlay_path = result_root / "overlay.jpg"
             mask_path = result_root / "region_01_mask.png"
+            row_detection_path = result_root / "row_detection.jpg"
             source_path.write_bytes(b"rgb")
             overlay_path.write_bytes(b"overlay")
             mask_path.write_bytes(b"mask")
+            row_detection_path.write_bytes(b"rows")
+            scan_root = root / "task0"
+            baseline_path = scan_root / group / "rgb.jpg"
+            baseline_path.parent.mkdir(parents=True)
+            baseline_path.write_bytes(b"baseline")
             summary_path = root / "shortage_inspection_batch_results.json"
             summary_path.write_text(
                 json.dumps(
@@ -154,7 +162,11 @@ class PromptMappingTest(unittest.TestCase):
                                     "overlay": (
                                         f"{group}/{record}/shortage_inspection/"
                                         "overlay.jpg"
-                                    )
+                                    ),
+                                    "row_detection": (
+                                        f"{group}/{record}/shortage_inspection/"
+                                        "row_detection.jpg"
+                                    ),
                                 },
                             }
                         ],
@@ -166,6 +178,7 @@ class PromptMappingTest(unittest.TestCase):
             with (
                 patch.object(server, "SHORTAGE_BATCH_ROOT", root),
                 patch.object(server, "SHORTAGE_BATCH_SUMMARY_PATH", summary_path),
+                patch.object(server, "initial_scan_root", return_value=scan_root),
             ):
                 payload = server.list_shortage_batch_results()
                 file_response = server.get_shortage_batch_file(
@@ -180,6 +193,11 @@ class PromptMappingTest(unittest.TestCase):
         )
         self.assertIn("region_01_mask.png", sample["findings"][0]["mask_url"])
         self.assertTrue(sample["overlay_url"])
+        self.assertIn("row_detection.jpg", sample["row_detection_url"])
+        self.assertIn(
+            f"/api/qwen-review/initial-scan/{group}/source",
+            sample["baseline_rgb_url"],
+        )
         self.assertEqual(Path(file_response.path), mask_path)
 
     def test_sorting_batch_gallery_lists_and_serves_rgb_depth_and_result(self) -> None:

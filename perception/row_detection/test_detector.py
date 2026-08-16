@@ -157,6 +157,22 @@ class RowDetectionTest(unittest.TestCase):
         self.assertGreater(result.rails[0].y_center, 240)
         self.assertEqual(result.rows[0].bbox[3], result.rails[0].y_center)
 
+    def test_merges_product_band_one_hundred_pixels_above_shelf_rail(self) -> None:
+        image = np.full((720, 1280, 3), 45, dtype=np.uint8)
+        cv2.rectangle(image, (81, 164), (815, 178), (25, 25, 210), -1)
+        cv2.rectangle(image, (0, 239), (1279, 296), (25, 25, 210), -1)
+        cv2.rectangle(image, (0, 624), (1279, 683), (25, 25, 210), -1)
+
+        result = detect_rows(
+            image,
+            RowDetectionConfig(pose_type="SHELF_VIEW_UPPER"),
+        )
+
+        self.assertEqual(len(result.rails), 2)
+        self.assertEqual(len(result.rows), 2)
+        self.assertGreater(result.rails[0].y_center, 250)
+        self.assertEqual(result.rows[0].bbox[3], result.rails[0].y_center)
+
     def test_does_not_merge_close_rails_on_opposite_image_sides(self) -> None:
         image = np.full((720, 1280, 3), 45, dtype=np.uint8)
         cv2.rectangle(image, (0, 200), (510, 215), (25, 25, 210), -1)

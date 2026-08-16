@@ -57,7 +57,7 @@ class ComparisonConfig:
     min_contour_area_ratio: float = 0.0015
     max_contour_area_ratio: float = 0.25
     ignore_border_ratio: float = 0.015
-    overlap_edge_clearance_ratio: float = 0.02
+    overlap_edge_clearance_ratio: float = 0.018
     merge_gap_ratio: float = 0.006
     min_area_relative_to_largest: float = 0.3
     max_bbox_aspect_ratio: float = 5.0

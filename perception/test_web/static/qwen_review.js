@@ -146,6 +146,11 @@ function renderShortageBatchRecord() {
   document.querySelector("#shortageBatchProducts").textContent = productNames.join("、") || "未识别";
   document.querySelector("#shortageBatchElapsed").textContent = formatMilliseconds(sample.elapsed_ms);
   setSourceImage(
+    "shortageBatchBaselineImage",
+    "shortageBatchBaselineFigure",
+    sample.baseline_rgb_url,
+  );
+  setSourceImage(
     "shortageBatchSourceImage",
     "shortageBatchSourceFigure",
     sample.source_rgb_url,
@@ -160,6 +165,17 @@ function renderShortageBatchRecord() {
     "shortageBatchMaskFigure",
     sample.combined_mask_url,
   );
+  setSourceImage(
+    "shortageBatchRowImage",
+    "shortageBatchRowFigure",
+    sample.row_detection_url,
+  );
+  const rowDetection = sample.row_detection || {};
+  const rails = Array.isArray(rowDetection.rails) ? rowDetection.rails.length : 0;
+  const rows = Array.isArray(rowDetection.rows) ? rowDetection.rows.length : 0;
+  document.querySelector("#shortageBatchRowSummary").textContent = sample.row_detection_url
+    ? `${rails} rails · ${rows} rows · 当前对齐图`
+    : (sample.row_detection_error || "暂无 row_detection 结果");
   renderShortageBatchFindings(sample);
   const errorMessage = sample.recognition_error?.message || sample.error;
   const statusKind = ["success", "partial", "no_anomaly"].includes(sample.status)

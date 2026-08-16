@@ -57,35 +57,43 @@ class ShortageBatchTest(unittest.TestCase):
             batch.write_image(record_directory / "rgb.jpg", image)
             np.save(
                 record_directory / "depth_mm.npy",
-                np.full((72, 128), 900, dtype=np.uint16),
+                np.full((72, 128), 1100, dtype=np.uint16),
             )
             review_mask = np.zeros((72, 128), dtype=np.uint8)
             review_mask[20:40, 30:60] = 255
-            finding = SimpleNamespace(
+            finding = batch.INSPECT_API.Finding(
                 bbox=[30, 20, 30, 20],
                 center=[45, 30],
                 sources=["comparison_based"],
                 votes=1,
             )
-            response = SimpleNamespace(
+            response = batch.INSPECT_API.InspectResponse(
+                location_id="H1_B_L1_C01",
+                pose_type="SHELF_VIEW_UPPER",
+                task_type="SHORTAGE",
+                has_anomaly=True,
                 findings=[finding],
                 image_size=[128, 72],
                 bbox_format=["x", "y", "width", "height"],
                 algorithms=[
-                    SimpleNamespace(
+                    batch.INSPECT_API.AlgorithmResult(
                         name="comparison_based",
+                        success=True,
+                        elapsed_ms=1.0,
                         alignment_success=True,
                     )
                 ],
             )
-            execution = SimpleNamespace(
+            execution = batch.INSPECT_API.InspectionExecution(
                 response=response,
                 review_image=image,
                 review_mask=review_mask,
+                review_homography=np.eye(3, dtype=np.float64),
             )
             initial_scan = SimpleNamespace(
                 rgb=image,
                 rgb_path=Path("task0/H1_B_L_INSPECT_UPPER/rgb.jpg"),
+                depth_mm=np.full((72, 128), 900, dtype=np.float32),
             )
             entry = {
                 "group": "H1_B_L_INSPECT_UPPER",
@@ -116,8 +124,51 @@ class ShortageBatchTest(unittest.TestCase):
         self.assertEqual(result["status"], "detection_only")
         self.assertEqual(result["findings"][0]["bbox"], [30, 20, 30, 20])
         self.assertEqual(result["findings"][0]["mask_pixels"], 600)
+        self.assertEqual(
+            result["findings"][0]["depth_support"]["farther_ratio"],
+            1.0,
+        )
         self.assertTrue(mask_path.name.endswith("_mask.png"))
         self.assertEqual(saved_mask.shape[:2], (72, 128))
+
+    def test_depth_filter_rejects_illumination_only_region(self) -> None:
+        image = np.full((72, 128, 3), 80, dtype=np.uint8)
+        mask = np.zeros((72, 128), dtype=np.uint8)
+        mask[20:40, 30:60] = 255
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H1_B_L1_C01",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=True,
+            image_size=[128, 72],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[
+                batch.INSPECT_API.Finding(
+                    bbox=[30, 20, 30, 20],
+                    center=[45, 30],
+                    sources=["comparison_based"],
+                    votes=1,
+                )
+            ],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=mask,
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        depth = np.full((72, 128), 900, dtype=np.float32)
+
+        filtered, supports, summary, _ = batch.filter_execution_with_depth(
+            execution,
+            depth,
+            depth.copy(),
+        )
+
+        self.assertEqual(filtered.response.findings, [])
+        self.assertEqual(supports, [])
+        self.assertEqual(summary["rejected_findings"], 1)
 
 
 if __name__ == "__main__":
