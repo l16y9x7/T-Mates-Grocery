@@ -2345,6 +2345,9 @@ def run_record(
                     location_id=entry["location_id"],
                     pose_type=entry["pose_type"],
                     baseline=initial_scan.rgb,
+                    current_source=current,
+                    baseline_depth_mm=initial_scan.depth_mm,
+                    current_depth_mm=current_depth_mm,
                     reviewer=reviewer,
                 )
                 reviewed_by_region = {

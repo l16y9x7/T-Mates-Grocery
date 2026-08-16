@@ -710,6 +710,17 @@ class QwenReviewerTest(unittest.TestCase):
                 location_id="H1_F_L2_C03",
                 pose_type="",
                 current=self.current,
+                baseline=self.current.copy(),
+                debug_current_depth_mm=np.full(
+                    self.current.shape[:2],
+                    1100,
+                    dtype=np.uint16,
+                ),
+                debug_baseline_depth_mm=np.full(
+                    self.current.shape[:2],
+                    900,
+                    dtype=np.uint16,
+                ),
                 bboxes=[[300, 300, 101, 221]],
             )
 
@@ -720,6 +731,11 @@ class QwenReviewerTest(unittest.TestCase):
                 debug / "request.json",
                 debug / "candidates.json",
                 debug / "result.json",
+                debug / "current_rgb.jpg",
+                debug / "current_depth_mm.npy",
+                debug / "baseline_rgb.jpg",
+                debug / "baseline_depth_mm.npy",
+                debug / "rgbd.json",
                 debug / "region_01" / "bbox_expanded.jpg",
                 debug / "region_01" / "prompt.txt",
                 debug / "region_01" / "qwen_image_01.jpg",
@@ -740,6 +756,14 @@ class QwenReviewerTest(unittest.TestCase):
                 cv2.IMREAD_COLOR,
             )
             self.assertEqual(crop.shape[:2], (421, 161))
+            np.testing.assert_array_equal(
+                np.load(debug / "current_depth_mm.npy", allow_pickle=False),
+                np.full(self.current.shape[:2], 1100, dtype=np.uint16),
+            )
+            np.testing.assert_array_equal(
+                np.load(debug / "baseline_depth_mm.npy", allow_pickle=False),
+                np.full(self.current.shape[:2], 900, dtype=np.uint16),
+            )
 
 
 if __name__ == "__main__":

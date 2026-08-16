@@ -161,6 +161,10 @@ class QwenReviewer:
         pose_type: PoseType,
         current: np.ndarray,
         baseline: np.ndarray | None = None,
+        debug_current_rgb: np.ndarray | None = None,
+        debug_current_depth_mm: np.ndarray | None = None,
+        debug_baseline_rgb: np.ndarray | None = None,
+        debug_baseline_depth_mm: np.ndarray | None = None,
         bboxes: Sequence[Sequence[int]],
         row_constraints: Sequence[ReviewRowConstraint | None] | None = None,
     ) -> QwenReviewResult:
@@ -177,6 +181,20 @@ class QwenReviewer:
                 raise ValueError("row_constraints must match bboxes")
             normalized_constraints = list(row_constraints)
 
+        source_current = (
+            np.asarray(debug_current_rgb)
+            if debug_current_rgb is not None
+            else np.asarray(current)
+        )
+        source_baseline = (
+            np.asarray(debug_baseline_rgb)
+            if debug_baseline_rgb is not None
+            else (
+                np.asarray(baseline)
+                if baseline is not None
+                else source_current
+            )
+        )
         current = _resize_image(current)
         baseline = _resize_image(baseline) if baseline is not None else current
         normalized_bboxes = [_normalize_bbox(bbox) for bbox in bboxes]
@@ -187,6 +205,14 @@ class QwenReviewer:
             normalized_bboxes,
             normalized_constraints,
         )
+        if debug_directory is not None:
+            _write_rgbd_debug_artifacts(
+                debug_directory,
+                current_rgb=source_current,
+                current_depth_mm=debug_current_depth_mm,
+                baseline_rgb=source_baseline,
+                baseline_depth_mm=debug_baseline_depth_mm,
+            )
         rows = self._fetch_candidate_rows(location_id, pose_type)
         normalized_constraints = [
             constraint
@@ -977,6 +1003,73 @@ def _row_constraint_dict(
     if constraint.detected_row_index is not None:
         value["detected_row_index"] = constraint.detected_row_index
     return value
+
+
+def _write_rgbd_debug_artifacts(
+    directory: Path,
+    *,
+    current_rgb: np.ndarray,
+    current_depth_mm: np.ndarray | None,
+    baseline_rgb: np.ndarray,
+    baseline_depth_mm: np.ndarray | None,
+) -> None:
+    """Persist the exact inspection RGB-D inputs before external requests."""
+
+    streams = (
+        ("current", np.asarray(current_rgb), current_depth_mm),
+        ("baseline", np.asarray(baseline_rgb), baseline_depth_mm),
+    )
+    manifest: dict[str, Any] = {
+        "schema_version": 1,
+        "depth_unit": "millimeter",
+        "depth_aligned_to": "matching_rgb",
+    }
+    for name, rgb, depth_value in streams:
+        if rgb.ndim != 3 or rgb.shape[2] != 3 or rgb.dtype != np.uint8:
+            raise QwenReviewError(
+                "debug_artifact",
+                f"{name} debug RGB must be a uint8 BGR image",
+            )
+        rgb_path = directory / f"{name}_rgb.jpg"
+        _write_image(rgb_path, rgb)
+        item: dict[str, Any] = {
+            "rgb": rgb_path.name,
+            "width": int(rgb.shape[1]),
+            "height": int(rgb.shape[0]),
+        }
+        if depth_value is not None:
+            depth = np.asarray(depth_value)
+            if depth.ndim != 2 or depth.shape != rgb.shape[:2]:
+                raise QwenReviewError(
+                    "debug_artifact",
+                    f"{name} debug depth must align with its RGB: "
+                    f"rgb={rgb.shape[:2]}, depth={depth.shape}",
+                )
+            if not np.issubdtype(depth.dtype, np.number):
+                raise QwenReviewError(
+                    "debug_artifact",
+                    f"{name} debug depth must be numeric",
+                )
+            depth_path = directory / f"{name}_depth_mm.npy"
+            try:
+                np.save(depth_path, depth, allow_pickle=False)
+            except OSError as error:
+                raise QwenReviewError(
+                    "debug_artifact",
+                    f"无法写入 Qwen 调试深度: {depth_path}",
+                ) from error
+            valid = np.isfinite(depth) & (depth > 0)
+            item.update(
+                {
+                    "depth": depth_path.name,
+                    "depth_dtype": str(depth.dtype),
+                    "valid_depth_pixels": int(np.count_nonzero(valid)),
+                }
+            )
+        else:
+            item["depth"] = None
+        manifest[name] = item
+    _write_json(directory / "rgbd.json", manifest)
 
 
 def _write_text(path: Path, value: str) -> None:

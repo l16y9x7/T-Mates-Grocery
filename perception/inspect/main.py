@@ -427,6 +427,9 @@ def review_inspection_execution(
     location_id: str,
     pose_type: PoseType,
     baseline: np.ndarray,
+    current_source: np.ndarray | None = None,
+    baseline_depth_mm: np.ndarray | None = None,
+    current_depth_mm: np.ndarray | None = None,
     reviewer: QwenReviewer | None = None,
 ) -> QwenReviewResult:
     """Apply the same row constraints and Qwen review used by the HTTP route."""
@@ -453,6 +456,10 @@ def review_inspection_execution(
         pose_type=pose_type,
         current=execution.review_image,
         baseline=baseline,
+        debug_current_rgb=current_source,
+        debug_current_depth_mm=current_depth_mm,
+        debug_baseline_rgb=baseline,
+        debug_baseline_depth_mm=baseline_depth_mm,
         bboxes=[finding.bbox for finding in result.findings],
         row_constraints=row_constraints,
     )
@@ -484,6 +491,8 @@ def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
                 pose_type=request.pose_type,
                 baseline=baseline.rgb,
                 current=current.rgb,
+                baseline_depth_mm=baseline.depth_mm,
+                current_depth_mm=current.depth_mm,
                 reference_item_area=request.reference_item_area,
             )
     except CameraCaptureError as error:
@@ -505,6 +514,8 @@ def inspect_supplied_images(
     pose_type: PoseType,
     baseline: np.ndarray,
     current: np.ndarray,
+    baseline_depth_mm: np.ndarray | None = None,
+    current_depth_mm: np.ndarray | None = None,
     reference_item_area: float | None = None,
 ) -> InspectApiResponse:
     """Run the public result pipeline on caller-supplied images for offline tests."""
@@ -530,6 +541,9 @@ def inspect_supplied_images(
             location_id=location_id,
             pose_type=pose_type,
             baseline=baseline,
+            current_source=current,
+            baseline_depth_mm=baseline_depth_mm,
+            current_depth_mm=current_depth_mm,
         )
     except QwenReviewError as error:
         raise HTTPException(

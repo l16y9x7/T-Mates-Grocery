@@ -118,7 +118,14 @@ class InspectMainTest(unittest.TestCase):
             patch.object(
                 inspect_api,
                 "load_initial_scan",
-                return_value=SimpleNamespace(rgb=self.baseline),
+                return_value=SimpleNamespace(
+                    rgb=self.baseline,
+                    depth_mm=np.full(
+                        self.baseline.shape[:2],
+                        900,
+                        dtype=np.uint16,
+                    ),
+                ),
             ) as load_initial_scan,
             patch.object(inspect_api, "capture_head_rgbd", side_effect=capture) as capture_rgbd,
             patch.object(
@@ -159,6 +166,14 @@ class InspectMainTest(unittest.TestCase):
         self.assertIsInstance(baseline_image, np.ndarray)
         assert isinstance(baseline_image, np.ndarray)
         self.assertEqual(baseline_image.shape[:2], self.baseline.shape[:2])
+        np.testing.assert_array_equal(
+            reviewer.calls[0]["debug_current_depth_mm"],
+            np.full(self.current.shape[:2], 1200, dtype=np.uint16),
+        )
+        np.testing.assert_array_equal(
+            reviewer.calls[0]["debug_baseline_depth_mm"],
+            np.full(self.baseline.shape[:2], 900, dtype=np.uint16),
+        )
         self.assertEqual(reviewer.calls[0]["row_constraints"], [None])
         row_config = detect_rows.call_args.args[1]
         self.assertEqual(row_config.pose_type, "SHELF_VIEW_LOWER")
@@ -251,7 +266,14 @@ class InspectMainTest(unittest.TestCase):
             patch.object(
                 inspect_api,
                 "load_initial_scan",
-                return_value=SimpleNamespace(rgb=self.baseline),
+                return_value=SimpleNamespace(
+                    rgb=self.baseline,
+                    depth_mm=np.full(
+                        self.baseline.shape[:2],
+                        900,
+                        dtype=np.uint16,
+                    ),
+                ),
             ),
             patch.object(
                 inspect_api,
