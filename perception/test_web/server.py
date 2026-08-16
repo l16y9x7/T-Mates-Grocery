@@ -75,6 +75,10 @@ QWEN_INFER_DATASETS = {
 }
 INITIAL_SCAN_ROW_RESULTS_ROOT = DATA_ROOT / "initial_scan_row_detection"
 ROW_DETECTOR_SOURCE_PATH = PERCEPTION_ROOT / "row_detection" / "detector.py"
+SHORTAGE_BATCH_ROOT = DATA_ROOT / "2026-08-16-self-collect-shortage-grouped"
+SHORTAGE_BATCH_SUMMARY_PATH = (
+    SHORTAGE_BATCH_ROOT / "shortage_inspection_batch_results.json"
+)
 INITIAL_SCAN_DIRECTORY_PATTERN = re.compile(
     r"^(?P<target>H[12]_[FB]_[LR]_INSPECT)_(?P<pose>UPPER|LOWER)$"
 )
@@ -321,6 +325,96 @@ def get_initial_scan_row_overlay(scan_name: str) -> FileResponse:
         / "04_rows_and_rails.jpg"
     )
     return FileResponse(path, media_type="image/jpeg")
+
+
+def shortage_batch_file_url(relative_path: object, version: int) -> str | None:
+    if not isinstance(relative_path, str) or not relative_path.strip():
+        return None
+    path = resolve_descendant(SHORTAGE_BATCH_ROOT, relative_path)
+    if not path.is_file():
+        return None
+    normalized = path.relative_to(SHORTAGE_BATCH_ROOT.resolve()).as_posix()
+    return (
+        f"/api/qwen-review/shortage-batch/file/{quote(normalized, safe='/')}"
+        f"?v={version}"
+    )
+
+
+@app.get("/api/qwen-review/shortage-batch")
+def list_shortage_batch_results() -> dict:
+    if not SHORTAGE_BATCH_SUMMARY_PATH.is_file():
+        return {
+            "summary": {
+                "total_records": 0,
+                "completed_records": 0,
+                "status_counts": {},
+            },
+            "samples": [],
+        }
+    summary = load_json_file(SHORTAGE_BATCH_SUMMARY_PATH, "shortage 批测汇总")
+    version = SHORTAGE_BATCH_SUMMARY_PATH.stat().st_mtime_ns
+    samples = []
+    raw_results = summary.get("results", [])
+    if not isinstance(raw_results, list):
+        raise HTTPException(status_code=500, detail="shortage 批测汇总缺少 results")
+    for raw_result in raw_results:
+        if not isinstance(raw_result, dict):
+            continue
+        result = dict(raw_result)
+        artifacts = result.get("artifacts", {})
+        if not isinstance(artifacts, dict):
+            artifacts = {}
+        findings = []
+        for raw_finding in result.get("findings", []):
+            if not isinstance(raw_finding, dict):
+                continue
+            finding = dict(raw_finding)
+            finding["mask_url"] = shortage_batch_file_url(
+                finding.get("mask"),
+                version,
+            )
+            findings.append(finding)
+        result["findings"] = findings
+        result["source_rgb_url"] = shortage_batch_file_url(
+            result.get("source_rgb"),
+            version,
+        )
+        result["aligned_current_url"] = shortage_batch_file_url(
+            artifacts.get("aligned_current"),
+            version,
+        )
+        result["combined_mask_url"] = shortage_batch_file_url(
+            artifacts.get("combined_mask"),
+            version,
+        )
+        result["overlay_url"] = shortage_batch_file_url(
+            artifacts.get("overlay"),
+            version,
+        )
+        samples.append(result)
+    samples.sort(key=lambda item: (str(item.get("group")), str(item.get("record"))))
+    return {
+        "summary": {
+            key: summary.get(key)
+            for key in (
+                "generated_at",
+                "detection_only",
+                "total_records",
+                "completed_records",
+                "status_counts",
+            )
+        },
+        "samples": samples,
+    }
+
+
+@app.get("/api/qwen-review/shortage-batch/file/{relative_path:path}")
+def get_shortage_batch_file(relative_path: str) -> FileResponse:
+    path = resolve_descendant(SHORTAGE_BATCH_ROOT, relative_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="shortage 批测文件不存在")
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type)
 
 
 @app.get("/api/qwen-review/samples")

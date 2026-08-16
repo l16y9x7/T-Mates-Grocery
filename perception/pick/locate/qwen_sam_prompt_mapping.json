@@ -52,8 +52,8 @@
     "sam3_prompt": "frontmost package"
   },
   "三色藜麦": {
-    "qwen3_prompt": "找到图片中货架上的三色藜麦包装袋，输出满足条件的所有三色藜麦包装袋的bbox，每一堆分开。返回格式：{\"name\": \"三色藜麦包装袋\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost package"
+    "qwen3_prompt": "找到图片中货架上的非罐装三色藜麦包装袋，输出满足条件的所有三色藜麦包装袋的bbox，每一堆分开。返回格式：{\"name\": \"三色藜麦包装袋\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "frontmost rectangular package"
   },
   "上好佳鲜虾条": {
     "qwen3_prompt": "找到图片中货架上的所有黄色虾条包装袋，输出满足条件的所有黄色虾条包装袋的bbox。返回格式：{\"name\": \"黄色虾条包装袋\", \"bbox\": [x1, y1, x2, y2]}",
@@ -212,7 +212,7 @@
     "sam3_prompt": "frontmost bottle"
   },
   "小苏打": {
-    "qwen3_prompt": "找到图片中货架上的小苏打包装袋堆，输出一个完整的bbox。返回格式：{\"name\": \"小苏打包装袋堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的绿色小苏打包装袋堆，输出一个完整的bbox。返回格式：{\"name\": \"小苏打包装袋堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "topmost white and green package"
   },
   "小青柠汁饮料": {
@@ -312,8 +312,8 @@
     "sam3_prompt": "frontmost box"
   },
   "纯棉酒店大毛巾": {
-    "qwen3_prompt": "找到图中货架上所有的PICC毛巾包，返回一个完整包含所有PICC毛巾包的大bbox。最终返回格式：{\"name\": \"PICC毛巾包\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "topmost PICC towel package"
+    "qwen3_prompt": "找到图中货架上红色PICC毛巾包，返回一个包含所有PICC毛巾包的大bbox。最终返回格式：{\"name\": \"PICC毛巾包\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "topmost package"
   },
   "纯甄酸奶": {
     "qwen3_prompt": "找到图片中货架上的蓝色酸奶盒子，输出一个包含它们的大bbox。返回格式：{\"name\": \"蓝色酸奶盒子\", \"bbox\": [x1, y1, x2, y2]}",
@@ -385,7 +385,7 @@
   },
   "草原红太阳烧烤酱香辣": {
     "qwen3_prompt": "找到图片中货架上的红色烧烤酱袋子，千万不要绿色的，输出包含所有红色烧烤酱袋子的一个大bbox。返回格式：{\"name\": \"红色烧烤酱袋子堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost red sauce package"
+    "sam3_prompt": "frontmost sauce package"
   },
   "蒙牛纯牛奶": {
     "qwen3_prompt": "找到图片中货架上的绿白蒙牛纯牛奶堆，不是酸奶，输出一个包含所有蒙牛纯牛奶的bbox。返回格式：{\"name\": \"蒙牛纯牛奶堆\", \"bbox\": [x1, y1, x2, y2]",

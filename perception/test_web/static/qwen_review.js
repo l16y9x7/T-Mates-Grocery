@@ -7,9 +7,13 @@ const runButton = document.querySelector("#runButton");
 const runFullButton = document.querySelector("#runFullButton");
 const savePromptButton = document.querySelector("#savePromptButton");
 const initialScanSelect = document.querySelector("#initialScanSelect");
+const shortageBatchGroupSelect = document.querySelector("#shortageBatchGroupSelect");
+const shortageBatchRecordSelect = document.querySelector("#shortageBatchRecordSelect");
 
 let samples = [];
 let initialScans = [];
+let shortageBatchSamples = [];
+let shortageBatchSummary = {};
 let currentSample = null;
 let currentRegion = null;
 let currentPromptStage = null;
@@ -83,6 +87,139 @@ async function initializeInitialScans() {
   } catch (error) {
     status("#initialScanStatus", error.message, "error");
     initialScanSelect.disabled = true;
+  }
+}
+
+function selectedShortageBatchSample() {
+  return shortageBatchSamples.find((sample) =>
+    sample.group === shortageBatchGroupSelect.value
+    && sample.record === shortageBatchRecordSelect.value
+  ) || null;
+}
+
+function renderShortageBatchFindings(sample) {
+  const container = document.querySelector("#shortageBatchFindingGrid");
+  container.replaceChildren();
+  const findings = Array.isArray(sample?.findings) ? sample.findings : [];
+  if (!findings.length) {
+    const empty = document.createElement("div");
+    empty.className = "shortage-empty";
+    empty.textContent = sample?.status === "no_anomaly"
+      ? "该 record 未检测到缺货区域"
+      : "该 record 暂无可展示 finding";
+    container.append(empty);
+    return;
+  }
+  findings.forEach((finding) => {
+    const card = document.createElement("article");
+    card.className = "shortage-finding";
+    const header = document.createElement("header");
+    const title = document.createElement("h3");
+    title.textContent = `REGION ${finding.region_index} · ${finding.product_name || "未识别商品"}`;
+    const details = document.createElement("p");
+    const confidence = typeof finding.confidence === "number"
+      ? ` · confidence ${finding.confidence.toFixed(3)}`
+      : "";
+    details.textContent = `bbox ${formatBBox(finding.bbox)} · mask ${finding.mask_pixels ?? 0} px${confidence}`;
+    header.append(title, details);
+    card.append(header);
+    if (finding.mask_url) {
+      const image = document.createElement("img");
+      image.src = finding.mask_url;
+      image.alt = `Region ${finding.region_index} shortage mask`;
+      image.loading = "lazy";
+      card.append(image);
+    }
+    container.append(card);
+  });
+}
+
+function renderShortageBatchRecord() {
+  const sample = selectedShortageBatchSample();
+  if (!sample) return;
+  const findings = Array.isArray(sample.findings) ? sample.findings : [];
+  const productNames = findings
+    .map((finding) => finding.product_name)
+    .filter(Boolean);
+  document.querySelector("#shortageBatchRecordStatus").textContent = sample.status || "—";
+  document.querySelector("#shortageBatchFindingCount").textContent = String(findings.length);
+  document.querySelector("#shortageBatchProducts").textContent = productNames.join("、") || "未识别";
+  document.querySelector("#shortageBatchElapsed").textContent = formatMilliseconds(sample.elapsed_ms);
+  setSourceImage(
+    "shortageBatchSourceImage",
+    "shortageBatchSourceFigure",
+    sample.source_rgb_url,
+  );
+  setSourceImage(
+    "shortageBatchOverlayImage",
+    "shortageBatchOverlayFigure",
+    sample.overlay_url,
+  );
+  setSourceImage(
+    "shortageBatchMaskImage",
+    "shortageBatchMaskFigure",
+    sample.combined_mask_url,
+  );
+  renderShortageBatchFindings(sample);
+  const errorMessage = sample.recognition_error?.message || sample.error;
+  const statusKind = ["success", "partial", "no_anomaly"].includes(sample.status)
+    ? "success"
+    : ["error", "recognition_error"].includes(sample.status)
+      ? "error"
+      : "";
+  status(
+    "#shortageBatchStatus",
+    `${sample.group}/${sample.record} · ${sample.status}${errorMessage ? ` · ${errorMessage}` : ""}`,
+    statusKind,
+  );
+}
+
+function populateShortageBatchRecords() {
+  shortageBatchRecordSelect.replaceChildren();
+  const groupSamples = shortageBatchSamples.filter(
+    (sample) => sample.group === shortageBatchGroupSelect.value,
+  );
+  groupSamples.forEach((sample) => {
+    const names = (sample.findings || [])
+      .map((finding) => finding.product_name)
+      .filter(Boolean)
+      .join("、");
+    shortageBatchRecordSelect.append(option(
+      sample.record,
+      `${sample.record} · ${sample.status}${names ? ` · ${names}` : ""}`,
+    ));
+  });
+  renderShortageBatchRecord();
+}
+
+function populateShortageBatchGroups() {
+  shortageBatchGroupSelect.replaceChildren();
+  [...new Set(shortageBatchSamples.map((sample) => sample.group))].forEach((group) => {
+    const count = shortageBatchSamples.filter((sample) => sample.group === group).length;
+    shortageBatchGroupSelect.append(option(group, `${group} · ${count} records`));
+  });
+  populateShortageBatchRecords();
+}
+
+async function initializeShortageBatch() {
+  try {
+    const payload = await api("/api/qwen-review/shortage-batch");
+    shortageBatchSamples = payload.samples || [];
+    shortageBatchSummary = payload.summary || {};
+    if (!shortageBatchSamples.length) {
+      status(
+        "#shortageBatchStatus",
+        "尚无批测结果，请先运行 inspect/batch_shortage.py",
+      );
+      shortageBatchGroupSelect.disabled = true;
+      shortageBatchRecordSelect.disabled = true;
+      return;
+    }
+    populateShortageBatchGroups();
+  } catch (error) {
+    status("#shortageBatchStatus", error.message, "error");
+    shortageBatchGroupSelect.disabled = true;
+    shortageBatchRecordSelect.disabled = true;
   }
 }
 
@@ -591,6 +728,8 @@ async function initialize() {
 
 taskSelect.addEventListener("change", populatePairs);
 initialScanSelect.addEventListener("change", renderInitialScan);
+shortageBatchGroupSelect.addEventListener("change", populateShortageBatchRecords);
+shortageBatchRecordSelect.addEventListener("change", renderShortageBatchRecord);
 pairSelect.addEventListener("change", selectPair);
 regionSelect.addEventListener("change", selectRegion);
 promptStageSelect.addEventListener("change", selectPromptStage);
@@ -599,3 +738,4 @@ runFullButton.addEventListener("click", runFullInspect);
 savePromptButton.addEventListener("click", savePrompt);
 initialize();
 initializeInitialScans();
+initializeShortageBatch();

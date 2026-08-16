@@ -104,6 +104,84 @@ class PromptMappingTest(unittest.TestCase):
             server.resolve_initial_scan_for_web("../H1_B_L_INSPECT_UPPER")
         self.assertEqual(raised.exception.status_code, 400)
 
+    def test_qwen_review_lists_shortage_batch_bbox_mask_and_product(self) -> None:
+        review_html = (server.STATIC_DIR / "qwen_review.html").read_text(
+            encoding="utf-8"
+        )
+        review_js = (server.STATIC_DIR / "qwen_review.js").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('id="shortageBatchGroupSelect"', review_html)
+        self.assertIn("/api/qwen-review/shortage-batch", review_js)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            group = "H1_B_L_INSPECT_UPPER"
+            record = "record_20260816_010203_123456"
+            result_root = root / group / record / "shortage_inspection"
+            result_root.mkdir(parents=True)
+            source_path = root / group / record / "rgb.jpg"
+            overlay_path = result_root / "overlay.jpg"
+            mask_path = result_root / "region_01_mask.png"
+            source_path.write_bytes(b"rgb")
+            overlay_path.write_bytes(b"overlay")
+            mask_path.write_bytes(b"mask")
+            summary_path = root / "shortage_inspection_batch_results.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "total_records": 1,
+                        "completed_records": 1,
+                        "status_counts": {"success": 1},
+                        "results": [
+                            {
+                                "group": group,
+                                "record": record,
+                                "status": "success",
+                                "source_rgb": f"{group}/{record}/rgb.jpg",
+                                "findings": [
+                                    {
+                                        "region_index": 1,
+                                        "bbox": [10, 20, 30, 40],
+                                        "mask": (
+                                            f"{group}/{record}/shortage_inspection/"
+                                            "region_01_mask.png"
+                                        ),
+                                        "product_name": "可口可乐罐装",
+                                    }
+                                ],
+                                "artifacts": {
+                                    "overlay": (
+                                        f"{group}/{record}/shortage_inspection/"
+                                        "overlay.jpg"
+                                    )
+                                },
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(server, "SHORTAGE_BATCH_ROOT", root),
+                patch.object(server, "SHORTAGE_BATCH_SUMMARY_PATH", summary_path),
+            ):
+                payload = server.list_shortage_batch_results()
+                file_response = server.get_shortage_batch_file(
+                    f"{group}/{record}/shortage_inspection/region_01_mask.png"
+                )
+
+        sample = payload["samples"][0]
+        self.assertEqual(sample["findings"][0]["bbox"], [10, 20, 30, 40])
+        self.assertEqual(
+            sample["findings"][0]["product_name"],
+            "可口可乐罐装",
+        )
+        self.assertIn("region_01_mask.png", sample["findings"][0]["mask_url"])
+        self.assertTrue(sample["overlay_url"])
+        self.assertEqual(Path(file_response.path), mask_path)
+
     def test_sorting_batch_gallery_lists_and_serves_rgb_depth_and_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -34,6 +34,21 @@ python server.py
 缓存在 `test_data/initial_scan_row_detection`；源 `rgb.jpg` 更新或视角不一致时会自动
 重新生成。
 
+“自采缺货批测结果”读取
+`test_data/2026-08-16-self-collect-shortage-grouped/shortage_inspection_batch_results.json`，
+按巡检分组和 record 展示当前 RGB、对齐后的 bbox/mask overlay、组合 mask，以及每个
+region 的独立 mask、bbox 和识别商品名。批测命令：
+
+```powershell
+cd perception
+python inspect/batch_shortage.py
+```
+
+Qwen 服务暂不可用时，可以先运行 `python inspect/batch_shortage.py --detection-only`
+生成 bbox/mask；服务恢复后直接运行不带该参数的命令，会自动补跑尚未识别的记录。
+使用 `--group H1_B_L_INSPECT_LOWER`、`--record record_...` 或 `--limit 10` 可缩小范围，
+`--overwrite` 会重新生成已完成结果。
+
 `/qwen-review` 读取 `test_data/inspect_*_paired/qwen_prompt_samples`，页面上方显示
 解析结果、原始输出及可编辑 Prompt，下方按 `[IMAGE N]` 顺序展示 bbox 扩展图和该
 region 实际发送的候选 SKU 标准图。页面同时展示 baseline、原始 current、算法对齐后的

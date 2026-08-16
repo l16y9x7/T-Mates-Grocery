@@ -164,6 +164,7 @@ class AlgorithmExecution:
 
     result: AlgorithmResult
     review_image: np.ndarray | None = None
+    review_mask: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -172,6 +173,7 @@ class InspectionExecution:
 
     response: InspectResponse
     review_image: np.ndarray
+    review_mask: np.ndarray
 
 
 class InspectionAlgorithm(Protocol):
@@ -217,6 +219,7 @@ class ComparisonBasedAlgorithm:
                 alignment_success=result.alignment.success,
             ),
             review_image=result.aligned_current,
+            review_mask=result.mask,
         )
 
 
@@ -262,13 +265,30 @@ class InspectionPipeline:
             raise RuntimeError(f"all inspection algorithms failed: {errors}")
 
         findings = fuse_findings(successful)
-        review_image = next(
+        review_execution = next(
             (
-                execution.review_image
+                execution
                 for execution in executions
                 if execution.result.success and execution.review_image is not None
             ),
-            cv2.resize(context.current, (1280, 720), interpolation=cv2.INTER_LINEAR),
+            None,
+        )
+        review_image = (
+            review_execution.review_image
+            if review_execution is not None
+            else cv2.resize(
+                context.current,
+                (1280, 720),
+                interpolation=cv2.INTER_LINEAR,
+            )
+        )
+        assert review_image is not None
+        review_mask = (
+            review_execution.review_mask
+            if review_execution is not None
+            and review_execution.review_mask is not None
+            and review_execution.review_mask.shape == review_image.shape[:2]
+            else np.zeros(review_image.shape[:2], dtype=np.uint8)
         )
         return InspectionExecution(
             response=InspectResponse(
@@ -282,6 +302,7 @@ class InspectionPipeline:
                 algorithms=algorithm_results,
             ),
             review_image=review_image,
+            review_mask=review_mask,
         )
 
 
@@ -377,6 +398,44 @@ def build_row_constraints(
     ]
 
 
+def review_inspection_execution(
+    execution: InspectionExecution,
+    *,
+    task_type: TaskType,
+    location_id: str,
+    pose_type: PoseType,
+    baseline: np.ndarray,
+    reviewer: QwenReviewer | None = None,
+) -> QwenReviewResult:
+    """Apply the same row constraints and Qwen review used by the HTTP route."""
+
+    result = execution.response
+    if not result.findings:
+        return QwenReviewResult((), "", ())
+    try:
+        row_detection = detect_rows(
+            baseline,
+            RowDetectionConfig(pose_type=pose_type),
+        )
+        row_constraints = build_row_constraints(
+            result.findings,
+            row_detection,
+            pose_type,
+        )
+    except (ValueError, cv2.error) as error:
+        logger.warning("Shelf row detection failed; using all SKU candidates: %s", error)
+        row_constraints = [None] * len(result.findings)
+    return (reviewer or QwenReviewer(debug_root=DEFAULT_DEBUG_ROOT)).review(
+        task_type=task_type,
+        location_id=location_id,
+        pose_type=pose_type,
+        current=execution.review_image,
+        baseline=baseline,
+        bboxes=[finding.bbox for finding in result.findings],
+        row_constraints=row_constraints,
+    )
+
+
 @router.post("/perception/inspect", response_model=InspectApiResponse)
 def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
     """Compare a full-shelf reference image with the current shelf image."""
@@ -394,33 +453,16 @@ def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
         )
     except RuntimeError as error:
         raise HTTPException(status_code=500, detail=str(error)) from error
-    result = execution.response
-    if not result.findings:
+    if not execution.response.findings:
         return InspectApiResponse()
 
     try:
-        row_detection = detect_rows(
-            baseline,
-            RowDetectionConfig(pose_type=request.pose_type),
-        )
-        row_constraints = build_row_constraints(
-            result.findings,
-            row_detection,
-            request.pose_type,
-        )
-    except (ValueError, cv2.error) as error:
-        logger.warning("Shelf row detection failed; using all SKU candidates: %s", error)
-        row_constraints = [None] * len(result.findings)
-
-    try:
-        review = QwenReviewer(debug_root=DEFAULT_DEBUG_ROOT).review(
+        review = review_inspection_execution(
+            execution,
             task_type=request.task_type,
             location_id=request.location_id,
             pose_type=request.pose_type,
-            current=execution.review_image,
             baseline=baseline,
-            bboxes=[finding.bbox for finding in result.findings],
-            row_constraints=row_constraints,
         )
     except QwenReviewError as error:
         raise HTTPException(
