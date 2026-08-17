@@ -9,14 +9,13 @@
 
 `/perception/inspect` 负责判断异常货架与商品名称；本接口固定从
 `agent/output/task0` 读取正常场景 RGB-D，并像 `/perception/inspect` 一样从头部相机
-获取当前场景 RGB-D。接口在 Task0
-原图中生成目标商品 bbox/mask，并计算从 Task0 reference 相机到当前相机的 `4×4`
-刚体变换；商品 6D 位姿由下游位姿估计接口负责计算。
+获取当前场景 RGB-D。Task0 用于确定目标槽位，最终返回的参照物 bbox/mask 均位于
+当前头部相机图像坐标系。
 
 ```json
 {
   "task_type": "SHORTAGE",
-  "product_name": "可口可乐罐装",
+  "name": "可口可乐罐装",
   "location_id": "H1_F_L_INSPECT",
   "pose_type": "SHELF_VIEW_UPPER"
 }
@@ -51,22 +50,17 @@ distortion_model = plumb_bob
 输入 RGB 若经过整体缩放，代码会按实际宽高同步缩放 `fx/fy/cx/cy`。深度必须已对齐
 到各自 RGB，数值通过 `depth_unit_mm` 统一换算为毫米。
 
-正式响应全部使用 Task0 reference 原图坐标系，并返回 reference 到 current 的变换：
+正式响应示例：
 
 ```json
 {
-  "product_name": "可口可乐罐装",
-  "bbox": [310, 220, 430, 650],
-  "mask": "<Task0 原图同尺寸的 PNG base64>",
+  "name": "可口可乐罐装",
+  "bbox": [[210, 220, 300, 650], [440, 220, 530, 650]],
+  "mask": ["<当前图同尺寸 PNG base64>", "<当前图同尺寸 PNG base64>"],
+  "direction": "both",
   "image_path": "agent/output/task0/H1_F_L_INSPECT_UPPER/rgb.jpg",
   "current_image_path": "place/locate/debug/<record>/current_rgb.jpg",
-  "level": "L2",
-  "rotate_matrix": [
-    [1, 0, 0, 25],
-    [0, 1, 0, -28],
-    [0, 0, 1, 5],
-    [0, 0, 0, 1]
-  ]
+  "level": "L2"
 }
 ```
 
@@ -74,13 +68,11 @@ distortion_model = plumb_bob
 第 1/2/3 行映射为 `L3/L4/L5`。若 `location_id` 本身包含明确的 `L1`—`L5`，则优先
 使用该层号并校验它与 `pose_type` 一致。
 
-`bbox` 为 Task0 原图像素坐标 `[x1,y1,x2,y2]`，由最终全图商品 mask 计算，不再
-归一化到 `[1,1000]`。`mask` 与 `image_path` 对应的 Task0 RGB 完全同尺寸、同坐标系。
-`rotate_matrix` 虽沿用接口约定名称，实际是包含旋转和平移的完整 `4×4 SE(3)`：
-
-```text
-point_current = rotate_matrix @ point_reference
-```
+`bbox` 是当前图像像素坐标的 `[x1,y1,x2,y2]` 数组，`mask` 与之逐项对应，且每张
+mask 都和 `current_image_path` 指向的 RGB 完全同尺寸、同坐标系。水平放置优先返回
+最近左邻和最近右邻并标记 `both`；目标位于边缘时返回同一侧最近两个并标记 `left`
+或 `right`。上下放置商品返回正下方一个支撑物并标记 `up`。正式响应不再返回
+`rotation_matrix`/`rotate_matrix`。
 
 ## 结果与调试产物
 
@@ -98,20 +90,18 @@ point_current = rotate_matrix @ point_reference
 ├── current_depth_mm.npy
 ├── change_mask_reference.png
 ├── reference_component_mask.png
-├── bbox_crop.jpg
+├── current_reference_crop_01.jpg
+├── current_reference_crop_02.jpg
+├── current_reference_mask_01.png
+├── current_reference_mask_02.png
 ├── sam3_crop.jpg
-└── sam3_mask.png
+└── reference_sam3_mask.png
 ```
 
-`bbox_crop.jpg` 严格使用正式响应的 bbox 从 Task0 RGB 裁切；`sam3_crop.jpg` 额外保留
-实际送入 SAM3 的扩展 crop。`sam3_mask.png` 是与 `baseline_rgb.jpg` 同尺寸、同坐标系
-的二值 mask。MISPLACED 当前使用深度细化而非 SAM3，因此只保存
-`reference_mask.png`，且 `result.json` 中的 `artifacts.sam3_mask/sam3_crop` 为
-`null`。`result.json` 保留正式响应字段并额外记录所有产物路径、crop 坐标及其来源。
-
-下游位姿估计先利用 Task0 RGB、bbox 和 mask 得到 `T_reference_object`，再计算
-`T_current_object = rotate_matrix @ T_reference_object`。Place Locate 不接收
-`reference_pose`，也不计算或返回商品 `target_pose`。
+`current_reference_crop_*.jpg` 与 `current_reference_mask_*.png` 按响应数组顺序保存，
+来源都是当前 RGB。`sam3_crop.jpg` 和 `reference_sam3_mask.png` 保留 Task0 目标槽位
+识别过程，便于排查槽位投影错误。`result.json` 保留正式响应字段并记录所有产物路径。
+Place Locate 不接收 `reference_pose`，也不计算或返回商品 `target_pose`。
 
 `pose_type` 与 inspection 含义一致，支持 `""`、`SHELF_VIEW_UPPER` 和
 `SHELF_VIEW_LOWER`。接口复用顶层 `perception/row_detection`，将 reference mask
@@ -173,32 +163,26 @@ agent/output/task0/<inspection_target_id>_<UPPER|LOWER>/
 
 ## 推荐流程
 
-1. 根据 `product_name + location_id` 加载正常场景 RGB-D。
-2. 从正常场景和当前缺货场景生成点云。
-3. 排除正常场景的目标商品 mask、当前场景的运动物体和深度无效区域，只保留货架、
-   轨道和稳定背景。
-4. 使用机器人相机外参、RGB 特征匹配加 PnP，或两者结合，生成配准初值。
-5. 在静态货架点云上做带 RANSAC 的刚体配准和 point-to-plane ICP，估计
-   `T_cur_ref`。
-6. 在 Task0 原图中生成商品的全分辨率 mask，并计算其像素 bbox。
-7. 返回 Task0 RGB 路径、bbox、mask 和 `T_cur_ref`。
-8. 下游位姿估计在 Task0 原图上计算 `T_ref_object`，再使用
-   `T_cur_object = T_cur_ref @ T_ref_object`。
+1. 根据 `name + location_id` 加载正常场景 RGB-D。
+2. 配准 Task0 和当前 RGB-D，在 Task0 中确定目标槽位并投影到当前图。
+3. 复用 Pick Locate 的商品 Prompt，在当前图目标货架行检测同名商品实例。
+4. 水平放置按目标槽位的左右位置选择两个邻居；上下放置选择正下方支撑物。
+5. 返回当前图 bbox/mask、方向、层号及当前 RGB 路径。
 
 inspection 的 ORB + homography 可以作为 RGB 特征初值或调试图，但不能替代三维
 刚体配准，因为 homography 不包含可靠的三维平移、尺度和离平面旋转。
 
 ## Mask 定义
 
-正式响应只返回 `reference_mask`：即 Task0 正常场景中实际商品的全分辨率二值 mask。
-该 mask 不会投影到当前缺货图；它必须与 `image_path` 指向的 Task0 RGB 保持同尺寸、
-同坐标系，供下游位姿估计直接使用。
+正式响应返回当前场景参照物的全分辨率二值 mask。每个 mask 与 `bbox` 同序，并与
+`current_image_path` 指向的当前 RGB 保持同尺寸、同坐标系。
 
 ## Debug 响应
 
 正式请求和响应见文档开头的“当前接口契约”。Debug 接口额外返回缺货差异 region、
-货架行约束、SAM3 选择信息，以及 RGB 重投影 RMSE、三维 RMSE、对应点数量、inlier
-ratio 和同一份 `T_cur_ref`。
+货架行约束、SAM3 选择信息、投影后的 `target_bbox_current`、当前候选数，以及 RGB
+重投影 RMSE、三维 RMSE、对应点数量和 inlier ratio。注册矩阵仅保留在 Debug 的
+registration 诊断信息中，不属于正式接口响应。
 
 ## 配准质量门槛
 
@@ -217,14 +201,13 @@ ratio 和同一份 `T_cur_ref`。
 
 ### 放在前面
 
-优先使用本方案，把正常场景中的前排商品标准位姿转移到当前视角。后方商品、左右
-商品和货架轨道都只作为静态场景配准与碰撞检查的辅助，不要求必须成功分割某一个
-特定参照物。
+优先返回目标左右各一个同名商品。缺少一侧时改用另一侧最近两个，方向分别返回
+`both`、`left` 或 `right`。
 
 ### 放在上面
 
-可以继续使用 Pick Locate 找到下方支撑商品，再结合 mask 内深度拟合顶部平面。
-如果该货位也有可靠的正常场景记录，仍可用位姿转移结果作为先验和交叉校验。
+复用 Pick Locate 中的上下堆叠商品清单，找到目标槽位正下方的支撑商品，返回单个
+bbox/mask 和 `direction="up"`。下游可结合该 mask 内深度拟合顶部平面。
 
 ## 当前实现
 
@@ -257,7 +240,9 @@ ratio 和同一份 `T_cur_ref`。
 - SHORTAGE 使用已有商品 `sam3_prompt` 在 Task0 原图 bbox 附近分割实际商品，按与
   缺货 component 的重叠选择实例，并映射成与 Task0 depth 对齐的全图 reference mask；
 - MISPLACED 保留原有的差异 component 深度细化；
-- 返回原图 bbox/mask/path 和 `current_from_reference`，不接收或转换商品 6D pose。
+- 在当前图目标货架行复用 Pick Locate 检测同名商品实例；
+- 按左右邻居或正下方支撑物规则返回当前图 bbox/mask；
+- 正式接口不返回旋转矩阵，也不接收或转换商品 6D pose。
 
 运行核心测试：
 

@@ -1,9 +1,8 @@
-"""Prepare Task0 product inputs and reference-to-current camera registration.
+"""Locate current-image reference objects for product placement.
 
-Place Locate does not estimate an object pose.  It recovers the actual product
-mask in the fixed Task0 image and estimates the 4x4 ``current_from_reference``
-camera transform.  A downstream pose estimator consumes those values, estimates
-the object pose in the Task0 camera frame, and applies the supplied transform.
+The fixed Task0 scan is still used to find the target slot. That slot is
+registered into the current head-camera image, where Pick Locate's existing
+Qwen/SAM3 detector supplies the neighboring reference masks.
 """
 
 from __future__ import annotations
@@ -53,10 +52,7 @@ else:
         detect_rows,
     )
 
-from .pose_transfer import (
-    PoseTransferError,
-    as_rigid_transform,
-)
+from .pose_transfer import PoseTransferError
 from .registration import (
     CameraIntrinsics,
     RGBDRegistrationResult,
@@ -68,9 +64,25 @@ from .reference_mask import (
     generate_reference_mask,
 )
 
+if __package__ and __package__.startswith("perception."):
+    from ...pick.locate.main import (
+        LocateRequest as PickLocateRequest,
+        LocatedInstance as PickLocatedInstance,
+        locate_product_debug as locate_pick_product_debug,
+        uses_upper_confidence_pick,
+    )
+else:
+    from pick.locate.main import (
+        LocateRequest as PickLocateRequest,
+        LocatedInstance as PickLocatedInstance,
+        locate_product_debug as locate_pick_product_debug,
+        uses_upper_confidence_pick,
+    )
+
 
 TaskType = Literal["SHORTAGE", "MISPLACED"]
 ShelfLevel = Literal["L1", "L2", "L3", "L4", "L5"]
+ReferenceDirection = Literal["left", "right", "both", "up"]
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_DEPTH_BYTES = 40 * 1024 * 1024
 DEFAULT_CURRENT_IMAGE_NAME = "current_rgb.jpg"
@@ -97,10 +109,10 @@ logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(
     title="Place Locate",
-    version="2.0.0",
+    version="3.0.0",
     description=(
-        "Return a Task0 product bbox/mask and the reference-to-current 4x4 "
-        "camera transform for downstream pose estimation."
+        "Return current-image neighboring product bbox/masks for downstream "
+        "placement pose estimation."
     ),
 )
 router = APIRouter()
@@ -163,9 +175,9 @@ class PlaceLocateRequest(BaseModel):
     location_id: str = Field(min_length=1)
     pose_type: PoseType
     reference_item_area: float | None = Field(default=None, gt=0)
-    product_name: str = Field(min_length=1)
+    name: str = Field(min_length=1)
 
-    @field_validator("product_name", "location_id")
+    @field_validator("name", "location_id")
     @classmethod
     def normalize_nonempty_text(cls, value: str) -> str:
         normalized = value.strip()
@@ -179,29 +191,15 @@ class PlaceLocateDebugRequest(PlaceReferenceMaskRequest):
 
 
 class PlaceLocateResponse(BaseModel):
-    """Inputs consumed by downstream reference-image pose estimation."""
+    """Current-image references consumed by downstream place pose estimation."""
 
-    product_name: str
-    bbox: list[int]
-    mask: str
+    name: str
+    bbox: list[list[int]]
+    mask: list[str]
+    direction: ReferenceDirection
     image_path: str
     current_image_path: str
-    rotate_matrix: list[list[float]]
     level: ShelfLevel
-
-    @field_validator("rotate_matrix")
-    @classmethod
-    def validate_rotate_matrix(
-        cls,
-        value: list[list[float]],
-    ) -> list[list[float]]:
-        try:
-            return as_rigid_transform(
-                value,
-                name="rotate_matrix",
-            ).tolist()
-        except PoseTransferError as error:
-            raise ValueError(str(error)) from error
 
 
 class RegistrationMetrics(BaseModel):
@@ -259,6 +257,8 @@ class PlaceLocateDebugResponse(PlaceLocateResponse):
     reference_sam3_bbox: list[float] | None = None
     reference_sam3_score: float | None = None
     reference_sam3_candidate_count: int | None = None
+    target_bbox_current: list[int]
+    current_candidate_count: int
     registration: RegistrationMetrics
 
 
@@ -627,12 +627,25 @@ def save_place_locate_artifacts(
     current_depth_name = "current_depth_mm.npy"
     change_mask_name = "change_mask_reference.png"
     component_mask_name = "reference_component_mask.png"
-    mask_name = "sam3_mask.png" if prepared.sam3 is not None else "reference_mask.png"
-    bbox_crop_name = "bbox_crop.jpg"
+    reference_mask_name = (
+        "reference_sam3_mask.png"
+        if prepared.sam3 is not None
+        else "reference_mask.png"
+    )
     sam3_crop_name = "sam3_crop.jpg" if prepared.sam3 is not None else None
 
-    crop_box = _clamped_crop_box(response.bbox, reference_image.shape)
-    x1, y1, x2, y2 = crop_box
+    crop_boxes = [
+        _clamped_crop_box(box, current_image.shape)
+        for box in response.bbox
+    ]
+    current_mask_names = [
+        f"current_reference_mask_{index:02d}.png"
+        for index in range(1, len(response.mask) + 1)
+    ]
+    current_crop_names = [
+        f"current_reference_crop_{index:02d}.jpg"
+        for index in range(1, len(response.bbox) + 1)
+    ]
     sam3_crop_box = (
         _clamped_crop_box(prepared.sam3.crop_box, reference_image.shape)
         if prepared.sam3 is not None
@@ -649,11 +662,39 @@ def save_place_locate_artifacts(
         prepared.registration.rgb.change_mask_reference,
     )
     _write_artifact_image(directory / component_mask_name, prepared.component_mask)
-    _write_artifact_image(directory / mask_name, prepared.reference_mask)
-    _write_artifact_image(
-        directory / bbox_crop_name,
-        np.asarray(reference_image)[y1:y2, x1:x2],
-    )
+    _write_artifact_image(directory / reference_mask_name, prepared.reference_mask)
+    for mask_name, crop_name, encoded_mask, crop_box in zip(
+        current_mask_names,
+        current_crop_names,
+        response.mask,
+        crop_boxes,
+        strict=True,
+    ):
+        try:
+            mask_payload = base64.b64decode(
+                encoded_mask.strip().split(",", 1)[-1],
+                validate=True,
+            )
+        except (ValueError, binascii.Error) as error:
+            raise OSError("Place Locate current reference mask is invalid base64") from error
+        decoded_mask = cv2.imdecode(
+            np.frombuffer(mask_payload, dtype=np.uint8),
+            cv2.IMREAD_GRAYSCALE,
+        )
+        if decoded_mask is None:
+            raise OSError("Place Locate current reference mask is not a PNG")
+        if decoded_mask.shape != current_image.shape[:2]:
+            decoded_mask = cv2.resize(
+                decoded_mask,
+                (current_image.shape[1], current_image.shape[0]),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        _write_artifact_image(directory / mask_name, decoded_mask)
+        x1, y1, x2, y2 = crop_box
+        _write_artifact_image(
+            directory / crop_name,
+            np.asarray(current_image)[y1:y2, x1:x2],
+        )
     if sam3_crop_name is not None and sam3_crop_box is not None:
         sam_x1, sam_y1, sam_x2, sam_y2 = sam3_crop_box
         _write_artifact_image(
@@ -697,15 +738,15 @@ def save_place_locate_artifacts(
         "current_depth_mm": current_depth_name,
         "change_mask_reference": change_mask_name,
         "reference_component_mask": component_mask_name,
-        "reference_mask": mask_name,
-        "sam3_mask": mask_name if prepared.sam3 is not None else None,
-        "bbox_crop": bbox_crop_name,
-        "bbox_crop_box": list(crop_box),
+        "reference_mask": reference_mask_name,
+        "sam3_mask": current_mask_names,
+        "bbox_crop": current_crop_names,
+        "bbox_crop_box": [list(box) for box in crop_boxes],
         "bbox_crop_format": ["x1", "y1", "x2", "y2"],
-        "bbox_crop_source": "bbox",
+        "bbox_crop_source": "current_rgb/bbox",
         "sam3_crop": sam3_crop_name,
         "sam3_crop_box": list(sam3_crop_box) if sam3_crop_box is not None else None,
-        "mask_coordinate_system": "baseline_rgb",
+        "mask_coordinate_system": "current_rgb",
     }
     saved_result = response.model_dump(mode="json")
     saved_result["artifacts"] = artifacts
@@ -713,7 +754,7 @@ def save_place_locate_artifacts(
     logger.info(
         "Place Locate artifacts saved: directory=%s product_name=%s level=%s",
         directory,
-        response.product_name,
+        response.name,
         response.level,
     )
 
@@ -761,6 +802,197 @@ class PreparedReferenceMask:
     matched_row: ShelfRow | None
     reference_mask: np.ndarray
     sam3: ReferenceMaskResult | None
+
+
+def project_reference_bbox_to_current(
+    bbox_xywh: Sequence[int | float],
+    homography: np.ndarray,
+    current_shape: Sequence[int],
+) -> list[int]:
+    """Project a reference ``xywh`` box into current-image ``xyxy`` pixels."""
+
+    if len(bbox_xywh) != 4 or len(current_shape) < 2:
+        raise PoseTransferError("cannot project an invalid reference bbox")
+    x, y, width, height = [float(value) for value in bbox_xywh]
+    if width <= 0 or height <= 0:
+        raise PoseTransferError("reference bbox width and height must be positive")
+    corners = np.asarray(
+        [[x, y], [x + width, y], [x + width, y + height], [x, y + height]],
+        dtype=np.float32,
+    ).reshape(1, -1, 2)
+    projected = cv2.perspectiveTransform(
+        corners,
+        np.asarray(homography, dtype=np.float64),
+    ).reshape(-1, 2)
+    if not np.all(np.isfinite(projected)):
+        raise PoseTransferError("projected target bbox contains non-finite values")
+    current_height, current_width = int(current_shape[0]), int(current_shape[1])
+    x1 = max(0, min(current_width, int(np.floor(projected[:, 0].min()))))
+    y1 = max(0, min(current_height, int(np.floor(projected[:, 1].min()))))
+    x2 = max(0, min(current_width, int(np.ceil(projected[:, 0].max()))))
+    y2 = max(0, min(current_height, int(np.ceil(projected[:, 1].max()))))
+    if x2 <= x1 or y2 <= y1:
+        raise PoseTransferError("projected target bbox is outside the current image")
+    return [x1, y1, x2, y2]
+
+
+def locate_current_product_instances(
+    current_image: np.ndarray,
+    product_name: str,
+    task_type: TaskType,
+    level: ShelfLevel,
+) -> list[PickLocatedInstance]:
+    """Reuse Pick Locate's current-image Qwen/SAM3 product detector."""
+
+    request = PickLocateRequest(
+        task_type=task_type,
+        product_name=product_name,
+        level=level,
+        hand="left",
+        image_name=DEFAULT_CURRENT_IMAGE_NAME,
+        image_base64=encode_jpeg_base64(current_image),
+    )
+    result = locate_pick_product_debug(request)
+    if result.error:
+        raise HTTPException(
+            status_code=result.error_status_code or 422,
+            detail=f"当前图商品实例识别失败: {result.error}",
+        )
+    if not result.instances:
+        raise HTTPException(status_code=404, detail="当前图没有找到同名参照商品")
+    return list(result.instances)
+
+
+def _instance_bbox_pixels(
+    instance: PickLocatedInstance,
+    image_shape: Sequence[int],
+) -> list[int]:
+    height, width = int(image_shape[0]), int(image_shape[1])
+    x1 = max(0, min(width, int(np.floor(float(instance.bbox[0])))))
+    y1 = max(0, min(height, int(np.floor(float(instance.bbox[1])))))
+    x2 = max(0, min(width, int(np.ceil(float(instance.bbox[2])))))
+    y2 = max(0, min(height, int(np.ceil(float(instance.bbox[3])))))
+    if x2 <= x1 or y2 <= y1:
+        raise PoseTransferError("Pick Locate returned an empty current-image bbox")
+    return [x1, y1, x2, y2]
+
+
+def _filter_instances_to_target_row(
+    instances: list[PickLocatedInstance],
+    row_bbox_current: list[int] | None,
+) -> list[PickLocatedInstance]:
+    if row_bbox_current is None:
+        return instances
+    _, row_y1, _, row_y2 = row_bbox_current
+    tolerance = max(8.0, (row_y2 - row_y1) * 0.20)
+    filtered = [
+        instance
+        for instance in instances
+        if row_y1 - tolerance
+        <= (float(instance.bbox[1]) + float(instance.bbox[3])) / 2.0
+        <= row_y2 + tolerance
+    ]
+    return filtered or instances
+
+
+def select_place_reference_instances(
+    instances: list[PickLocatedInstance],
+    target_bbox_current: Sequence[int | float],
+    *,
+    place_on_top: bool,
+) -> tuple[list[PickLocatedInstance], ReferenceDirection]:
+    """Select current references relative to the registered target slot.
+
+    Horizontal placement returns one instance on each side when possible.  At
+    an edge it returns the two nearest instances from the available side.
+    Vertical placement returns the nearest horizontally aligned instance below
+    the target slot.
+    """
+
+    if len(target_bbox_current) != 4:
+        raise PoseTransferError("target_bbox_current must be xyxy")
+    target_x1, target_y1, target_x2, target_y2 = [
+        float(value) for value in target_bbox_current
+    ]
+    target_width = max(1.0, target_x2 - target_x1)
+    target_height = max(1.0, target_y2 - target_y1)
+    target_cx = (target_x1 + target_x2) / 2.0
+    target_cy = (target_y1 + target_y2) / 2.0
+
+    def center(instance: PickLocatedInstance) -> tuple[float, float]:
+        return (
+            (float(instance.bbox[0]) + float(instance.bbox[2])) / 2.0,
+            (float(instance.bbox[1]) + float(instance.bbox[3])) / 2.0,
+        )
+
+    if place_on_top:
+        below: list[tuple[tuple[float, float], PickLocatedInstance]] = []
+        for instance in instances:
+            center_x, center_y = center(instance)
+            vertical_offset = center_y - target_cy
+            horizontal_overlap = max(
+                0.0,
+                min(target_x2, float(instance.bbox[2]))
+                - max(target_x1, float(instance.bbox[0])),
+            )
+            instance_width = max(
+                1.0,
+                float(instance.bbox[2]) - float(instance.bbox[0]),
+            )
+            overlap_ratio = horizontal_overlap / min(target_width, instance_width)
+            if vertical_offset <= target_height * 0.10:
+                continue
+            if overlap_ratio < 0.20 and abs(center_x - target_cx) > target_width:
+                continue
+            below.append(
+                (
+                    (
+                        abs(center_x - target_cx) / target_width,
+                        vertical_offset / target_height,
+                    ),
+                    instance,
+                )
+            )
+        if not below:
+            raise HTTPException(
+                status_code=404,
+                detail="上下放置商品的目标槽位下方没有可用 bbox/mask",
+            )
+        return [min(below, key=lambda item: item[0])[1]], "up"
+
+    horizontal_tolerance = target_width * 0.08
+    left = sorted(
+        (
+            instance
+            for instance in instances
+            if center(instance)[0] < target_cx - horizontal_tolerance
+        ),
+        key=lambda instance: target_cx - center(instance)[0],
+    )
+    right = sorted(
+        (
+            instance
+            for instance in instances
+            if center(instance)[0] > target_cx + horizontal_tolerance
+        ),
+        key=lambda instance: center(instance)[0] - target_cx,
+    )
+    if left and right:
+        selected = [left[0], right[0]]
+        direction: ReferenceDirection = "both"
+    elif len(left) >= 2:
+        selected = left[:2]
+        direction = "left"
+    elif len(right) >= 2:
+        selected = right[:2]
+        direction = "right"
+    else:
+        raise HTTPException(
+            status_code=404,
+            detail="当前货架行不足两个可用的左右参照 bbox/mask",
+        )
+    selected.sort(key=lambda instance: center(instance)[0])
+    return selected, direction
 
 
 def resolve_shelf_level(
@@ -879,7 +1111,6 @@ def build_debug_response(
     matched_row = prepared.matched_row
     reference_mask = prepared.reference_mask
     reference_sam3 = prepared.sam3
-    reference_product_bbox = mask_bbox_xyxy(reference_mask)
     level = resolve_shelf_level(
         request.pose_type,
         matched_row,
@@ -892,13 +1123,47 @@ def build_debug_response(
         if artifact_directory is not None
         else request.current_image_name
     )
+    target_bbox_current = project_reference_bbox_to_current(
+        reference_bbox,
+        registration.rgb.reference_to_current_homography,
+        current_image.shape,
+    )
+    row_bbox_current = (
+        project_reference_bbox_to_current(
+            matched_row.bbox,
+            registration.rgb.reference_to_current_homography,
+            current_image.shape,
+        )
+        if matched_row is not None
+        else None
+    )
+    current_candidates = _filter_instances_to_target_row(
+        locate_current_product_instances(
+            current_image,
+            request.product_name,
+            request.task_type,
+            level,
+        ),
+        row_bbox_current,
+    )
+    selected_references, direction = select_place_reference_instances(
+        current_candidates,
+        target_bbox_current,
+        place_on_top=uses_upper_confidence_pick(
+            request.product_name,
+            "SORTING",
+        ),
+    )
     response = PlaceLocateDebugResponse(
-        product_name=request.product_name,
-        bbox=reference_product_bbox,
-        mask=encode_png_base64(reference_mask),
+        name=request.product_name,
+        bbox=[
+            _instance_bbox_pixels(instance, current_image.shape)
+            for instance in selected_references
+        ],
+        mask=[instance.mask for instance in selected_references],
+        direction=direction,
         image_path=baseline_path,
         current_image_path=current_image_path,
-        rotate_matrix=registration.current_from_reference.tolist(),
         level=level,
         task_type=request.task_type,
         location_id=request.location_id,
@@ -929,6 +1194,8 @@ def build_debug_response(
         reference_sam3_candidate_count=(
             reference_sam3.candidate_count if reference_sam3 is not None else None
         ),
+        target_bbox_current=target_bbox_current,
+        current_candidate_count=len(current_candidates),
         registration=registration_metrics(registration),
     )
     if artifact_directory is not None:
@@ -1147,7 +1414,7 @@ def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
             current = capture_head_rgbd(temporary_directory)
             debug_request = PlaceLocateDebugRequest(
                 task_type=request.task_type,
-                product_name=request.product_name,
+                product_name=request.name,
                 location_id=request.location_id,
                 pose_type=request.pose_type,
                 current_image_name=current.rgb_path.name,
@@ -1174,12 +1441,12 @@ def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
             detail=f"创建、读取或保存定位目录失败: {error}",
         ) from error
     return PlaceLocateResponse(
-        product_name=debug.product_name,
+        name=debug.name,
         bbox=debug.bbox,
         mask=debug.mask,
+        direction=debug.direction,
         image_path=debug.image_path,
         current_image_path=debug.current_image_path,
-        rotate_matrix=debug.rotate_matrix,
         level=debug.level,
     )
 

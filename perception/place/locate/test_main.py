@@ -33,6 +33,26 @@ def encode_depth(depth: np.ndarray) -> str:
 
 
 class PlaceLocateApiTest(unittest.TestCase):
+    @staticmethod
+    def current_references(image_shape: tuple[int, int]) -> list[api.PickLocatedInstance]:
+        height, width = image_shape
+        left_mask = np.zeros((height, width), dtype=np.uint8)
+        right_mask = np.zeros((height, width), dtype=np.uint8)
+        left_mask[75:175, 20:80] = 255
+        right_mask[75:175, 230:290] = 255
+        return [
+            api.PickLocatedInstance(
+                bbox=[20, 75, 80, 175],
+                mask=encode_rgb(left_mask),
+                score=0.9,
+            ),
+            api.PickLocatedInstance(
+                bbox=[230, 75, 290, 175],
+                mask=encode_rgb(right_mask),
+                score=0.9,
+            ),
+        ]
+
     def make_request(self) -> api.PlaceLocateDebugRequest:
         height, width = 240, 320
         generator = np.random.default_rng(7)
@@ -88,10 +108,15 @@ class PlaceLocateApiTest(unittest.TestCase):
         with (
             patch.object(api, "load_initial_scan", return_value=scan),
             patch.object(api, "generate_reference_mask", return_value=sam_result) as generate,
+            patch.object(
+                api,
+                "locate_current_product_instances",
+                return_value=self.current_references(self.reference_image.shape[:2]),
+            ),
         ):
             result = api.locate_place_debug(request)
 
-        self.assertEqual(result.product_name, "测试商品")
+        self.assertEqual(result.name, "测试商品")
         self.assertEqual(result.level, "L2")
         self.assertEqual(result.location_id, "H1_F_L2_C01")
         self.assertEqual(result.inspection_target_id, "H1_F_L_INSPECT")
@@ -108,21 +133,13 @@ class PlaceLocateApiTest(unittest.TestCase):
         self.assertEqual(result.reference_sam3_candidate_count, 1)
         generate.assert_called_once()
         self.assertEqual(generate.call_args.args[2], "测试商品")
-        self.assertTrue(
-            np.allclose(
-                np.asarray(result.rotate_matrix),
-                np.asarray(result.registration.current_from_reference),
-                atol=1e-6,
-            )
-        )
-        self.assertEqual(result.bbox, [120, 70, 200, 180])
-        mask_bytes = base64.b64decode(result.mask)
+        self.assertEqual(result.direction, "both")
+        self.assertEqual(result.bbox, [[20, 75, 80, 175], [230, 75, 290, 175]])
+        self.assertEqual(len(result.mask), 2)
+        mask_bytes = base64.b64decode(result.mask[0])
         mask = cv2.imdecode(np.frombuffer(mask_bytes, np.uint8), cv2.IMREAD_GRAYSCALE)
         self.assertEqual(mask.shape, (240, 320))
-        self.assertEqual(
-            np.count_nonzero(mask),
-            np.count_nonzero(reference_mask),
-        )
+        self.assertGreater(np.count_nonzero(mask), 0)
 
     def test_reference_mask_debug_stops_before_pose_transfer(self) -> None:
         full_request = self.make_request()
@@ -202,6 +219,11 @@ class PlaceLocateApiTest(unittest.TestCase):
             with (
                 patch.object(api, "load_initial_scan", return_value=scan),
                 patch.object(api, "generate_reference_mask", return_value=sam_result),
+                patch.object(
+                    api,
+                    "locate_current_product_instances",
+                    return_value=self.current_references(self.reference_image.shape[:2]),
+                ),
             ):
                 result = api.locate_place_debug(
                     request,
@@ -226,9 +248,12 @@ class PlaceLocateApiTest(unittest.TestCase):
                 "current_depth_mm.npy",
                 "change_mask_reference.png",
                 "reference_component_mask.png",
-                "bbox_crop.jpg",
+                "current_reference_crop_01.jpg",
+                "current_reference_crop_02.jpg",
+                "current_reference_mask_01.png",
+                "current_reference_mask_02.png",
                 "sam3_crop.jpg",
-                "sam3_mask.png",
+                "reference_sam3_mask.png",
             }
             self.assertTrue(
                 expected_files.issubset(
@@ -242,10 +267,12 @@ class PlaceLocateApiTest(unittest.TestCase):
                 (artifact_directory / "result.json").read_text(encoding="utf-8")
             )
             saved_mask = cv2.imread(
-                str(artifact_directory / "sam3_mask.png"),
+                str(artifact_directory / "current_reference_mask_01.png"),
                 cv2.IMREAD_GRAYSCALE,
             )
-            saved_crop = cv2.imread(str(artifact_directory / "bbox_crop.jpg"))
+            saved_crop = cv2.imread(
+                str(artifact_directory / "current_reference_crop_01.jpg")
+            )
             saved_sam3_crop = cv2.imread(
                 str(artifact_directory / "sam3_crop.jpg")
             )
@@ -264,34 +291,37 @@ class PlaceLocateApiTest(unittest.TestCase):
                 Path(saved_result["current_image_path"]),
                 expected_current_image_path,
             )
-            self.assertEqual(saved_result["product_name"], "测试商品")
-            self.assertEqual(saved_result["artifacts"]["sam3_mask"], "sam3_mask.png")
+            self.assertEqual(saved_result["name"], "测试商品")
+            self.assertEqual(
+                saved_result["artifacts"]["sam3_mask"],
+                ["current_reference_mask_01.png", "current_reference_mask_02.png"],
+            )
             self.assertEqual(
                 saved_result["artifacts"]["bbox_crop_box"],
-                [120, 70, 200, 180],
+                [[20, 75, 80, 175], [230, 75, 290, 175]],
             )
-            self.assertEqual(saved_result["artifacts"]["bbox_crop_source"], "bbox")
+            self.assertEqual(
+                saved_result["artifacts"]["bbox_crop_source"],
+                "current_rgb/bbox",
+            )
             self.assertEqual(
                 saved_result["artifacts"]["sam3_crop_box"],
                 [100, 50, 220, 200],
             )
             self.assertEqual(saved_mask.shape, self.reference_image.shape[:2])
-            self.assertEqual(
-                np.count_nonzero(saved_mask),
-                np.count_nonzero(reference_mask),
-            )
-            self.assertEqual(saved_crop.shape[:2], (110, 80))
+            self.assertGreater(np.count_nonzero(saved_mask), 0)
+            self.assertEqual(saved_crop.shape[:2], (100, 60))
             self.assertEqual(saved_sam3_crop.shape[:2], (150, 120))
             self.assertEqual(saved_depth.shape, self.reference_image.shape[:2])
 
     def test_public_response_returns_pose_estimator_inputs(self) -> None:
         debug = api.PlaceLocateDebugResponse(
-            product_name="测试商品",
-            bbox=[100, 200, 300, 400],
-            mask="mask",
+            name="测试商品",
+            bbox=[[100, 200, 300, 400], [400, 200, 600, 400]],
+            mask=["mask-1", "mask-2"],
+            direction="both",
             image_path="task0/rgb.jpg",
             current_image_path="artifacts/current_rgb.jpg",
-            rotate_matrix=np.eye(4).tolist(),
             level="L2",
             task_type="SHORTAGE",
             location_id="H1_F",
@@ -302,6 +332,8 @@ class PlaceLocateApiTest(unittest.TestCase):
             current_image_size=[320, 240],
             reference_bbox=[1, 2, 3, 4],
             reference_mask="reference",
+            target_bbox_current=[100, 200, 300, 400],
+            current_candidate_count=2,
             registration=api.RegistrationMetrics(
                 current_from_reference=np.eye(4).tolist(),
                 rmse_mm=1,
@@ -320,7 +352,7 @@ class PlaceLocateApiTest(unittest.TestCase):
             captured = SimpleNamespace(rgb_path=rgb_path, depth_path=depth_path)
             public_request = api.PlaceLocateRequest(
                 task_type="SHORTAGE",
-                product_name="测试商品",
+                name="测试商品",
                 location_id="H1_F_L_INSPECT",
                 pose_type="SHELF_VIEW_UPPER",
             )
@@ -338,12 +370,12 @@ class PlaceLocateApiTest(unittest.TestCase):
         self.assertEqual(
             response.model_dump(),
             {
-                "product_name": "测试商品",
-                "bbox": [100, 200, 300, 400],
-                "mask": "mask",
+                "name": "测试商品",
+                "bbox": [[100, 200, 300, 400], [400, 200, 600, 400]],
+                "mask": ["mask-1", "mask-2"],
+                "direction": "both",
                 "image_path": "task0/rgb.jpg",
                 "current_image_path": "artifacts/current_rgb.jpg",
-                "rotate_matrix": np.eye(4).tolist(),
                 "level": "L2",
             },
         )
@@ -357,11 +389,49 @@ class PlaceLocateApiTest(unittest.TestCase):
             public_request.model_dump(mode="json"),
         )
 
+    def test_reference_selection_supports_both_edge_and_up(self) -> None:
+        def instance(x1: int, y1: int, x2: int, y2: int) -> api.PickLocatedInstance:
+            return api.PickLocatedInstance(
+                bbox=[x1, y1, x2, y2],
+                mask=f"mask-{x1}",
+            )
+
+        candidates = [
+            instance(10, 50, 50, 150),
+            instance(55, 50, 95, 150),
+            instance(155, 50, 195, 150),
+            instance(210, 50, 250, 150),
+        ]
+        selected, direction = api.select_place_reference_instances(
+            candidates,
+            [100, 50, 150, 150],
+            place_on_top=False,
+        )
+        self.assertEqual(direction, "both")
+        self.assertEqual([item.bbox for item in selected], [[55, 50, 95, 150], [155, 50, 195, 150]])
+
+        selected, direction = api.select_place_reference_instances(
+            candidates[:3],
+            [260, 50, 310, 150],
+            place_on_top=False,
+        )
+        self.assertEqual(direction, "left")
+        self.assertEqual([item.bbox for item in selected], [[55, 50, 95, 150], [155, 50, 195, 150]])
+
+        below = instance(105, 120, 195, 220)
+        selected, direction = api.select_place_reference_instances(
+            [instance(10, 120, 90, 220), below],
+            [100, 20, 200, 100],
+            place_on_top=True,
+        )
+        self.assertEqual(direction, "up")
+        self.assertEqual(selected, [below])
+
     def test_public_request_matches_inspect_and_captures_current_rgbd(self) -> None:
         required = set(api.PlaceLocateRequest.model_json_schema()["required"])
         self.assertEqual(
             required,
-            {"task_type", "location_id", "pose_type", "product_name"},
+            {"task_type", "location_id", "pose_type", "name"},
         )
         properties = api.PlaceLocateRequest.model_json_schema()["properties"]
         self.assertIn("reference_item_area", properties)
@@ -408,7 +478,7 @@ class PlaceLocateApiTest(unittest.TestCase):
     def test_request_rejects_unknown_fields(self) -> None:
         payload = api.PlaceLocateRequest(
             task_type="SHORTAGE",
-            product_name="测试商品",
+            name="测试商品",
             location_id="H1_F_L_INSPECT",
             pose_type="SHELF_VIEW_UPPER",
         ).model_dump()

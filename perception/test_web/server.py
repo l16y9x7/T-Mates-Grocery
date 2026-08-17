@@ -807,6 +807,30 @@ def get_sam_row_compare_result(group: str, record: str, level: str) -> dict:
                     relative.as_posix(), artifact.stat().st_mtime_ns
                 )
         group_copy["artifact_urls"] = artifact_urls
+        place_reference_tests: list[dict[str, Any]] = []
+        for test in group_copy.get("place_reference_tests", []):
+            if not isinstance(test, dict):
+                continue
+            test_copy = dict(test)
+            references: list[dict[str, Any]] = []
+            for reference in test.get("references", []):
+                if not isinstance(reference, dict):
+                    continue
+                reference_copy = dict(reference)
+                mask_name = reference_copy.get("mask_artifact")
+                if isinstance(mask_name, str):
+                    mask_path = artifact_directory / mask_name
+                    if mask_path.is_file():
+                        relative = mask_path.relative_to(
+                            REAL_SHORTAGE_FRONT_COMPARE_ROOT
+                        )
+                        reference_copy["mask_url"] = front_compare_artifact_url(
+                            relative.as_posix(), mask_path.stat().st_mtime_ns
+                        )
+                references.append(reference_copy)
+            test_copy["references"] = references
+            place_reference_tests.append(test_copy)
+        group_copy["place_reference_tests"] = place_reference_tests
         response_groups.append(group_copy)
     response_row["prompt_groups"] = response_groups
     finding_details = [

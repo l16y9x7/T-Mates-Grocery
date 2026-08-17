@@ -170,7 +170,9 @@ function renderFrontCompare(payload) {
       [item.artifact_urls?.baseline_front, "Baseline 新流程", "基准前排 mask"],
       [item.artifact_urls?.current_front, "Current 新流程", "当前前排 mask"],
       [item.artifact_urls?.comparison, "槽位对比", "青色=已占用槽位，紫色虚线=缺失"],
+      [item.artifact_urls?.place_references, "Place 参照 bbox", "紫色=目标槽位，绿色=返回的邻居 bbox"],
     ].forEach(([url, title, description]) => {
+      if (!url) return;
       const figure = document.createElement("figure");
       const caption = document.createElement("figcaption");
       const strong = document.createElement("strong");
@@ -227,6 +229,43 @@ function renderFrontCompare(payload) {
     });
     table.append(tbody);
     card.append(table);
+
+    const placeTests = item.place_reference_tests || [];
+    if (placeTests.length) {
+      const placeTable = document.createElement("table");
+      placeTable.className = "slot-table place-reference-table";
+      const placeHead = document.createElement("thead");
+      const placeHeadRow = document.createElement("tr");
+      ["Place 目标", "商品", "direction", "返回 bbox", "状态"].forEach((label) => {
+        const th = document.createElement("th");
+        th.textContent = label;
+        placeHeadRow.append(th);
+      });
+      placeHead.append(placeHeadRow);
+      placeTable.append(placeHead);
+      const placeBody = document.createElement("tbody");
+      placeTests.forEach((test) => {
+        const row = document.createElement("tr");
+        row.className = test.status === "success" ? "occupied" : "missing";
+        const bboxes = (test.references || []).map((ref) =>
+          `[${(ref.bbox_original_xyxy || ref.bbox_xyxy || []).map((value) => Math.round(value)).join(", ")}]`
+        ).join(" · ");
+        [
+          `SLOT ${test.slot_index}`,
+          test.product_name || "未配置",
+          test.direction || "—",
+          bboxes || "—",
+          test.status === "success" ? "已选参照" : "不足两个参照",
+        ].forEach((value) => {
+          const td = document.createElement("td");
+          td.textContent = value;
+          row.append(td);
+        });
+        placeBody.append(row);
+      });
+      placeTable.append(placeBody);
+      card.append(placeTable);
+    }
     container.append(card);
   });
 }
