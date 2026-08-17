@@ -164,7 +164,13 @@ function renderResult(result) {
   const countText = result.count_constraint
     ? ` · expected ${result.count_constraint.expected} ${result.count_constraint.satisfied ? "✓" : "不足"}`
     : "";
-  timing.textContent = `${result.front_instance_indices.length}/${result.instances.length} front${countText} · ${Math.round(result.elapsed_ms)} ms`;
+  const depthLayer = result.count_constraint?.global_depth_layer;
+  const depthLayerText = depthLayer?.requested
+    ? depthLayer.enabled
+      ? ` · 深度近层 ≤ ${depthLayer.front_depth_max_mm}mm（断层 ${depthLayer.split_gap_mm}mm）`
+      : ` · 深度分层回退（${depthLayer.reason}）`
+    : "";
+  timing.textContent = `${result.front_instance_indices.length}/${result.instances.length} front${countText}${depthLayerText} · ${Math.round(result.elapsed_ms)} ms`;
   header.append(title, timing);
   card.append(header);
 

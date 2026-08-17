@@ -3552,6 +3552,10 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
         bbox_values = [float(value) for value in bbox]
         decoded.append((raw_instance, mask, bbox_values))
 
+    normalized_group = request.group.strip().upper()
+    prefer_global_depth_layer = normalized_group.startswith(
+        ("H2_F_L_INSPECT", "H2_F_R_INSPECT")
+    )
     selection = select_front_row_instances(
         [mask for _, mask, _ in decoded],
         depth,
@@ -3562,6 +3566,7 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
             for raw_instance, _, _ in decoded
         ],
         expected_front_count=expected_front_count,
+        prefer_global_depth_layer=prefer_global_depth_layer,
         horizontal_roi=(
             (0, round(rgb.shape[1] * 0.82))
             if request.group.upper().startswith("H1_B_L_INSPECT")

@@ -124,6 +124,7 @@ def _apply_expected_count(
     expected_count: int,
     image_shape: tuple[int, int],
     horizontal_roi: tuple[int, int] | None,
+    prefer_global_depth_layer: bool,
 ) -> dict[str, Any]:
     """Select exactly N well-spaced columns while preferring graph-front masks."""
 
@@ -191,6 +192,82 @@ def _apply_expected_count(
         plausible_widths = candidate_widths
     typical_width = float(np.percentile(plausible_widths, 65))
 
+    global_depth_layer: dict[str, Any] = {
+        "requested": prefer_global_depth_layer,
+        "enabled": False,
+        "reason": "not_requested",
+    }
+    selection_candidates = candidates
+    if prefer_global_depth_layer:
+        complete_graph_front = []
+        for index in candidates:
+            instance = instances[index]
+            x1, _, x2, _ = instance["bbox_xyxy"]
+            width_ratio = (x2 - x1) / max(1.0, typical_width)
+            if not instance["incoming"] and width_ratio >= 0.65:
+                complete_graph_front.append(index)
+        depth_order = sorted(
+            complete_graph_front,
+            key=lambda index: float(instances[index]["depth_estimate"]["depth_mm"]),
+        )
+        global_depth_layer.update(
+            {
+                "reason": "insufficient_complete_candidates",
+                "complete_graph_front_candidates": len(depth_order),
+            }
+        )
+        if len(depth_order) > expected_count:
+            depths = np.asarray(
+                [
+                    float(instances[index]["depth_estimate"]["depth_mm"])
+                    for index in depth_order
+                ],
+                dtype=np.float32,
+            )
+            split_position = expected_count
+            front_depth_max = float(depths[split_position - 1])
+            back_depth_min = float(depths[split_position])
+            split_gap = back_depth_min - front_depth_max
+            other_gaps = np.delete(np.diff(depths), split_position - 1)
+            normal_gap = float(np.median(other_gaps)) if other_gaps.size else 0.0
+            split_mads = np.asarray(
+                [
+                    float(
+                        instances[index]["depth_estimate"]["mad_mm"] or 0.0
+                    )
+                    for index in depth_order[: split_position + 1]
+                ],
+                dtype=np.float32,
+            )
+            normal_mad = float(np.median(split_mads)) if split_mads.size else 0.0
+            split_threshold = max(
+                3.0,
+                3.0 * 1.4826 * normal_mad,
+                2.5 * normal_gap,
+                0.015 * float(np.median(depths[:split_position])),
+            )
+            cutoff = (front_depth_max + back_depth_min) / 2.0
+            near_candidates = [
+                index
+                for index in candidates
+                if float(instances[index]["depth_estimate"]["depth_mm"]) <= cutoff
+            ]
+            global_depth_layer.update(
+                {
+                    "reason": "gap_not_significant",
+                    "front_depth_max_mm": round(front_depth_max, 2),
+                    "back_depth_min_mm": round(back_depth_min, 2),
+                    "split_gap_mm": round(split_gap, 2),
+                    "split_threshold_mm": round(split_threshold, 2),
+                    "cutoff_mm": round(cutoff, 2),
+                    "near_candidates": len(near_candidates),
+                }
+            )
+            if split_gap > split_threshold and len(near_candidates) >= expected_count:
+                selection_candidates = near_candidates
+                global_depth_layer["enabled"] = True
+                global_depth_layer["reason"] = "significant_n_to_n_plus_1_gap"
+
     def quality(index: int) -> float:
         instance = instances[index]
         x1, y1, x2, y2 = instance["bbox_xyxy"]
@@ -201,13 +278,27 @@ def _apply_expected_count(
         sam_score = float(scores[index] or 0.0)
         support = float(instance["depth_estimate"]["support_ratio"])
         graph_score = 2.5 if not instance["incoming"] else -0.35 * len(instance["incoming"])
-        edge_clearance = min(x1, image_width - x2)
-        if edge_clearance <= image_width * 0.02:
-            edge_penalty = 2.5
-        elif edge_clearance <= image_width * 0.05:
-            edge_penalty = 0.8
-        else:
+        if horizontal_roi is not None:
+            # The caller already removed candidates whose centers fall outside
+            # the view-specific shelf ROI.  Penalizing the full-image edge as
+            # well can suppress a legitimate first product that straddles the
+            # ROI boundary and promote a rear fragment beside it.
             edge_penalty = 0.0
+        else:
+            edge_clearance = min(x1, image_width - x2)
+            touches_frame = x1 <= 2 or x2 >= image_width - 2
+            incomplete_at_edge = width_completeness < 0.65
+            if edge_clearance <= image_width * 0.02 and (
+                touches_frame or incomplete_at_edge
+            ):
+                edge_penalty = 2.5
+            elif (
+                edge_clearance <= image_width * 0.05
+                and incomplete_at_edge
+            ):
+                edge_penalty = 0.8
+            else:
+                edge_penalty = 0.0
         return (
             graph_score
             + sam_score
@@ -219,7 +310,7 @@ def _apply_expected_count(
         )
 
     ordered = sorted(
-        candidates,
+        selection_candidates,
         key=lambda index: (
             (instances[index]["bbox_xyxy"][0] + instances[index]["bbox_xyxy"][2]) / 2,
             -quality(index),
@@ -264,6 +355,7 @@ def _apply_expected_count(
         if len(selected) == min(expected_count, len(ordered)):
             break
     chosen = set(selected)
+    depth_layer_pool = set(selection_candidates)
     for index in candidates:
         instance = instances[index]
         if index in chosen:
@@ -272,15 +364,21 @@ def _apply_expected_count(
         else:
             instance["selected"] = False
             if not instance["incoming"]:
-                instance["selection_reason"] = "exceeds_expected_front_count"
+                instance["selection_reason"] = (
+                    "global_back_depth_layer"
+                    if global_depth_layer["enabled"] and index not in depth_layer_pool
+                    else "exceeds_expected_front_count"
+                )
     return {
         "expected": expected_count,
         "selected": len(selected),
         "satisfied": len(selected) == expected_count,
         "available_candidates": len(candidates),
+        "selection_pool_candidates": len(selection_candidates),
         "horizontal_roi": [roi_left, roi_right],
         "typical_instance_width_px": round(typical_width, 2),
         "nominal_slot_width_px": round(nominal_slot_width, 2),
+        "global_depth_layer": global_depth_layer,
     }
 
 
@@ -291,6 +389,7 @@ def select_front_row_instances(
     scores: Sequence[float | None] | None = None,
     expected_front_count: int | None = None,
     horizontal_roi: tuple[int, int] | None = None,
+    prefer_global_depth_layer: bool = False,
 ) -> dict[str, Any]:
     """Return front instances, duplicate suppression and pairwise depth edges."""
 
@@ -473,6 +572,16 @@ def select_front_row_instances(
                     # Two similarly strong but contradictory estimates are not
                     # sufficient evidence for either occlusion direction.
                     continue
+                if (
+                    not directions_conflict
+                    and local_strength < 1.35
+                    and global_strength <= 1.0
+                ):
+                    # A marginal boundary-only difference is easily produced
+                    # by transparent bottles or a thin SAM fragment.  Do not
+                    # let it hide a complete instance unless the full-instance
+                    # depth agrees or the local separation is clearly strong.
+                    continue
                 if use_global:
                     first_depth = global_first_depth
                     second_depth = global_second_depth
@@ -531,6 +640,7 @@ def select_front_row_instances(
             expected_count=expected_front_count,
             image_shape=depth.shape,
             horizontal_roi=horizontal_roi,
+            prefer_global_depth_layer=prefer_global_depth_layer,
         )
         front_indices = [
             int(instance["instance_index"])
