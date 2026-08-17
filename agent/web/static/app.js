@@ -42,6 +42,7 @@ const receiptEmpty = document.querySelector("#receiptEmpty");
 const receiptOutput = document.querySelector("#receiptOutput");
 const taskForm = document.querySelector("#taskForm");
 const taskSubmitButton = document.querySelector("#taskSubmitButton");
+const taskTerminateButton = document.querySelector("#taskTerminateButton");
 const taskErrorMessage = document.querySelector("#taskErrorMessage");
 const taskTimeline = document.querySelector("#taskTimeline");
 const taskLiveStatus = document.querySelector("#taskLiveStatus");
@@ -96,6 +97,7 @@ const activeOperationsSummary = document.querySelector("#activeOperationsSummary
 let eventSource = null;
 let placeEventSource = null;
 let taskEventSource = null;
+let currentTaskRunId = null;
 const visualPollers = { pick: null, place: null, task: null };
 const visualRefreshers = { pick: null, place: null, task: null };
 
@@ -320,6 +322,43 @@ function drawMaskOverlay(context, mask, width, height) {
   context.drawImage(maskCanvas, 0, 0, width, height);
 }
 
+function drawPoseAxes(context, axes, canvas, image) {
+  if (!axes || !Array.isArray(axes.origin) || axes.origin.length !== 2) return;
+  const sourceWidth = image.naturalWidth || canvas.width;
+  const sourceHeight = image.naturalHeight || canvas.height;
+  const scaleX = canvas.width / sourceWidth;
+  const scaleY = canvas.height / sourceHeight;
+  const point = (value) => [Number(value[0]) * scaleX, Number(value[1]) * scaleY];
+  const origin = point(axes.origin);
+  if (!origin.every(Number.isFinite)) return;
+
+  const colors = { x: "#ef4444", y: "#22c55e", z: "#3b82f6" };
+  context.save();
+  context.lineCap = "round";
+  context.lineWidth = 4;
+  Object.entries(colors).forEach(([axis, color]) => {
+    if (!Array.isArray(axes[axis]) || axes[axis].length !== 2) return;
+    const endpoint = point(axes[axis]);
+    if (!endpoint.every(Number.isFinite)) return;
+    context.beginPath();
+    context.moveTo(...origin);
+    context.lineTo(...endpoint);
+    context.strokeStyle = color;
+    context.stroke();
+    context.beginPath();
+    context.arc(endpoint[0], endpoint[1], 4, 0, Math.PI * 2);
+    context.fillStyle = color;
+    context.fill();
+    context.font = "700 14px ui-monospace, monospace";
+    context.fillText(axis.toUpperCase(), endpoint[0] + 7, endpoint[1] - 7);
+  });
+  context.beginPath();
+  context.arc(origin[0], origin[1], 4, 0, Math.PI * 2);
+  context.fillStyle = "#ffffff";
+  context.fill();
+  context.restore();
+}
+
 function renderPose(visual, poseStatus, poseValues, poseMeta) {
   const pose = Array.isArray(visual.pose) && visual.pose.length === 6 ? visual.pose : null;
   if (!pose) {
@@ -346,20 +385,39 @@ function drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, im
   if (!visual || !visual.available) return;
   const context = canvas.getContext("2d");
   const imageData = visual.image_data;
-  if (imageData && imageData !== imageCache.imageData) {
+  const revision = String(visual.visual_revision || "legacy");
+  const revisionChanged = imageCache.revision !== revision;
+  imageCache.revision = revision;
+  if (imageData && (imageData !== imageCache.imageData || revisionChanged)) {
     imageCache.imageData = imageData;
-    imageCache.image = new Image();
-    imageCache.image.onload = () => drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, imageCache);
-    imageCache.image.src = imageData;
+    const image = new Image();
+    imageCache.image = image;
+    image.onload = () => {
+      if (imageCache.revision === revision && imageCache.image === image) {
+        drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, imageCache);
+      }
+    };
+    image.src = imageData;
   }
   if (imageCache.image?.complete) {
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.drawImage(imageCache.image, 0, 0, canvas.width, canvas.height);
-    if (visual.mask_data && visual.mask_data !== imageCache.maskData) {
+    if (
+      visual.mask_data
+      && (visual.mask_data !== imageCache.maskData || revisionChanged)
+    ) {
       imageCache.maskData = visual.mask_data;
-      imageCache.mask = new Image();
-      imageCache.mask.onload = () => drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, imageCache);
-      imageCache.mask.src = visual.mask_data;
+      const mask = new Image();
+      imageCache.mask = mask;
+      mask.onload = () => {
+        if (imageCache.revision === revision && imageCache.mask === mask) {
+          drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, imageCache);
+        }
+      };
+      mask.src = visual.mask_data;
+    } else if (!visual.mask_data) {
+      imageCache.maskData = null;
+      imageCache.mask = null;
     }
     if (imageCache.mask?.complete) {
       context.save();
@@ -367,9 +425,14 @@ function drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, im
       context.restore();
     }
     if (Array.isArray(visual.bbox) && visual.bbox.length === 4) {
-      const space = Number(visual.bbox_coordinate_space) || 1000;
-      const scaleX = canvas.width / space;
-      const scaleY = canvas.height / space;
+      const coordinateWidth = Number(visual.bbox_coordinate_width)
+        || imageCache.image.naturalWidth
+        || canvas.width;
+      const coordinateHeight = Number(visual.bbox_coordinate_height)
+        || imageCache.image.naturalHeight
+        || canvas.height;
+      const scaleX = canvas.width / coordinateWidth;
+      const scaleY = canvas.height / coordinateHeight;
       const [x1, y1, x2, y2] = visual.bbox.map(Number);
       context.save();
       context.strokeStyle = "#d9f26b";
@@ -380,7 +443,12 @@ function drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, im
       context.fillText("BBOX", x1 * scaleX + 6, Math.max(18, y1 * scaleY - 7));
       context.restore();
     }
-    status.textContent = visual.mask_data ? "RGB + MASK + BBOX" : visual.image_data ? "RGB + BBOX" : "定位结果";
+    drawPoseAxes(context, visual.pose_axes, canvas, imageCache.image);
+    const layers = ["RGB"];
+    if (visual.mask_data) layers.push("MASK");
+    if (Array.isArray(visual.bbox)) layers.push("BBOX");
+    if (visual.pose_axes) layers.push("6D AXES");
+    status.textContent = layers.join(" + ");
   }
   renderPose(visual, poseStatus, poseValues, poseMeta);
 }
@@ -633,10 +701,24 @@ function resetTaskView() {
 
 function setTaskBusy(busy) {
   taskSubmitButton.disabled = busy;
+  taskTerminateButton.hidden = !busy || !currentTaskRunId;
+  taskTerminateButton.disabled = !busy || !currentTaskRunId;
+  taskTerminateButton.querySelector("span:last-child").textContent = "终止任务";
   taskForm.querySelectorAll('input[name="task_id"]').forEach((input) => { input.disabled = busy; });
   taskSubmitButton.querySelector("span:last-child").textContent = busy
     ? "执行中"
     : `开始 Task ${selectedTaskId()}`;
+}
+
+function setTaskTerminating(terminating) {
+  taskTerminateButton.disabled = terminating;
+  taskTerminateButton.querySelector("span:last-child").textContent = terminating
+    ? "终止中"
+    : "终止任务";
+  if (terminating) {
+    taskLiveStatus.className = "live-status failed";
+    taskLiveStatus.querySelector("strong").textContent = "正在终止任务";
+  }
 }
 
 function renderTaskSpecificResult(taskId, body) {
@@ -667,15 +749,24 @@ function renderTaskSpecificResult(taskId, body) {
 
 function showTaskResult(taskId, result) {
   const body = result.body ?? result;
+  const terminated = body?.error_code === "TASK_TERMINATED";
   taskResultCard.hidden = false;
-  taskResultStatus.textContent = result.ok
+  taskResultStatus.textContent = terminated
+    ? "任务已终止"
+    : result.ok
     ? `HTTP ${result.status_code} · 请求完成`
     : `HTTP ${result.status_code || 502} · 请求失败`;
   taskResultStatus.className = result.ok ? "success" : "failure";
   taskResultBody.textContent = typeof body === "string"
     ? body
     : JSON.stringify(body, null, 2);
-  if (result.ok) {
+  if (terminated) {
+    setTaskError();
+    taskErrorDetails.hidden = false;
+    taskErrorBody.textContent = body.message || "任务已由用户终止";
+    taskLiveStatus.className = "live-status failed";
+    taskLiveStatus.querySelector("strong").textContent = "任务已终止";
+  } else if (result.ok) {
     renderTaskSpecificResult(taskId, body);
     taskLiveStatus.className = "live-status succeeded";
     taskLiveStatus.querySelector("strong").textContent = "任务完成 · 成功";
@@ -743,6 +834,17 @@ async function startUnifiedTask(taskId) {
   });
   const body = await response.json();
   if (!response.ok) throw new Error(body.detail || body.message || `无法启动 Task ${taskId}`);
+  return body;
+}
+
+async function terminateUnifiedTask(runId) {
+  const response = await fetch(`/api/task-runs/${runId}/terminate`, {
+    method: "POST",
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body.detail || body.message || `终止任务失败（HTTP ${response.status}）`);
+  }
   return body;
 }
 
@@ -938,25 +1040,26 @@ taskForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (taskEventSource) taskEventSource.close();
   const taskId = selectedTaskId();
+  currentTaskRunId = null;
   resetTaskView();
   setTaskBusy(true);
   try {
     const task = await startUnifiedTask(taskId);
+    currentTaskRunId = task.run_id;
+    setTaskBusy(true);
     elapsedTimers.task.start();
     taskOperationKey.textContent = task.operation_key;
-    if (taskId === "1") {
-      beginVisualPolling(
-        task.run_id,
-        "/api/task-runs",
-        taskVisual,
-        taskVisualCanvas,
-        taskVisualStatus,
-        taskPoseStatus,
-        taskPoseValues,
-        taskPoseMeta,
-        "task",
-      );
-    }
+    beginVisualPolling(
+      task.run_id,
+      "/api/task-runs",
+      taskVisual,
+      taskVisualCanvas,
+      taskVisualStatus,
+      taskPoseStatus,
+      taskPoseValues,
+      taskPoseMeta,
+      "task",
+    );
     taskEventSource = new EventSource(task.events_url);
     taskEventSource.addEventListener("flow", (message) => {
       try {
@@ -973,6 +1076,7 @@ taskForm.addEventListener("submit", async (event) => {
         setTaskError(`Task ${taskId} 结果格式无效`);
       }
       setTaskBusy(false);
+      currentTaskRunId = null;
       await stopVisualPolling("task", true);
       taskEventSource.close();
       taskEventSource = null;
@@ -982,8 +1086,25 @@ taskForm.addEventListener("submit", async (event) => {
       setTaskError(`Task ${taskId} 实时日志连接中断，请查看服务器日志`);
     };
   } catch (error) {
+    currentTaskRunId = null;
     setTaskBusy(false);
     setTaskError(error.message || `无法启动 Task ${taskId}`);
+  }
+});
+
+taskTerminateButton.addEventListener("click", async () => {
+  const runId = currentTaskRunId;
+  if (!runId) return;
+  let terminationAccepted = false;
+  setTaskTerminating(true);
+  setTaskError();
+  try {
+    await terminateUnifiedTask(runId);
+    terminationAccepted = true;
+  } catch (error) {
+    setTaskError(error.message || "终止任务失败");
+  } finally {
+    if (!terminationAccepted && currentTaskRunId === runId) setTaskTerminating(false);
   }
 });
 

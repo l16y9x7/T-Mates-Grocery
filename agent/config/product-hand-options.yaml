@@ -84,9 +84,9 @@ product_hand_options:
   H2_F_L2_C05: {product_name: 绿豆冰沙, hands: [RIGHT], target_id: H2_F_R_INSPECT}
   H2_F_L3_C01: {product_name: 外星人电解质水椰子口味, hands: [LEFT], target_id: H2_F_L_INSPECT}
   H2_F_L3_C02: {product_name: 外星人电解质水青柠口味, hands: [LEFT], target_id: H2_F_L_INSPECT}
-  H2_F_L4_C06: {product_name: 外星人电解质水青柠口味, hands: [LEFT, RIGHT], target_id: H2_F_L_INSPECT}
+  H2_F_L4_C06: {product_name: 外星人电解质水青柠口味, hands: [LEFT], target_id: H2_F_L_INSPECT}
   H2_F_L3_C03: {product_name: 外星人电解质水白桃口味0糖, hands: [LEFT, RIGHT], target_id: H2_F_L_INSPECT}
-  H2_F_L5_C05: {product_name: 外星人电解质水白桃口味0糖, hands: [RIGHT], target_id: H2_F_L_INSPECT}
+  H2_F_L5_C05: {product_name: 外星人电解质水白桃口味0糖, hands: [LEFT, RIGHT], target_id: H2_F_L_INSPECT}
   H2_F_L3_C04: {product_name: 外星人电解质水西柚口味, hands: [RIGHT], target_id: H2_F_L_INSPECT}
   H2_F_L3_C05: {product_name: 尖叫, hands: [LEFT], target_id: H2_F_R_INSPECT}
   H2_F_L3_C06: {product_name: 百岁山矿泉水, hands: [RIGHT], target_id: H2_F_R_INSPECT}
@@ -106,9 +106,9 @@ product_hand_options:
   H2_B_L1_C01: {product_name: 舒肤佳香皂纯白清香型, hands: [LEFT], target_id: H2_B_L_INSPECT}
   H2_B_L1_C02: {product_name: 舒肤佳香皂芦荟呵护香型, hands: [LEFT], target_id: H2_B_L_INSPECT}
   H2_B_L1_C03: {product_name: 舒肤佳香皂柠檬清新香型, hands: [LEFT], target_id: H2_B_L_INSPECT}
-  H2_B_L1_C04: {product_name: 汰渍肥皂, hands: [RIGHT], target_id: H2_B_R_INSPECT}
-  H2_B_L1_C05: {product_name: 杯子, hands: [LEFT, RIGHT], target_id: H2_B_R_INSPECT}
-  H2_B_L2_C05: {product_name: 杯子, hands: [LEFT, RIGHT], target_id: H2_B_R_INSPECT}
+  H2_B_L1_C04: {product_name: 汰渍肥皂, hands: [RIGHT], target_id: H2_B_L_INSPECT}
+  H2_B_L1_C05: {product_name: 杯子, hands: [RIGHT], target_id: H2_B_R_INSPECT}
+  H2_B_L2_C05: {product_name: 杯子, hands: [RIGHT], target_id: H2_B_R_INSPECT}
   H2_B_L2_C01: {product_name: 舒克牙膏竹炭薄荷, hands: [LEFT], target_id: H2_B_L_INSPECT}
   H2_B_L2_C02: {product_name: 舒克牙膏柠檬百香果, hands: [LEFT], target_id: H2_B_L_INSPECT}
   H2_B_L2_C03: {product_name: 舒克牙膏海盐薄荷, hands: [LEFT, RIGHT], target_id: H2_B_L_INSPECT}
@@ -118,9 +118,9 @@ product_hand_options:
   H2_B_L3_C03: {product_name: Dove沐浴泡泡清甜奶香, hands: [LEFT], target_id: H2_B_L_INSPECT}
   H2_B_L3_C04: {product_name: 威露士, hands: [RIGHT], target_id: H2_B_L_INSPECT}
   H2_B_L3_C05: {product_name: Dove沐浴乳, hands: [RIGHT], target_id: H2_B_L_INSPECT}
-  H2_B_L3_C06: {product_name: 拖鞋, hands: [LEFT, RIGHT], target_id: H2_B_R_INSPECT}
-  H2_B_L5_C01: {product_name: 拖鞋, hands: [LEFT, RIGHT], target_id: H2_B_L_INSPECT}
+  H2_B_L3_C06: {product_name: 拖鞋, hands: [RIGHT], target_id: H2_B_R_INSPECT}
+  H2_B_L5_C01: {product_name: 拖鞋, hands: [RIGHT], target_id: H2_B_L_INSPECT}
   H2_B_L4_C01: {product_name: Dove沐浴泡泡樱花甜香袋装, hands: [LEFT], target_id: H2_B_L_INSPECT}
   H2_B_L4_C02: {product_name: 半亩花田洗发水, hands: [LEFT, RIGHT], target_id: H2_B_L_INSPECT}
-  H2_B_L4_C03: {product_name: 心相印厨房纸巾, hands: [LEFT, RIGHT], target_id: H2_B_R_INSPECT}
-  H2_B_L5_C02: {product_name: 心相印厨房纸巾, hands: [LEFT, RIGHT], target_id: H2_B_R_INSPECT}
+  H2_B_L4_C03: {product_name: 心相印厨房纸巾, hands: [RIGHT], target_id: H2_B_R_INSPECT}
+  H2_B_L5_C02: {product_name: 心相印厨房纸巾, hands: [RIGHT], target_id: H2_B_R_INSPECT}

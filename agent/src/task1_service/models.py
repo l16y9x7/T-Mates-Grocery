@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 PRODUCT_SLOT_PATTERN = re.compile(r"^H[12]_[FB]_L[1-5]_C\d{2}$")
@@ -72,6 +72,7 @@ class Task1Services(BaseModel):
     pose: str = Field(min_length=1)
     pick_place: str = Field(min_length=1)
     sku: str = Field(min_length=1)
+    camera: str = Field(min_length=1)
 
 
 class Task1Timeouts(BaseModel):
@@ -80,6 +81,7 @@ class Task1Timeouts(BaseModel):
     connect_seconds: float = Field(gt=0, default=3)
     health_seconds: float = Field(gt=0, default=5)
     receipt_seconds: float = Field(gt=0, default=120)
+    resolution_seconds: float = Field(gt=0, default=60)
     sku_seconds: float = Field(gt=0, default=10)
     navigation_seconds: float = Field(gt=0, default=600)
     pose_seconds: float = Field(gt=0, default=300)
@@ -99,7 +101,29 @@ class Task1Settings(BaseModel):
     product_hand_options_file: str | None = Field(default=None, min_length=1)
     product_hand_options: dict[str, list[Hand]] = Field(default_factory=dict)
     product_target_ids: dict[str, str] = Field(default_factory=dict)
+    skip_product_names: list[str] = Field(default_factory=list)
+    defer_product_names: list[str] = Field(default_factory=list)
     log_dir: str = Field(min_length=1, default="log")
+
+    @field_validator("skip_product_names", "defer_product_names")
+    @classmethod
+    def valid_policy_product_names(cls, value: list[str]) -> list[str]:
+        normalized = [name.strip() for name in value]
+        if any(not name for name in normalized):
+            raise ValueError("product policy names must not be empty")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("product policy names must not contain duplicates")
+        return normalized
+
+    @model_validator(mode="after")
+    def disjoint_product_policies(self) -> "Task1Settings":
+        overlap = set(self.skip_product_names) & set(self.defer_product_names)
+        if overlap:
+            raise ValueError(
+                "skip_product_names and defer_product_names must not overlap: "
+                f"{sorted(overlap)}"
+            )
+        return self
 
     @field_validator("product_hand_options")
     @classmethod
@@ -241,6 +265,7 @@ class Task1ServiceError(Exception):
         step: str | None = None,
         failed_interface: str | None = None,
         url: str | None = None,
+        pose: list[float] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -249,3 +274,4 @@ class Task1ServiceError(Exception):
         self.step = step
         self.failed_interface = failed_interface
         self.url = url
+        self.pose = pose

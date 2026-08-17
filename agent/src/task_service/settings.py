@@ -87,6 +87,7 @@ class TaskServiceSettings(BaseModel):
             "pose": document.robot.pose_url,
             "pick_place": document.local_services.pick_place,
             "sku": document.local_services.sku,
+            "camera": document.robot.camera_url,
         }
         if "log_dir" in task1:
             task1["log_dir"] = document.resolve(str(task1["log_dir"]))

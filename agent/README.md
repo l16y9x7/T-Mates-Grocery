@@ -4,6 +4,29 @@
 Task0、Task1、Task2、Task3 由同一个 FastAPI 进程提供，旧的主 Agent 和 LangGraph
 工作流已退役。
 
+## 可用脚本
+
+全部在项目根目录执行。
+
+| 脚本 | 用法 | 说明 |
+|---|---|---|
+| `scripts/setup.sh` | `scripts/setup.sh` | 按锁文件安装 Python 依赖 |
+| `scripts/pick-place.sh` | `scripts/pick-place.sh {start\|stop\|restart}` | 启动/停止 8086 取放编排服务 |
+| `scripts/tasks.sh` | `scripts/tasks.sh {start\|stop\|restart}` | 启动/停止 8108 统一任务服务（含 Web） |
+| `scripts/run-task.sh` | `scripts/run-task.sh [--ensure-services] {0\|1\|2\|3\|health}` | 终端启动 Task0-3，或查询健康状态；加 `--ensure-services` 时若服务未就绪会先拉起 pick-place 和统一任务服务 |
+| `scripts/restart-runtime.sh` | `scripts/restart-runtime.sh` | 依次重启 pick-place 和统一任务服务（Web「应用并重启」也调用它） |
+| `scripts/run-tests.sh` | `scripts/run-tests.sh [pytest 参数…]` | 跑进程内 HTTP Mock 测试，不驱动真实机器人 |
+| `scripts/test-grasp.sh` | `scripts/test-grasp.sh` | 直连抓取执行接口，跳过 8086 的定位、取图和位姿估计 |
+
+常用顺序：
+
+```bash
+scripts/setup.sh
+scripts/pick-place.sh start
+scripts/tasks.sh start
+scripts/run-task.sh 0    # 再换成 1、2、3
+```
+
 ## 环境安装
 
 要求 Python 3.11+、Bash 和 [uv](https://docs.astral.sh/uv/)。在项目根目录执行：
@@ -39,7 +62,17 @@ scripts/tasks.sh start
 `log/process/tasks-*.log`，每次任务的接口和事件记录保存在
 `log/<时间>-<任务键>/`。
 
-健康检查和任务调用示例：
+健康检查和任务调用可直接用脚本（会阻塞直到该次任务结束）：
+
+```bash
+scripts/run-task.sh health
+scripts/run-task.sh 0
+scripts/run-task.sh 1
+scripts/run-task.sh 2
+scripts/run-task.sh 3
+```
+
+若服务尚未启动，可加 `--ensure-services` 自动拉起 pick-place 和统一任务服务。也可用 curl：
 
 ```bash
 curl http://127.0.0.1:8108/health
@@ -78,14 +111,18 @@ uv run --frozen python -m test1_service \
 
 - Task0 先到 `start`，再以蛇形姿态顺序巡检八个点；每次拍摄前等待 2 秒，完成后
   返回 `start`，并将 RGB-D 数据保存到 `output/task0/`。
-- Task1 识别小票并完成 SKU 货位转换、两件商品抓取、交付台放置和任务收尾。
-- Task2 往返巡检货架，由感知服务自行取图识别缺货商品；累计两件后从补货台抓取，
-  并恢复发现位置完成放置。
+- Task1 识别小票并完成 SKU 货位转换、两件商品抓取、交付台放置和任务收尾；运行中单件
+  商品失败时保留已得分步骤并继续处理另一件。
+- Task2 按货架2正面、货架1正面、货架1背面、货架2背面分批巡检；每面识别完成后
+  逐件尝试补货，单个巡检点、候选或机械手失败时继续后续候选和货架，成功抓取并放置
+  两件后立即结束。
 - Task3 由感知服务自行取图识别一对乱放商品，校验安全手能力后交换货位。
 - test1 按八个巡检点和 L1-L5 固定顺序采集左右腕部相机的 80 组 RGB-D 数据，仅通过
   上述一次性命令启动。
 
 Task2 和 Task3 运行前必须先成功完成一次 Task0 基准采集。
+Task1/Task2 的启动健康检查仍是严格前置条件；检查通过后的部分完成也保持原有
+`status="SUCCEEDED"`，实际结果以响应中每个 `target_items` 的 `picked`、`placed` 为准。
 
 ## 配置
 

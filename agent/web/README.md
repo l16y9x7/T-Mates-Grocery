@@ -23,7 +23,8 @@ scripts/pick-place.sh stop
 机器人 IP、Task0-3、pick-place、Web 下游服务和日志目录集中在
 `config/runtime.production.yaml`。修改 `robot.ip` 会统一更新所有机器人服务地址。
 页面会显示当前生效 IP，并可保存新 IPv4 后依次重启 8086 和 8108；运行中操作需要
-再次确认才能强制重启。
+再次确认才能强制重启。运行控制按钮不依赖 PID 文件是否存在：服务缺失时会启动，
+PID 文件失效但端口仍被占用时会按 8086/8108 监听端口清理旧进程后重启。
 
 ## 任务接口
 
@@ -44,7 +45,12 @@ GET /api/task-runs/<run_id>/events
 Accept: text/event-stream
 
 GET /api/task-runs/<run_id>/visual
+
+POST /api/task-runs/<run_id>/terminate
 ```
+
+终止接口取消指定 Task0-3 后台任务、释放全局执行锁，并通过 SSE 返回
+`TASK_TERMINATED` 结果；它不调用机器人急停接口。
 
 任务面板按任务展示专属内容：
 

@@ -293,9 +293,15 @@ class Task3ServiceError(Exception):
         *,
         status_code: int = 502,
         step: str | None = None,
+        failed_interface: str | None = None,
+        url: str | None = None,
+        pose: list[float] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
         self.step = step
+        self.failed_interface = failed_interface
+        self.url = url
+        self.pose = pose

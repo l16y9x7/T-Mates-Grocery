@@ -6,6 +6,7 @@ import asyncio
 import base64
 from ipaddress import IPv4Address
 import json
+import math
 import mimetypes
 import os
 import re
@@ -131,6 +132,7 @@ class PickTask:
     operation_key: str
     workflow: str = "pick_place"
     task: asyncio.Task[None] | None = None
+    execution_task: asyncio.Task[object] | None = None
     finished: bool = False
     result: dict[str, object] | None = None
     created_at: float = field(default_factory=time.monotonic)
@@ -166,51 +168,15 @@ def _coordinator() -> TaskCoordinator:
     return COORDINATOR_GETTER()
 
 
-def _read_pid(path: Path) -> int | None:
-    try:
-        value = path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return int(value) if value.isdigit() else None
-
-
-def _pid_is_running(pid: int | None) -> bool:
-    if pid is None:
-        return False
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
-
-
-def _managed_pid_owns_current_process(managed_pid: int | None) -> bool:
-    if not _pid_is_running(managed_pid):
-        return False
-    current = os.getpid()
-    for _ in range(20):
-        if current == managed_pid:
-            return True
-        try:
-            stat = Path(f"/proc/{current}/stat").read_text(encoding="utf-8")
-            current = int(stat.rsplit(")", 1)[1].split()[1])
-        except (OSError, ValueError, IndexError):
-            return False
-        if current <= 1:
-            return current == managed_pid
-    return False
-
-
 def _restart_preflight() -> tuple[bool, str | None]:
-    task_pid = _read_pid(PROJECT_ROOT / "run" / "tasks.pid")
-    pick_place_pid = _read_pid(PROJECT_ROOT / "run" / "pick-place.pid")
-    if not _managed_pid_owns_current_process(task_pid):
-        return False, "8108 不是由 scripts/tasks.sh 管理的当前进程"
-    if not _pid_is_running(pick_place_pid):
-        return False, "8086 不是由 scripts/pick-place.sh 管理的运行进程"
-    restart_script = PROJECT_ROOT / "scripts" / "restart-runtime.sh"
-    if not restart_script.is_file() or not os.access(restart_script, os.X_OK):
-        return False, "统一重启脚本不存在或不可执行"
+    required_scripts = (
+        PROJECT_ROOT / "scripts" / "restart-runtime.sh",
+        PROJECT_ROOT / "scripts" / "tasks.sh",
+        PROJECT_ROOT / "scripts" / "pick-place.sh",
+    )
+    for script in required_scripts:
+        if not script.is_file() or not os.access(script, os.X_OK):
+            return False, f"运行控制脚本不存在或不可执行：{script.name}"
     return True, None
 
 
@@ -341,18 +307,70 @@ def _find_log_dir(operation_key: str) -> Path | None:
     return sorted(candidates, key=lambda path: path.name)[-1] if candidates else None
 
 
-def _find_task_pick_log_dir(operation_key: str, task_id: str) -> Path | None:
-    """Find the newest 8086 child pick operation created by a task run."""
+def _locate_response(log_dir: Path) -> tuple[str, dict[str, object], Path] | None:
+    """Return the successful pick/place locate response persisted by 8086."""
+
+    for kind in ("pick", "place"):
+        path = log_dir / "interfaces" / f"perception_{kind}_locate" / "response.json"
+        document = _read_json_file(path)
+        if not isinstance(document, dict):
+            continue
+        status_code = document.get("status_code")
+        if isinstance(status_code, int) and not 200 <= status_code < 300:
+            continue
+        body = document.get("body", document)
+        if isinstance(body, dict):
+            return kind, body, path
+    return None
+
+
+def _find_task_visual_log_dir(operation_key: str, task_id: str) -> Path | None:
+    """Find the newest task child operation with a successful locate response."""
 
     if not LOG_ROOT.exists():
         return None
-    prefix = f"-{_safe_key(operation_key)}_task{task_id}.pick."
+    prefix = f"-{_safe_key(operation_key)}_task{task_id}."
     candidates = [
         path
         for path in LOG_ROOT.iterdir()
-        if path.is_dir() and prefix in path.name and path.name.endswith(".pick")
+        if path.is_dir() and prefix in path.name and _locate_response(path) is not None
     ]
-    return sorted(candidates, key=lambda path: path.name)[-1] if candidates else None
+    return max(candidates, key=lambda path: path.name) if candidates else None
+
+
+def _find_task_operation_log_dirs(operation_key: str, task_id: str) -> list[Path]:
+    """Find every pick/place child operation created by a unified task run."""
+
+    if not LOG_ROOT.exists():
+        return []
+    prefix = f"-{_safe_key(operation_key)}_task{task_id}."
+    try:
+        return sorted(
+            path
+            for path in LOG_ROOT.iterdir()
+            if path.is_dir() and prefix in path.name
+        )
+    except OSError:
+        return []
+
+
+def _event_log_dirs(state: PickTask) -> list[Path]:
+    """Return the main task log and any nested pick/place operation logs."""
+
+    directories: list[Path] = []
+    main_log_dir = _find_log_dir(state.operation_key)
+    if main_log_dir is not None:
+        directories.append(main_log_dir)
+    task_id = state.workflow.removeprefix("task")
+    if task_id in {"1", "2", "3"}:
+        directories.extend(_find_task_operation_log_dirs(state.operation_key, task_id))
+    return directories
+
+
+def _find_task_pick_log_dir(operation_key: str, task_id: str) -> Path | None:
+    """Compatibility alias for callers using the previous helper name."""
+
+    return _find_task_visual_log_dir(operation_key, task_id)
 
 
 def _log_file_data(log_dir: Path, relative_path: str) -> str | None:
@@ -369,16 +387,130 @@ def _log_file_data(log_dir: Path, relative_path: str) -> str | None:
     return f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"
 
 
+def _first_log_file(
+    log_dir: Path, directory: str, names: tuple[str, ...]
+) -> tuple[str | None, Path | None]:
+    for name in names:
+        relative_path = f"{directory}/{name}"
+        data = _log_file_data(log_dir, relative_path)
+        if data:
+            return data, log_dir / relative_path
+    return None, None
+
+
+def _calibration_matrix(log_dir: Path, directory: str) -> list[float] | None:
+    calibration_dir = log_dir / directory
+    if not calibration_dir.is_dir():
+        return None
+    for path in sorted(calibration_dir.glob("*.json")):
+        if path.name == "input.json":
+            continue
+        document = _read_json_file(path)
+        cam_k = document.get("cam_K") if isinstance(document, dict) else None
+        if (
+            isinstance(cam_k, list)
+            and len(cam_k) == 9
+            and all(
+                isinstance(value, (int, float)) and math.isfinite(value)
+                for value in cam_k
+            )
+        ):
+            return [float(value) for value in cam_k]
+    return None
+
+
+def _project_pose_axes(
+    pose: object, cam_k: object, axis_length_mm: float = 100.0
+) -> dict[str, object] | None:
+    """Project a camera-frame mm/rad ZYX pose into image pixel coordinates."""
+
+    if (
+        not isinstance(pose, list)
+        or len(pose) != 6
+        or not all(
+            isinstance(value, (int, float)) and math.isfinite(value)
+            for value in pose
+        )
+        or not isinstance(cam_k, list)
+        or len(cam_k) != 9
+        or not all(
+            isinstance(value, (int, float)) and math.isfinite(value)
+            for value in cam_k
+        )
+        or not math.isfinite(axis_length_mm)
+        or axis_length_mm <= 0
+    ):
+        return None
+
+    x, y, z, rx, ry, rz = (float(value) for value in pose)
+    sx, cx = math.sin(rx), math.cos(rx)
+    sy, cy = math.sin(ry), math.cos(ry)
+    sz, cz = math.sin(rz), math.cos(rz)
+    rotation = (
+        (cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx),
+        (sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx),
+        (-sy, cy * sx, cy * cx),
+    )
+    fx, fy, principal_x, principal_y = (
+        float(cam_k[0]),
+        float(cam_k[4]),
+        float(cam_k[2]),
+        float(cam_k[5]),
+    )
+
+    def project(point: tuple[float, float, float]) -> list[float] | None:
+        point_x, point_y, point_z = point
+        if point_z <= 0:
+            return None
+        pixel = [
+            fx * point_x / point_z + principal_x,
+            fy * point_y / point_z + principal_y,
+        ]
+        return pixel if all(math.isfinite(value) for value in pixel) else None
+
+    origin = project((x, y, z))
+    if origin is None:
+        return None
+    axes: dict[str, object] = {"origin": origin, "axis_length_mm": axis_length_mm}
+    for index, name in enumerate(("x", "y", "z")):
+        endpoint = project(
+            (
+                x + axis_length_mm * rotation[0][index],
+                y + axis_length_mm * rotation[1][index],
+                z + axis_length_mm * rotation[2][index],
+            )
+        )
+        if endpoint is not None:
+            axes[name] = endpoint
+    return axes if len(axes) > 2 else None
+
+
+def _visual_revision(log_dir: Path, paths: list[Path | None]) -> str:
+    parts = [log_dir.name]
+    for path in paths:
+        if path is None:
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        parts.append(f"{path.relative_to(log_dir)}:{stat.st_mtime_ns}:{stat.st_size}")
+    return "|".join(parts)
+
+
 def _operation_visual(log_dir: Path | None) -> dict[str, object]:
     """Collect the images and pose fields written by the pick/place service."""
 
     result: dict[str, object] = {
         "available": False,
+        "visual_revision": None,
         "image_data": None,
         "mask_data": None,
         "bbox": None,
-        "bbox_coordinate_space": 1000,
+        "bbox_coordinate_width": None,
+        "bbox_coordinate_height": None,
         "pose": None,
+        "pose_axes": None,
         "pose_unit": None,
         "frame": None,
         "rotation_order": None,
@@ -387,9 +519,24 @@ def _operation_visual(log_dir: Path | None) -> dict[str, object]:
     if log_dir is None:
         return result
 
+    locate = _locate_response(log_dir)
+    locate_kind = locate[0] if locate else None
+    locate_body = locate[1] if locate else {}
+    locate_response_path = locate[2] if locate else None
+    is_place = locate_kind == "place"
+    if isinstance(locate_body.get("bbox"), list) and len(locate_body["bbox"]) == 4:
+        result["bbox"] = locate_body["bbox"]
+    if locate_kind == "pick":
+        result["bbox_coordinate_width"] = 1000
+        result["bbox_coordinate_height"] = 1000
+
     events_path = log_dir / "events.jsonl"
     try:
-        lines = events_path.read_text(encoding="utf-8").splitlines() if events_path.is_file() else []
+        lines = (
+            events_path.read_text(encoding="utf-8").splitlines()
+            if events_path.is_file()
+            else []
+        )
     except OSError:
         lines = []
     for line in lines:
@@ -399,9 +546,19 @@ def _operation_visual(log_dir: Path | None) -> dict[str, object]:
             continue
         if not isinstance(event, dict):
             continue
-        if isinstance(event.get("bbox"), list) and len(event["bbox"]) == 4:
+        if (
+            result["bbox"] is None
+            and isinstance(event.get("bbox"), list)
+            and len(event["bbox"]) == 4
+        ):
             result["bbox"] = event["bbox"]
-        if isinstance(event.get("pose"), list) and len(event["pose"]) == 6:
+        if (
+            is_place
+            and isinstance(event.get("current_pose"), list)
+            and len(event["current_pose"]) == 6
+        ):
+            result["pose"] = event["current_pose"]
+        elif not is_place and isinstance(event.get("pose"), list) and len(event["pose"]) == 6:
             result["pose"] = event["pose"]
 
     response_path = log_dir / "interfaces" / "manipulation_pick_pose" / "response.json"
@@ -417,41 +574,60 @@ def _operation_visual(log_dir: Path | None) -> dict[str, object]:
         for key in ("pose_unit", "frame", "rotation_order", "corners_mm"):
             if response.get(key) is not None:
                 result[key] = response[key]
-        if result["pose"] is None and isinstance(response.get("pose"), list) and len(response["pose"]) == 6:
+        if (
+            not is_place
+            and result["pose"] is None
+            and isinstance(response.get("pose"), list)
+            and len(response["pose"]) == 6
+        ):
             result["pose"] = response["pose"]
 
+    image_names = ("rgb.jpg", "rgb.jpeg", "rgb.png", "rgb.webp")
+    mask_names = ("mask.png", "mask.jpg", "mask.jpeg", "mask.pgm")
     image_data = None
-    for name in ("rgb.jpg", "rgb.jpeg", "rgb.png", "rgb.webp"):
-        image_data = _log_file_data(log_dir, f"camera/{name}")
-        if image_data:
-            break
+    image_path: Path | None = None
     mask_data = None
-    for name in ("mask.png", "mask.jpg", "mask.jpeg", "mask.pgm"):
-        mask_data = _log_file_data(log_dir, f"camera/{name}")
-        if mask_data:
-            break
+    calibration_dir: str | None = None
+    pose_is_aligned = False
 
-    # If capture did not finish, expose the RGB returned by the locate service.
+    if result["pose"] is not None:
+        visual_dir = "current" if is_place else "camera"
+        image_data, image_path = _first_log_file(log_dir, visual_dir, image_names)
+        if image_data is not None:
+            calibration_dir = visual_dir
+            pose_is_aligned = True
+            if is_place:
+                result["bbox"] = None
+            else:
+                mask_data, _ = _first_log_file(log_dir, "camera", mask_names)
+
     if image_data is None:
-        locate_response_path = log_dir / "interfaces" / "perception_pick_locate" / "response.json"
-        if not locate_response_path.is_file():
-            locate_response_path = log_dir / "interfaces" / "perception_place_locate" / "response.json"
-        try:
-            locate_response = json.loads(locate_response_path.read_text(encoding="utf-8"))
-            locate_body = locate_response.get("body", locate_response) if isinstance(locate_response, dict) else {}
-            image_path = locate_body.get("image_path") if isinstance(locate_body, dict) else None
-            if isinstance(image_path, str):
-                image_data = _local_image_data(image_path)
-            locate_mask = locate_body.get("mask") if isinstance(locate_body, dict) else None
-            if isinstance(locate_mask, str) and locate_mask:
-                mask_data = locate_mask if locate_mask.startswith("data:") else f"data:image/png;base64,{locate_mask}"
-            if result["bbox"] is None and isinstance(locate_body, dict) and isinstance(locate_body.get("bbox"), list):
-                result["bbox"] = locate_body["bbox"]
-        except (OSError, json.JSONDecodeError):
-            pass
+        locate_image_path = locate_body.get("image_path")
+        if isinstance(locate_image_path, str):
+            image_data = _local_image_data(locate_image_path)
+        fallback_dir = "reference" if is_place else "camera"
+        if image_data is None:
+            image_data, image_path = _first_log_file(log_dir, fallback_dir, image_names)
+        locate_mask = locate_body.get("mask")
+        if isinstance(locate_mask, str) and locate_mask:
+            mask_data = locate_mask if locate_mask.startswith("data:") else f"data:image/png;base64,{locate_mask}"
+        if mask_data is None:
+            mask_data, _ = _first_log_file(log_dir, fallback_dir, mask_names)
+
+    if pose_is_aligned and calibration_dir is not None:
+        cam_k = _calibration_matrix(log_dir, calibration_dir)
+        result["pose_axes"] = _project_pose_axes(result["pose"], cam_k)
+
     result["image_data"] = image_data
     result["mask_data"] = mask_data
-    result["available"] = image_data is not None or mask_data is not None or result["bbox"] is not None or result["pose"] is not None
+    result["available"] = any(
+        value is not None
+        for value in (image_data, mask_data, result["bbox"], result["pose"])
+    )
+    result["visual_revision"] = _visual_revision(
+        log_dir,
+        [locate_response_path, response_path, events_path, image_path],
+    )
     return result
 
 
@@ -481,25 +657,33 @@ def _interface_events(log_dir: Path | None, emitted: set[str]) -> list[dict[str,
         return []
     for interface_dir in interface_dirs:
         name = interface_dir.name
-        if name in emitted:
+        event_key = f"{log_dir.name}/{name}"
+        if event_key in emitted:
             continue
         request = _read_json_file(interface_dir / "request.json")
-        response = _read_json_file(interface_dir / "response.json")
+        response_path = interface_dir / "response.json"
+        response = _read_json_file(response_path)
         if request is None and response is None:
             continue
         if response is None:
             continue
         status_code = response.get("status_code") if isinstance(response, dict) else None
         status = "succeeded" if isinstance(status_code, int) and status_code < 400 else "failed"
+        try:
+            timestamp = datetime.fromtimestamp(response_path.stat().st_mtime).isoformat(
+                timespec="milliseconds"
+            )
+        except OSError:
+            timestamp = datetime.now().isoformat(timespec="milliseconds")
         events.append({
-            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "timestamp": timestamp,
             "event": "接口调用",
             "status": status,
             "interface": name,
             "request": request,
             "response": response,
         })
-        emitted.add(name)
+        emitted.add(event_key)
     return events
 
 
@@ -540,7 +724,14 @@ async def _finish_unified_task(
             "body": body,
         }
     except asyncio.CancelledError:
-        raise
+        task_state.result = {
+            "status_code": 499,
+            "ok": False,
+            "body": {
+                "error_code": "TASK_TERMINATED",
+                "message": "任务已由用户终止",
+            },
+        }
     except Exception as exc:
         content: dict[str, object] = {
             "error_code": getattr(exc, "code", "TASK_EXECUTION_ERROR"),
@@ -790,30 +981,35 @@ async def start_pick(request: PickRequest) -> dict[str, str]:
 
 
 async def _event_stream(state: PickTask):
-    offset = 0
+    offsets: dict[Path, int] = {}
     emitted_interfaces: set[str] = set()
     sent_result = False
     deadline = time.monotonic() + DEFAULT_TIMEOUT + 30
     while time.monotonic() < deadline:
-        log_dir = _find_log_dir(state.operation_key)
-        events_file = log_dir / "events.jsonl" if log_dir else None
-        if events_file and events_file.exists():
-            try:
-                with events_file.open("r", encoding="utf-8") as source:
-                    source.seek(offset)
-                    while True:
-                        line = source.readline()
-                        if not line:
-                            break
-                        offset = source.tell()
-                        try:
-                            yield _sse("flow", json.loads(line))
-                        except json.JSONDecodeError:
-                            continue
-            except OSError:
-                pass
-        for interface_event in _interface_events(log_dir, emitted_interfaces):
-            yield _sse("flow", interface_event)
+        pending_events: list[dict[str, object]] = []
+        for log_dir in _event_log_dirs(state):
+            events_file = log_dir / "events.jsonl"
+            if events_file.exists():
+                try:
+                    with events_file.open("r", encoding="utf-8") as source:
+                        source.seek(offsets.get(events_file, 0))
+                        while True:
+                            line = source.readline()
+                            if not line:
+                                break
+                            offsets[events_file] = source.tell()
+                            try:
+                                event = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            if isinstance(event, dict):
+                                pending_events.append(event)
+                except OSError:
+                    pass
+            pending_events.extend(_interface_events(log_dir, emitted_interfaces))
+        pending_events.sort(key=lambda event: str(event.get("timestamp", "")))
+        for event in pending_events:
+            yield _sse("flow", event)
         if state.finished and not sent_result:
             sent_result = True
             yield _sse("result", state.result or {"ok": False, "body": {"message": "任务无结果"}})
@@ -893,6 +1089,7 @@ async def start_unified_task(
         task_id=run_id,
         operation_key=operation_key,
         workflow=f"task{task_id}",
+        execution_task=execution,
     )
     state.task = asyncio.create_task(_finish_unified_task(state, execution))
     TASKS[run_id] = state
@@ -902,6 +1099,46 @@ async def start_unified_task(
         "operation_key": operation_key,
         "events_url": f"/api/task-runs/{run_id}/events",
         "visual_url": f"/api/task-runs/{run_id}/visual",
+    }
+
+
+@app.post("/api/task-runs/{run_id}/terminate")
+async def terminate_unified_task(run_id: str) -> dict[str, object]:
+    state = TASKS.get(run_id)
+    if state is None or not state.workflow.startswith("task"):
+        raise HTTPException(status_code=404, detail="统一任务不存在或已过期")
+    if state.finished:
+        return {
+            "status": "ALREADY_FINISHED",
+            "run_id": run_id,
+            "result": state.result,
+        }
+    if state.task is None:
+        raise HTTPException(status_code=409, detail="任务尚未建立执行句柄")
+
+    if state.execution_task is not None and not state.execution_task.done():
+        state.execution_task.cancel()
+    else:
+        state.task.cancel()
+    try:
+        await state.task
+    except asyncio.CancelledError:
+        # Keep the endpoint idempotent even if a custom execution wrapper
+        # propagates cancellation instead of converting it to a result.
+        if state.result is None:
+            state.result = {
+                "status_code": 499,
+                "ok": False,
+                "body": {
+                    "error_code": "TASK_TERMINATED",
+                    "message": "任务已由用户终止",
+                },
+            }
+        state.finished = True
+    return {
+        "status": "TERMINATED",
+        "run_id": run_id,
+        "result": state.result,
     }
 
 
@@ -921,7 +1158,7 @@ async def unified_task_visual(run_id: str) -> dict[str, object]:
     task_id = state.workflow.removeprefix("task")
     log_dir = _find_log_dir(state.operation_key)
     if task_id in {"1", "2", "3"}:
-        log_dir = _find_task_pick_log_dir(state.operation_key, task_id) or log_dir
+        log_dir = _find_task_visual_log_dir(state.operation_key, task_id) or log_dir
     return _operation_visual(log_dir)
 
 

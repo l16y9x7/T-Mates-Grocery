@@ -44,6 +44,8 @@ def create_app(
             content["failed_interface"] = exc.failed_interface
         if exc.url:
             content["url"] = exc.url
+        if exc.pose is not None:
+            content["pose"] = exc.pose
         return JSONResponse(
             status_code=exc.status_code,
             content=content,
@@ -63,6 +65,15 @@ def create_app(
             "status": "BUSY" if active_operations else "READY",
             "active_operations": active_operations,
         }
+
+    @app.get("/operations/result", response_model=None)
+    async def operation_result(
+        idempotency_key: str,
+    ) -> StatusResponse | JSONResponse:
+        result = await cache.result(idempotency_key)
+        if result is None:
+            return JSONResponse(status_code=202, content={"status": "RUNNING"})
+        return result
 
     async def run_operation(
         request: PickPlaceRequest,

@@ -77,6 +77,21 @@ def _runtime_copy(tmp_path: Path) -> Path:
     return config_path
 
 
+def test_restart_preflight_does_not_require_running_pid_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    for name in ("restart-runtime.sh", "tasks.sh", "pick-place.sh"):
+        script = scripts_dir / name
+        script.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        script.chmod(0o755)
+
+    monkeypatch.setattr(web_app, "PROJECT_ROOT", tmp_path)
+
+    assert web_app._restart_preflight() == (True, None)
+
+
 def test_robot_ip_update_is_validated_and_written_atomically(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

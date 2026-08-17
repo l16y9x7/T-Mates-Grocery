@@ -14,7 +14,7 @@ from task2_service.models import (
     CameraListResponse,
     Hand,
     HealthResponse,
-    InspectionResponse,
+    ShortageProductFinding,
     Task2ServiceError,
     Task2Settings,
     TaskType,
@@ -28,6 +28,21 @@ HEALTH_PATHS = {
     "pick_place": "/health",
     "camera": "/camera/health",
 }
+ACTION_RECONCILIATION_SECONDS = 15.0
+ACTION_RECONCILIATION_INTERVAL_SECONDS = 0.5
+
+
+def _execution_pose(value: object) -> list[float] | None:
+    if (
+        not isinstance(value, list)
+        or len(value) != 6
+        or any(
+            not isinstance(item, (int, float)) or isinstance(item, bool)
+            for item in value
+        )
+    ):
+        return None
+    return [float(item) for item in value]
 
 
 class Task2Client:
@@ -74,19 +89,31 @@ class Task2Client:
         return True
 
     async def navigate(self, target_id: str, idempotency_key: str) -> None:
-        await self._physical_action(
-            "navigation",
-            "/navigation/navigate",
-            {"target_id": target_id},
-            idempotency_key,
-            self.settings.timeouts.navigation_seconds,
-        )
+        for attempt in (1, 2):
+            key = idempotency_key if attempt == 1 else f"{idempotency_key}:retry"
+            try:
+                await self._physical_action(
+                    "navigation",
+                    "/navigation/navigate",
+                    {"target_id": target_id},
+                    key,
+                    self.settings.timeouts.navigation_seconds,
+                )
+            except Task2ServiceError as exc:
+                if attempt == 2 or exc.code in {
+                    "ACTION_RESULT_UNKNOWN",
+                    "NETWORK_ERROR",
+                    "INVALID_RESPONSE",
+                }:
+                    raise
+                continue
+            return
 
-    async def nudge_back(self, idempotency_key: str) -> None:
+    async def nudge(self, direction: str, idempotency_key: str) -> None:
         await self._physical_action(
             "navigation",
             "/navigation/nudge",
-            {"action": "approach", "direction": "back"},
+            {"action": "approach", "direction": direction},
             idempotency_key,
             self.settings.timeouts.navigation_seconds,
         )
@@ -101,10 +128,32 @@ class Task2Client:
         )
 
     async def prepare_pose(self, pose_type: str, idempotency_key: str) -> None:
+        for attempt in (1, 2):
+            key = idempotency_key if attempt == 1 else f"{idempotency_key}:retry"
+            try:
+                await self._physical_action(
+                    "pose",
+                    "/pose/prepare",
+                    {"pose_type": pose_type},
+                    key,
+                    self.settings.timeouts.pose_seconds,
+                )
+            except Task2ServiceError as exc:
+                if attempt == 2 or exc.code in {
+                    "ACTION_RESULT_UNKNOWN",
+                    "NETWORK_ERROR",
+                    "INVALID_RESPONSE",
+                }:
+                    raise
+                continue
+            return
+
+    async def open_gripper(self, hand: Hand, idempotency_key: str) -> None:
+        """Release a held item at the replenishment table."""
         await self._physical_action(
             "pose",
-            "/pose/prepare",
-            {"pose_type": pose_type},
+            "/manipulation/gripper/open",
+            {"hand": hand.value},
             idempotency_key,
             self.settings.timeouts.pose_seconds,
         )
@@ -114,40 +163,45 @@ class Task2Client:
         location_id: str,
         pose_type: str,
     ) -> list[str]:
-        response = await self._request(
-            "perception",
-            "POST",
-            "/perception/inspect",
-            json={
-                "task_type": TaskType.SHORTAGE.value,
-                "location_id": location_id,
-                "pose_type": pose_type,
-            },
-            timeout_seconds=self.settings.timeouts.inspection_seconds,
-        )
-        try:
-            result = InspectionResponse.model_validate(response.json())
-        except (ValueError, ValidationError) as exc:
-            raise Task2ServiceError(
-                "INVALID_RESPONSE", "inspection response must contain findings"
-            ) from exc
-        names: list[str] = []
-        for finding in result.findings:
-            name = finding.shortage_product_name.strip()
-            if not name:
-                raise Task2ServiceError(
-                    "INVALID_FINDINGS",
-                    "inspection findings must contain non-empty product names",
-                    status_code=422,
+        last_error: Task2ServiceError | None = None
+        for attempt in (1, 2):
+            try:
+                response = await self._request(
+                    "perception",
+                    "POST",
+                    "/perception/inspect",
+                    json={
+                        "task_type": TaskType.SHORTAGE.value,
+                        "location_id": location_id,
+                        "pose_type": pose_type,
+                    },
+                    timeout_seconds=self.settings.timeouts.inspection_seconds,
                 )
-            names.append(name)
-        if len(names) > 2:
-            raise Task2ServiceError(
-                "INVALID_FINDINGS",
-                "inspection response contains more than two products",
-                status_code=422,
-            )
-        return names
+                try:
+                    raw = response.json()
+                    raw_findings = raw["findings"]
+                    if not isinstance(raw_findings, list):
+                        raise TypeError("findings must be a list")
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise Task2ServiceError(
+                        "INVALID_RESPONSE", "inspection response must contain findings"
+                    ) from exc
+                names: list[str] = []
+                for raw_finding in raw_findings:
+                    try:
+                        finding = ShortageProductFinding.model_validate(raw_finding)
+                    except ValidationError:
+                        continue
+                    name = finding.shortage_product_name.strip()
+                    if name:
+                        names.append(name)
+                return names
+            except Task2ServiceError as exc:
+                last_error = exc
+                if attempt == 2 or exc.code == "NETWORK_ERROR":
+                    raise
+        assert last_error is not None
+        raise last_error
 
     async def pick(self, product_name: str, hand: Hand, idempotency_key: str) -> None:
         await self._physical_action(
@@ -162,7 +216,14 @@ class Task2Client:
             self.settings.timeouts.pick_seconds,
         )
 
-    async def place(self, product_name: str, hand: Hand, idempotency_key: str) -> None:
+    async def place(
+        self,
+        product_name: str,
+        hand: Hand,
+        location_id: str,
+        pose_type: str,
+        idempotency_key: str,
+    ) -> None:
         await self._physical_action(
             "pick_place",
             "/place",
@@ -170,6 +231,8 @@ class Task2Client:
                 "task_type": TaskType.SHORTAGE.value,
                 "product_name": product_name,
                 "hand": hand.value,
+                "location_id": location_id,
+                "pose_type": pose_type,
             },
             idempotency_key,
             self.settings.timeouts.place_seconds,
@@ -215,21 +278,72 @@ class Task2Client:
         idempotency_key: str,
         timeout_seconds: float,
     ) -> None:
-        response = await self._request(
-            service,
-            "POST",
-            path,
-            json=payload,
-            headers={"Idempotency-Key": idempotency_key},
-            timeout_seconds=timeout_seconds,
-            result_unknown_on_exhaustion=True,
-        )
         try:
+            response = await self._request(
+                service,
+                "POST",
+                path,
+                json=payload,
+                headers={"Idempotency-Key": idempotency_key},
+                timeout_seconds=timeout_seconds,
+                result_unknown_on_exhaustion=True,
+            )
             ActionResponse.model_validate(response.json())
         except (ValueError, ValidationError) as exc:
-            raise Task2ServiceError(
+            error = Task2ServiceError(
                 "INVALID_RESPONSE", f"invalid action response from {service}"
-            ) from exc
+            )
+            if service == "pick_place":
+                await self._reconcile_pick_place_action(idempotency_key, error)
+                return
+            raise error from exc
+        except Task2ServiceError as exc:
+            if service == "pick_place" and exc.code == "ACTION_RESULT_UNKNOWN":
+                await self._reconcile_pick_place_action(idempotency_key, exc)
+                return
+            raise
+
+    async def _reconcile_pick_place_action(
+        self, idempotency_key: str, original_error: Task2ServiceError
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + ACTION_RECONCILIATION_SECONDS
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise original_error
+            try:
+                response = await self._request(
+                    "pick_place",
+                    "GET",
+                    "/operations/result",
+                    params={"idempotency_key": idempotency_key},
+                    timeout_seconds=min(1.0, remaining),
+                )
+            except Task2ServiceError as query_error:
+                if query_error.code in {
+                    "OPERATION_NOT_FOUND",
+                    "UNKNOWN_ENDPOINT",
+                    "NETWORK_ERROR",
+                    "INVALID_RESPONSE",
+                }:
+                    raise original_error from query_error
+                raise
+            if response.status_code == 200:
+                try:
+                    ActionResponse.model_validate(response.json())
+                except (ValueError, ValidationError) as exc:
+                    raise original_error from exc
+                return
+            try:
+                status = response.json().get("status")
+            except (AttributeError, ValueError):
+                raise original_error
+            if response.status_code != 202 or status != "RUNNING":
+                raise original_error
+            await asyncio.sleep(
+                min(ACTION_RECONCILIATION_INTERVAL_SECONDS, max(0.0, remaining))
+            )
 
     async def _request(
         self,
@@ -244,15 +358,18 @@ class Task2Client:
         result_unknown_on_exhaustion: bool = False,
     ) -> httpx.Response:
         url = f"{getattr(self.settings.services, service).rstrip('/')}{path}"
-        timeout = httpx.Timeout(
-            connect=self.settings.timeouts.connect_seconds,
-            read=timeout_seconds,
-            write=max(10.0, min(timeout_seconds, 60.0)),
-            pool=5.0,
-        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
         for attempt in range(2):
+            remaining = max(0.001, deadline - loop.time())
+            timeout = httpx.Timeout(
+                connect=min(self.settings.timeouts.connect_seconds, remaining),
+                read=remaining,
+                write=min(max(10.0, min(timeout_seconds, 60.0)), remaining),
+                pool=min(5.0, remaining),
+            )
             try:
-                async with asyncio.timeout(timeout_seconds):
+                async with asyncio.timeout(remaining):
                     response = await self._client.request(
                         method,
                         url,
@@ -273,8 +390,9 @@ class Task2Client:
                     error=str(exc),
                     attempt=attempt + 1,
                 )
-                if attempt == 0:
-                    await asyncio.sleep(0.05)
+                retry_remaining = deadline - loop.time()
+                if attempt == 0 and retry_remaining > 0:
+                    await asyncio.sleep(min(0.05, retry_remaining))
                     continue
                 code = "ACTION_RESULT_UNKNOWN" if result_unknown_on_exhaustion else "NETWORK_ERROR"
                 raise Task2ServiceError(
@@ -290,6 +408,9 @@ class Task2Client:
                     pass
                 code = payload.get("error_code", "EXECUTION_FAILED")
                 detail = payload.get("message") or payload.get("detail")
+                failed_interface = payload.get("failed_interface")
+                failed_url = payload.get("url")
+                failed_pose = _execution_pose(payload.get("pose"))
                 message = f"{service} returned HTTP {response.status_code}"
                 if detail:
                     message = f"{message}: {detail}"
@@ -305,7 +426,13 @@ class Task2Client:
                     attempt=attempt + 1,
                 )
                 raise Task2ServiceError(
-                    code if isinstance(code, str) else "EXECUTION_FAILED", message
+                    code if isinstance(code, str) else "EXECUTION_FAILED",
+                    message,
+                    failed_interface=(
+                        failed_interface if isinstance(failed_interface, str) else None
+                    ),
+                    url=failed_url if isinstance(failed_url, str) else None,
+                    pose=failed_pose,
                 )
             self._trace(
                 service=service,

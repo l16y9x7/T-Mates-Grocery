@@ -138,16 +138,6 @@ class Task2Settings(BaseModel):
             )
         return self
 
-    def location_id_for_target(self, target_id: str) -> str:
-        locations = sorted(
-            slot_id
-            for slot_id, option in self.product_hand_options.items()
-            if option.target_id == target_id
-        )
-        if not locations:
-            raise ValueError(f"inspection target has no product location: {target_id}")
-        return locations[0]
-
     @classmethod
     def load(cls, path: str | Path) -> "Task2Settings":
         config_path = Path(path)
@@ -253,9 +243,15 @@ class Task2ServiceError(Exception):
         *,
         status_code: int = 502,
         step: str | None = None,
+        failed_interface: str | None = None,
+        url: str | None = None,
+        pose: list[float] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
         self.step = step
+        self.failed_interface = failed_interface
+        self.url = url
+        self.pose = pose

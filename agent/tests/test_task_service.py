@@ -206,6 +206,42 @@ async def test_web_and_direct_api_share_the_global_lock() -> None:
 
 
 @pytest.mark.asyncio
+async def test_web_terminates_task_and_releases_global_lock() -> None:
+    blocking = FakeOrchestrator("0", blocking=True)
+    bindings = orchestrators(**{"0": blocking})
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app_for(bindings)),
+        base_url="http://tasks.local",
+    ) as client:
+        started = await client.post("/api/tasks/0/start", json={})
+        run_id = started.json()["run_id"]
+
+        terminated = await client.post(f"/api/task-runs/{run_id}/terminate")
+        events = await client.get(started.json()["events_url"])
+        repeated = await client.post(f"/api/task-runs/{run_id}/terminate")
+        next_task = await client.post("/tasks/1/run", json={})
+
+    assert terminated.status_code == 200
+    assert terminated.json()["status"] == "TERMINATED"
+    assert terminated.json()["result"]["body"]["error_code"] == "TASK_TERMINATED"
+    assert '"error_code": "TASK_TERMINATED"' in events.text
+    assert repeated.status_code == 200
+    assert repeated.json()["status"] == "ALREADY_FINISHED"
+    assert next_task.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_web_terminate_rejects_unknown_run() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app_for()),
+        base_url="http://tasks.local",
+    ) as client:
+        response = await client.post("/api/task-runs/missing/terminate")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_domain_error_keeps_failed_step() -> None:
     bindings = orchestrators(**{"1": FailingTask1("1")})
     async with httpx.AsyncClient(
@@ -253,10 +289,12 @@ async def test_web_uses_one_task_panel_and_common_sse_routes() -> None:
     assert 'data-operation-mode="pick"' in page.text
     assert 'data-operation-mode="place"' in page.text
     assert 'id="robotIpForm"' in page.text
+    assert 'id="taskTerminateButton"' in page.text
     assert "elapsedTimers.task.start()" in script
     assert "elapsedTimers.pick.start()" in script
     assert "elapsedTimers.place.start()" in script
     assert "setOperationMode(button.dataset.operationMode)" in script
+    assert "/api/task-runs/${runId}/terminate" in script
     assert page.headers["cache-control"] == "no-store"
     assert started.status_code == 200
     assert started.json()["task_id"] == "3"

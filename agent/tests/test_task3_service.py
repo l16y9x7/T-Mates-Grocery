@@ -21,6 +21,7 @@ from task3_service.models import (
     Task3Timeouts,
 )
 from task3_service.service import Task3Orchestrator
+from manipulation_policy import SPECIAL_SHELF_NUDGE_PRODUCT
 from task_service.settings import TaskServiceSettings
 
 
@@ -38,6 +39,13 @@ class Task3Mock:
         self.pick_timeout_once = False
         self.place_attempts = 0
         self.place_failure_limit = 0
+        self.place_failure_payload: dict[str, object] = {
+            "error_code": "EXECUTION_FAILED",
+            "message": "place failed",
+            "failed_interface": "manipulation_release",
+            "url": "http://robot:8084/manipulation/release",
+            "pose": [1, 2, 3, 4, 5, 6],
+        }
         self.skus = {
             "错误商品": {
                 "sku_id": "SKU-A",
@@ -99,7 +107,7 @@ class Task3Mock:
             if self.place_attempts <= self.place_failure_limit:
                 return httpx.Response(
                     502,
-                    json={"error_code": "EXECUTION_FAILED", "message": "place failed"},
+                    json=self.place_failure_payload,
                 )
             return httpx.Response(200, json={"status": "SUCCEEDED", "executed": True})
         if path == "/navigation/nudge":
@@ -219,7 +227,7 @@ async def test_task3_uses_real_inspection_contract_and_swaps_products(tmp_path: 
     inspect_payload = payload(inspect_request)
     assert inspect_payload == {
         "task_type": "MISPLACED",
-        "location_id": "H1_F_L1_C01",
+        "location_id": "H1_F_L_INSPECT",
         "pose_type": "SHELF_VIEW_UPPER",
     }
     assert not requests_for(mock, "/camera/snapshot")
@@ -239,6 +247,22 @@ async def test_task3_uses_real_inspection_contract_and_swaps_products(tmp_path: 
         "L1",
     ]
     assert all("level" not in payload(request) for request in requests_for(mock, "/place"))
+    assert [
+        {
+            "location_id": payload(request)["location_id"],
+            "pose_type": payload(request)["pose_type"],
+        }
+        for request in requests_for(mock, "/place")
+    ] == [
+        {
+            "location_id": "H1_F_R_INSPECT",
+            "pose_type": "SHELF_VIEW_UPPER",
+        },
+        {
+            "location_id": "H1_F_L_INSPECT",
+            "pose_type": "SHELF_VIEW_UPPER",
+        },
+    ]
     navigation_targets = [payload(request)["target_id"] for request in requests_for(mock, "/navigation/navigate")]
     assert navigation_targets == [
         "H1_F_L_INSPECT",
@@ -246,6 +270,55 @@ async def test_task3_uses_real_inspection_contract_and_swaps_products(tmp_path: 
         "H1_F_L_INSPECT",
         "task_boundary",
     ]
+
+
+@pytest.mark.asyncio
+async def test_task3_special_product_nudges_for_pick_but_not_shelf_place(
+    tmp_path: Path,
+) -> None:
+    mock = Task3Mock(
+        [
+            [
+                {
+                    "misplaced_product_name": "错误商品",
+                    "gt_product_name": SPECIAL_SHELF_NUDGE_PRODUCT,
+                }
+            ]
+        ]
+    )
+    mock.skus[SPECIAL_SHELF_NUDGE_PRODUCT] = mock.skus.pop("应放商品")
+    mock.skus[SPECIAL_SHELF_NUDGE_PRODUCT][
+        "name"
+    ] = SPECIAL_SHELF_NUDGE_PRODUCT
+    task_settings = settings(tmp_path)
+    task_settings.product_hand_options[
+        "H1_F_L2_C02"
+    ].product_name = SPECIAL_SHELF_NUDGE_PRODUCT
+    client = Task3Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task3Orchestrator(task_settings, client).run(Task3Request())
+
+    assert result.status == "SUCCEEDED"
+    nudge_requests = requests_for(mock, "/navigation/nudge")
+    assert [payload(request) for request in nudge_requests] == [
+        {"action": "approach", "direction": "left"},
+        {"action": "return"},
+    ]
+    special_actions = [
+        request
+        for request in mock.requests
+        if request.url.path in {"/pick", "/place"}
+        and payload(request)["product_name"] == SPECIAL_SHELF_NUDGE_PRODUCT
+    ]
+    assert [payload(request)["hand"] for request in special_actions] == [
+        "RIGHT",
+        "RIGHT",
+    ]
+    special_pick, special_place = special_actions
+    assert mock.requests.index(nudge_requests[0]) < mock.requests.index(special_pick)
+    assert mock.requests.index(special_pick) < mock.requests.index(nudge_requests[1])
+    assert mock.requests.index(nudge_requests[1]) < mock.requests.index(special_place)
 
 
 @pytest.mark.asyncio
@@ -322,11 +395,11 @@ async def test_task3_retries_pick_with_the_same_idempotency_key(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_task3_continues_other_place_after_retry_failure_and_returns_start(
+async def test_task3_continues_other_place_without_nudge_or_retry_and_returns_start(
     tmp_path: Path,
 ) -> None:
     mock = Task3Mock([finding()])
-    mock.place_failure_limit = 2
+    mock.place_failure_limit = 1
     task_settings = settings(tmp_path)
     client = Task3Client(task_settings, transport=mock.transport)
     async with client:
@@ -340,23 +413,41 @@ async def test_task3_continues_other_place_after_retry_failure_and_returns_start
     places = requests_for(mock, "/place")
     assert [payload(request)["product_name"] for request in places] == [
         "错误商品",
-        "错误商品",
         "应放商品",
     ]
-    assert [request.headers["Idempotency-Key"] for request in places[:2]] == [
+    assert [request.headers["Idempotency-Key"] for request in places] == [
         "task3-recovery:task3.place.0.place",
-        "task3-recovery:task3.place.0.place:recovery.retry",
+        "task3-recovery:task3.place.1.place",
     ]
-    assert [payload(request) for request in requests_for(mock, "/navigation/nudge")] == [
-        {"action": "approach", "direction": "back"},
-        {"action": "return"},
-    ]
+    assert not requests_for(mock, "/navigation/nudge")
     navigation_targets = [
         payload(request)["target_id"]
         for request in requests_for(mock, "/navigation/navigate")
     ]
     assert navigation_targets[-1] == "start"
     assert "task_boundary" not in navigation_targets
+
+
+@pytest.mark.asyncio
+async def test_task3_does_not_retry_unknown_release_result(tmp_path: Path) -> None:
+    mock = Task3Mock([finding()])
+    mock.place_failure_limit = 1
+    mock.place_failure_payload = {
+        "error_code": "ACTION_RESULT_UNKNOWN",
+        "message": "release result is unknown",
+        "failed_interface": "manipulation_release",
+        "pose": [1, 2, 3, 4, 5, 6],
+    }
+    task_settings = settings(tmp_path)
+    client = Task3Client(task_settings, transport=mock.transport)
+
+    async with client:
+        with pytest.raises(Task3ServiceError) as error:
+            await Task3Orchestrator(task_settings, client).run(Task3Request())
+
+    assert error.value.code == "TASK_ACTIONS_FAILED"
+    assert len(requests_for(mock, "/place")) == 2
+    assert not requests_for(mock, "/navigation/nudge")
 
 
 def test_task3_production_config_uses_task0_baselines_and_port_inputs() -> None:

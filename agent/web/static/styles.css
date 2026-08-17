@@ -77,6 +77,10 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 .submit-button:hover { background: #e8fb89; }
 .submit-button:disabled { cursor: wait; opacity: .6; }
 .button-icon { font-size: 22px; line-height: 12px; }
+.task-action-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; margin-top: auto; }
+.task-action-row .submit-button { margin-top: 0; }
+.task-terminate-button { min-height: 48px; padding: 0 16px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.task-terminate-button:disabled { cursor: wait; opacity: .6; }
 .error-message { color: var(--red); font-size: 12px; line-height: 1.5; margin: 0; }
 .task-meta { border-top: 1px solid var(--line); padding-top: 14px; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .task-meta span, .result-card span { color: #79928a; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
@@ -189,5 +193,5 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 footer { justify-content: space-between; color: #587069; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; padding-top: 20px; gap: 14px; }
 footer span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 800px) { .shell { width: min(100% - 28px, 600px); padding-top: 18px; } .intro { padding: 40px 0 30px; } .workspace, .task-workspace, .robot-grid, .receipt-layout, .system-config, .pick-place-modebar { grid-template-columns: 1fr; } .pick-place-modebar { gap: 16px; } .visual-panel { min-height: 0; } .operation-visual-grid { grid-template-columns: 1fr; } .robot-actions { align-items: flex-start; flex-direction: column; } footer { align-items: flex-start; flex-direction: column; } }
-@media (max-width: 560px) { .robot-ip-form { grid-template-columns: 1fr; } .panel-heading-meta { gap: 8px; } }
+@media (max-width: 560px) { .robot-ip-form, .task-action-row { grid-template-columns: 1fr; } .panel-heading-meta { gap: 8px; } }
 @media (max-width: 480px) { .product-list, .capture-list { grid-template-columns: 1fr; } .receipt-result-heading { align-items: flex-start; flex-direction: column; gap: 6px; } }
