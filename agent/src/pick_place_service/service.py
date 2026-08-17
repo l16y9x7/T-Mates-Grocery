@@ -917,6 +917,29 @@ class OperationCache:
         async with self._lock:
             return sum(not task.done() for _, task in self._entries.values())
 
+    async def result(self, key: str) -> StatusResponse | None:
+        """Return a cached terminal result, or ``None`` while it is running."""
+
+        async with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                raise ServiceError(
+                    "OPERATION_NOT_FOUND",
+                    "no cached operation matches the idempotency key",
+                    status_code=404,
+                )
+            task = entry[1]
+            if not task.done():
+                return None
+            if task.cancelled():
+                raise ServiceError(
+                    "OPERATION_CANCELLED",
+                    "the cached operation was cancelled",
+                    status_code=409,
+                )
+
+        return await task
+
     async def run(
         self,
         key: str,

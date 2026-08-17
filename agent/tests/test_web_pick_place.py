@@ -185,3 +185,73 @@ async def test_place_routes_reject_unknown_task() -> None:
 
     assert events.status_code == 404
     assert visual.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_task_event_stream_includes_every_pick_place_child_log(
+    monkeypatch, tmp_path: Path
+) -> None:
+    operation_key = "web-task1-complete-log"
+    main_dir = tmp_path / f"20260101-000000-000001-{operation_key}"
+    first_child = tmp_path / (
+        f"20260101-000001-000001-{operation_key}_task1.pick.0.pick"
+    )
+    second_child = tmp_path / (
+        f"20260101-000002-000001-{operation_key}_task1.pick.1.pick"
+    )
+    for directory in (main_dir, first_child, second_child):
+        directory.mkdir()
+
+    (main_dir / "events.jsonl").write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-01-01T00:00:00.000",
+                "event": "抓取",
+                "status": "started",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    for index, child_dir in enumerate((first_child, second_child), start=1):
+        (child_dir / "events.jsonl").write_text(
+            json.dumps(
+                {
+                    "timestamp": f"2026-01-01T00:00:0{index}.000",
+                    "event": "位姿估计",
+                    "status": "succeeded",
+                    "sequence": index,
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        interface_dir = child_dir / "interfaces" / "manipulation_grasp"
+        interface_dir.mkdir(parents=True)
+        (interface_dir / "request.json").write_text(
+            json.dumps({"method": "POST", "body": {"sequence": index}}),
+            encoding="utf-8",
+        )
+        (interface_dir / "response.json").write_text(
+            json.dumps({"status_code": 200, "body": {"sequence": index}}),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(web_app, "LOG_ROOT", tmp_path)
+    state = web_app.PickTask(
+        task_id="run-1",
+        operation_key=operation_key,
+        workflow="task1",
+        finished=True,
+        result={"ok": True},
+    )
+
+    chunks = [chunk async for chunk in web_app._event_stream(state)]
+    stream = "".join(chunks)
+
+    assert stream.count('"event": "位姿估计"') == 2
+    assert stream.count('"interface": "manipulation_grasp"') == 2
+    assert stream.index('"sequence": 1') < stream.index('"sequence": 2')
+    assert "event: result" in stream

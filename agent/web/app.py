@@ -338,6 +338,35 @@ def _find_task_visual_log_dir(operation_key: str, task_id: str) -> Path | None:
     return max(candidates, key=lambda path: path.name) if candidates else None
 
 
+def _find_task_operation_log_dirs(operation_key: str, task_id: str) -> list[Path]:
+    """Find every pick/place child operation created by a unified task run."""
+
+    if not LOG_ROOT.exists():
+        return []
+    prefix = f"-{_safe_key(operation_key)}_task{task_id}."
+    try:
+        return sorted(
+            path
+            for path in LOG_ROOT.iterdir()
+            if path.is_dir() and prefix in path.name
+        )
+    except OSError:
+        return []
+
+
+def _event_log_dirs(state: PickTask) -> list[Path]:
+    """Return the main task log and any nested pick/place operation logs."""
+
+    directories: list[Path] = []
+    main_log_dir = _find_log_dir(state.operation_key)
+    if main_log_dir is not None:
+        directories.append(main_log_dir)
+    task_id = state.workflow.removeprefix("task")
+    if task_id in {"1", "2", "3"}:
+        directories.extend(_find_task_operation_log_dirs(state.operation_key, task_id))
+    return directories
+
+
 def _find_task_pick_log_dir(operation_key: str, task_id: str) -> Path | None:
     """Compatibility alias for callers using the previous helper name."""
 
@@ -628,25 +657,33 @@ def _interface_events(log_dir: Path | None, emitted: set[str]) -> list[dict[str,
         return []
     for interface_dir in interface_dirs:
         name = interface_dir.name
-        if name in emitted:
+        event_key = f"{log_dir.name}/{name}"
+        if event_key in emitted:
             continue
         request = _read_json_file(interface_dir / "request.json")
-        response = _read_json_file(interface_dir / "response.json")
+        response_path = interface_dir / "response.json"
+        response = _read_json_file(response_path)
         if request is None and response is None:
             continue
         if response is None:
             continue
         status_code = response.get("status_code") if isinstance(response, dict) else None
         status = "succeeded" if isinstance(status_code, int) and status_code < 400 else "failed"
+        try:
+            timestamp = datetime.fromtimestamp(response_path.stat().st_mtime).isoformat(
+                timespec="milliseconds"
+            )
+        except OSError:
+            timestamp = datetime.now().isoformat(timespec="milliseconds")
         events.append({
-            "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+            "timestamp": timestamp,
             "event": "接口调用",
             "status": status,
             "interface": name,
             "request": request,
             "response": response,
         })
-        emitted.add(name)
+        emitted.add(event_key)
     return events
 
 
@@ -944,30 +981,35 @@ async def start_pick(request: PickRequest) -> dict[str, str]:
 
 
 async def _event_stream(state: PickTask):
-    offset = 0
+    offsets: dict[Path, int] = {}
     emitted_interfaces: set[str] = set()
     sent_result = False
     deadline = time.monotonic() + DEFAULT_TIMEOUT + 30
     while time.monotonic() < deadline:
-        log_dir = _find_log_dir(state.operation_key)
-        events_file = log_dir / "events.jsonl" if log_dir else None
-        if events_file and events_file.exists():
-            try:
-                with events_file.open("r", encoding="utf-8") as source:
-                    source.seek(offset)
-                    while True:
-                        line = source.readline()
-                        if not line:
-                            break
-                        offset = source.tell()
-                        try:
-                            yield _sse("flow", json.loads(line))
-                        except json.JSONDecodeError:
-                            continue
-            except OSError:
-                pass
-        for interface_event in _interface_events(log_dir, emitted_interfaces):
-            yield _sse("flow", interface_event)
+        pending_events: list[dict[str, object]] = []
+        for log_dir in _event_log_dirs(state):
+            events_file = log_dir / "events.jsonl"
+            if events_file.exists():
+                try:
+                    with events_file.open("r", encoding="utf-8") as source:
+                        source.seek(offsets.get(events_file, 0))
+                        while True:
+                            line = source.readline()
+                            if not line:
+                                break
+                            offsets[events_file] = source.tell()
+                            try:
+                                event = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                            if isinstance(event, dict):
+                                pending_events.append(event)
+                except OSError:
+                    pass
+            pending_events.extend(_interface_events(log_dir, emitted_interfaces))
+        pending_events.sort(key=lambda event: str(event.get("timestamp", "")))
+        for event in pending_events:
+            yield _sse("flow", event)
         if state.finished and not sent_result:
             sent_result = True
             yield _sse("result", state.result or {"ok": False, "body": {"message": "任务无结果"}})

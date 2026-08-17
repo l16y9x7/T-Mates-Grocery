@@ -153,6 +153,93 @@ async def test_operation_cache_reports_active_operations() -> None:
 
 
 @pytest.mark.asyncio
+async def test_operation_result_reports_running_success_and_missing_key() -> None:
+    fake = FakeSubagents()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    original_run = fake.execute
+
+    async def delayed_execute(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return await original_run(*args, **kwargs)
+
+    fake.execute = delayed_execute  # type: ignore[method-assign]
+    app = make_app(fake)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://pick-place"
+    ) as client:
+        payload = {
+            "task_type": "SORTING",
+            "product_name": "可口可乐",
+            "hand": "LEFT",
+        }
+        pick = asyncio.create_task(
+            client.post(
+                "/pick",
+                json=payload,
+                headers={"Idempotency-Key": "query-result"},
+            )
+        )
+        await started.wait()
+
+        running = await client.get(
+            "/operations/result", params={"idempotency_key": "query-result"}
+        )
+        missing = await client.get(
+            "/operations/result", params={"idempotency_key": "missing"}
+        )
+        release.set()
+        assert (await pick).status_code == 200
+        succeeded = await client.get(
+            "/operations/result", params={"idempotency_key": "query-result"}
+        )
+
+    assert running.status_code == 202
+    assert running.json() == {"status": "RUNNING"}
+    assert missing.status_code == 404
+    assert missing.json()["error_code"] == "OPERATION_NOT_FOUND"
+    assert succeeded.status_code == 200
+    assert succeeded.json() == {"status": "SUCCEEDED"}
+
+
+@pytest.mark.asyncio
+async def test_operation_result_replays_cached_failure_details() -> None:
+    fake = FakeSubagents()
+
+    async def failing_execute(*args, **kwargs):
+        raise ServiceError(
+            "EXECUTION_FAILED",
+            "grasp failed",
+            failed_interface="manipulation_grasp",
+            url="http://robot/manipulation/grasp",
+            pose=[1, 2, 3, 4, 5, 6],
+        )
+
+    fake.execute = failing_execute  # type: ignore[method-assign]
+    app = make_app(fake)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://pick-place"
+    ) as client:
+        payload = {
+            "task_type": "SORTING",
+            "product_name": "可口可乐",
+            "hand": "LEFT",
+        }
+        failed = await client.post(
+            "/pick",
+            json=payload,
+            headers={"Idempotency-Key": "query-failure"},
+        )
+        queried = await client.get(
+            "/operations/result", params={"idempotency_key": "query-failure"}
+        )
+
+    assert failed.status_code == queried.status_code == 502
+    assert queried.json() == failed.json()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("hand", ["left", "right", "LEFT", "RIGHT"])
 async def test_operation_started_event_uses_public_request_fields(tmp_path: Path, hand: str) -> None:
     fake = FakeSubagents()

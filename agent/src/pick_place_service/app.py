@@ -66,6 +66,15 @@ def create_app(
             "active_operations": active_operations,
         }
 
+    @app.get("/operations/result", response_model=None)
+    async def operation_result(
+        idempotency_key: str,
+    ) -> StatusResponse | JSONResponse:
+        result = await cache.result(idempotency_key)
+        if result is None:
+            return JSONResponse(status_code=202, content={"status": "RUNNING"})
+        return result
+
     async def run_operation(
         request: PickPlaceRequest,
         kind: str,

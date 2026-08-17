@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+import task2_service.service as task2_service_module
 from task2_service.client import Task2Client
 from task2_service.models import InspectionPose, ProductHandOption, Task2Request, Task2ServiceError, Task2Settings, Task2Timeouts
 from task2_service.service import Task2Orchestrator
@@ -227,7 +228,7 @@ async def test_task2_skips_unknown_finding_and_continues(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_task2_discards_held_item_before_the_next_pick(tmp_path: Path) -> None:
+async def test_task2_retries_place_before_moving_to_the_next_finding(tmp_path: Path) -> None:
     mock = Task2Mock([shortage("商品一", "商品二", "商品三"), [], [], []])
     mock.place_failure_limit = 1
     task_settings = ready_settings(tmp_path)
@@ -235,11 +236,9 @@ async def test_task2_discards_held_item_before_the_next_pick(tmp_path: Path) -> 
         result = await Task2Orchestrator(task_settings, client).run(Task2Request())
 
     assert result.status == "SUCCEEDED"
-    assert [item.placed for item in result.target_items] == [False, True, True]
-    [release] = requests_for(mock, "/manipulation/gripper/open")
-    assert payload(release) == {"hand": "LEFT"}
-    second_pick = requests_for(mock, "/pick")[1]
-    assert mock.requests.index(release) < mock.requests.index(second_pick)
+    assert [item.placed for item in result.target_items] == [True, True]
+    assert len(requests_for(mock, "/place")) == 3
+    assert not requests_for(mock, "/manipulation/gripper/open")
 
 
 @pytest.mark.asyncio
@@ -256,57 +255,80 @@ async def test_task2_stops_inspection_after_two_successful_places(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_task2_fails_after_one_face_when_two_places_do_not_succeed(tmp_path: Path) -> None:
+async def test_task2_finishes_at_boundary_with_only_one_success(tmp_path: Path) -> None:
     mock = Task2Mock([shortage("商品一"), [], [], []])
     task_settings = ready_settings(tmp_path)
     async with Task2Client(task_settings, transport=mock.transport) as client:
-        with pytest.raises(Task2ServiceError) as error:
-            await Task2Orchestrator(task_settings, client).run(Task2Request())
+        result = await Task2Orchestrator(task_settings, client).run(Task2Request())
 
-    assert error.value.code == "INSUFFICIENT_SUCCESSFUL_REPLENISHMENTS"
+    assert result.status == "SUCCEEDED"
+    assert [item.placed for item in result.target_items] == [True]
     navigation_targets = [payload(request)["target_id"] for request in requests_for(mock, "/navigation/navigate")]
-    assert navigation_targets[-1] == "start"
-    assert "task_boundary" not in navigation_targets
+    assert navigation_targets[-1] == "task_boundary"
 
 
 @pytest.mark.asyncio
-async def test_task2_fails_when_discarding_a_held_item_fails(tmp_path: Path) -> None:
+async def test_task2_retries_discard_and_continues(tmp_path: Path) -> None:
     mock = Task2Mock([shortage("商品一", "商品二", "商品三"), [], [], []])
-    mock.place_failure_limit = 1
+    mock.place_failure_limit = 2
     mock.gripper_open_failure_limit = 1
     task_settings = ready_settings(tmp_path)
     async with Task2Client(task_settings, transport=mock.transport) as client:
-        with pytest.raises(Task2ServiceError) as error:
-            await Task2Orchestrator(task_settings, client).run(Task2Request())
+        result = await Task2Orchestrator(task_settings, client).run(Task2Request())
 
-    assert error.value.step == "补货台弃置"
-    assert len(requests_for(mock, "/manipulation/gripper/open")) == 1
+    assert result.status == "SUCCEEDED"
+    assert len(requests_for(mock, "/manipulation/gripper/open")) == 2
     navigation_targets = [payload(request)["target_id"] for request in requests_for(mock, "/navigation/navigate")]
-    assert navigation_targets[-1] == "start"
+    assert navigation_targets[-1] == "task_boundary"
 
 
 @pytest.mark.asyncio
 async def test_task2_rejects_invalid_inspection_payload(tmp_path: Path) -> None:
-    mock = Task2Mock([["商品一"]])
+    mock = Task2Mock([["商品一"], [], [], []])
     task_settings = ready_settings(tmp_path)
     async with Task2Client(task_settings, transport=mock.transport) as client:
-        with pytest.raises(Task2ServiceError) as error:
-            await Task2Orchestrator(task_settings, client).run(Task2Request())
+        result = await Task2Orchestrator(task_settings, client).run(Task2Request())
 
-    assert error.value.code == "INVALID_RESPONSE"
+    assert result.status == "SUCCEEDED"
     assert not requests_for(mock, "/pick")
 
 
 @pytest.mark.asyncio
 async def test_task2_rejects_blank_product_name(tmp_path: Path) -> None:
-    mock = Task2Mock([shortage("  ")])
+    mock = Task2Mock([shortage("  "), [], [], []])
     task_settings = ready_settings(tmp_path)
     async with Task2Client(task_settings, transport=mock.transport) as client:
-        with pytest.raises(Task2ServiceError) as error:
-            await Task2Orchestrator(task_settings, client).run(Task2Request())
+        result = await Task2Orchestrator(task_settings, client).run(Task2Request())
 
-    assert error.value.code == "INVALID_FINDINGS"
+    assert result.status == "SUCCEEDED"
     assert not requests_for(mock, "/pick")
+
+
+@pytest.mark.asyncio
+async def test_task2_unknown_pick_disables_hand_and_finishes_inspection(tmp_path: Path) -> None:
+    mock = Task2Mock([shortage("商品一", "商品二"), [], [], []])
+    task_settings = ready_settings(tmp_path)
+
+    async def unknown_pick(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/pick":
+            mock.requests.append(request)
+            return httpx.Response(
+                502,
+                json={
+                    "error_code": "ACTION_RESULT_UNKNOWN",
+                    "message": "pick result unknown",
+                },
+            )
+        return await mock.handle(request)
+
+    async with Task2Client(
+        task_settings, transport=httpx.MockTransport(unknown_pick)
+    ) as client:
+        result = await Task2Orchestrator(task_settings, client).run(Task2Request())
+
+    assert result.status == "SUCCEEDED"
+    assert len(requests_for(mock, "/pick")) == 1
+    assert [payload(request)["target_id"] for request in requests_for(mock, "/navigation/navigate")][-1] == "task_boundary"
 
 
 @pytest.mark.asyncio
@@ -352,3 +374,21 @@ def test_task2_production_config_has_its_own_face_order() -> None:
     ]
     assert task_settings.tasks.task0.inspection_points[0] == "H1_F_L_INSPECT"
     assert task_settings.tasks.task3.inspection_points[0].target_id == "H1_F_L_INSPECT"
+
+
+@pytest.mark.asyncio
+async def test_task2_continues_when_operation_log_cannot_be_initialized(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_log_initialization(*args: object, **kwargs: object) -> None:
+        raise OSError("log directory unavailable")
+
+    monkeypatch.setattr(task2_service_module, "_Task2Log", fail_log_initialization)
+    mock = Task2Mock([shortage("商品一", "商品二"), [], [], []])
+    task_settings = ready_settings(tmp_path)
+
+    async with Task2Client(task_settings, transport=mock.transport) as client:
+        result = await Task2Orchestrator(task_settings, client).run(Task2Request())
+
+    assert result.status == "SUCCEEDED"
+    assert [item.placed for item in result.target_items] == [True, True]

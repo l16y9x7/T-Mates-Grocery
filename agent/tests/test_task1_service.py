@@ -46,6 +46,8 @@ class Task1Mock:
         self.pose_failure_keys: set[str] = set()
         self.navigation_failure = False
         self.perception_failure = False
+        self.receipt_results: list[list[str]] = []
+        self.receipt_attempts = 0
         self.resolution_failures: set[int] = set()
 
     @property
@@ -80,6 +82,15 @@ class Task1Mock:
             if self.perception_failure:
                 return httpx.Response(
                     500, json={"error_code": "RECEIPT_PARSE_FAILED"}
+                )
+            if self.receipt_results:
+                result_index = min(
+                    self.receipt_attempts, len(self.receipt_results) - 1
+                )
+                self.receipt_attempts += 1
+                return httpx.Response(
+                    200,
+                    json={"product_names": self.receipt_results[result_index]},
                 )
             return httpx.Response(200, json={"product_names": list(self.names)})
         if path == "/sku/search_by_name":
@@ -373,10 +384,10 @@ async def test_task1_restores_720_when_receipt_parse_fails() -> None:
     client = Task1Client(settings(), transport=mock.transport)
 
     async with client:
-        with pytest.raises(Task1ServiceError) as error:
-            await Task1Orchestrator(settings(), client).run(Task1Request())
+        result = await Task1Orchestrator(settings(), client).run(Task1Request())
 
-    assert error.value.code == "RECEIPT_PARSE_FAILED"
+    assert result.status == "SUCCEEDED"
+    assert result.product_names == []
     assert [
         payload(request)["resolution"]
         for request in mock.requests
@@ -384,6 +395,33 @@ async def test_task1_restores_720_when_receipt_parse_fails() -> None:
     ] == [1080, 720]
     assert "/sku/search_by_name" not in paths(mock)
     assert "/pick" not in paths(mock)
+    assert [
+        payload(request)["target_id"]
+        for request in mock.requests
+        if request.url.path == "/navigation/navigate"
+    ][-1] == "task_boundary"
+
+
+@pytest.mark.asyncio
+async def test_task1_uses_receipt_result_after_it_appears_twice() -> None:
+    mock = Task1Mock()
+    mock.receipt_results = [
+        [f"错误商品{attempt}"] for attempt in range(1, 6)
+    ] + [
+        ["可口可乐罐装", "百事可乐瓶装"],
+        ["百事可乐瓶装", "可口可乐罐装"],
+    ]
+    client = Task1Client(settings(), transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(settings(), client).run(Task1Request())
+
+    assert result.product_names == ["百事可乐瓶装", "可口可乐罐装"]
+    assert mock.receipt_attempts == 7
+    assert [target.product_name for target in result.target_items] == [
+        "百事可乐瓶装",
+        "可口可乐罐装",
+    ]
 
 
 @pytest.mark.asyncio
@@ -434,6 +472,135 @@ async def test_task1_uses_first_location_when_sku_has_multiple_locations() -> No
 
     assert result.target_items[0].product_slot_id == "H2_F_L1_C01"
     assert result.target_items[0].picked is True
+
+
+@pytest.mark.parametrize(
+    ("locations", "expected_slot"),
+    [
+        (
+            [
+                "H2_F_L5_C01",
+                "H2_F_L1_C01",
+                "H2_F_L4_C01",
+                "H2_F_L2_C01",
+                "H2_F_L3_C01",
+            ],
+            "H2_F_L3_C01",
+        ),
+        (
+            ["H2_F_L5_C01", "H2_F_L1_C01", "H2_F_L4_C01", "H2_F_L2_C01"],
+            "H2_F_L2_C01",
+        ),
+        (
+            ["H2_F_L5_C01", "H2_F_L1_C01", "H2_F_L4_C01"],
+            "H2_F_L4_C01",
+        ),
+        (["H2_F_L5_C01", "H2_F_L1_C01"], "H2_F_L1_C01"),
+        (["H2_F_L5_C01"], "H2_F_L5_C01"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_task1_selects_sku_location_by_shelf_priority(
+    locations: list[str], expected_slot: str
+) -> None:
+    mock = Task1Mock()
+    mock.sku_locations["可口可乐罐装"] = locations
+    client = Task1Client(settings(), transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(settings(), client).run(Task1Request())
+
+    assert result.target_items[0].product_slot_id == expected_slot
+    product_pick = next(
+        request
+        for request in mock.requests
+        if request.url.path == "/pick"
+        and payload(request)["product_name"] == "可口可乐罐装"
+    )
+    assert payload(product_pick)["level"] == expected_slot.split("_")[2]
+
+
+@pytest.mark.asyncio
+async def test_task1_skips_configured_product_before_sku_lookup() -> None:
+    mock = Task1Mock()
+    task_settings = settings().model_copy(
+        update={"skip_product_names": ["可口可乐罐装"]}
+    )
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
+
+    assert result.product_names == ["可口可乐罐装", "百事可乐瓶装"]
+    assert [target.product_name for target in result.target_items] == ["百事可乐瓶装"]
+    assert [
+        request.url.params["name"]
+        for request in mock.requests
+        if request.url.path == "/sku/search_by_name"
+    ] == ["百事可乐瓶装"]
+    assert [
+        payload(request)["product_name"]
+        for request in mock.requests
+        if request.url.path == "/pick"
+    ] == ["百事可乐瓶装"]
+
+
+@pytest.mark.asyncio
+async def test_task1_defers_configured_product_until_after_other_product() -> None:
+    mock = Task1Mock()
+    task_settings = settings().model_copy(
+        update={"defer_product_names": ["可口可乐罐装"]}
+    )
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
+
+    assert result.product_names == ["可口可乐罐装", "百事可乐瓶装"]
+    assert [target.product_name for target in result.target_items] == [
+        "百事可乐瓶装",
+        "可口可乐罐装",
+    ]
+    assert [
+        payload(request)["product_name"]
+        for request in mock.requests
+        if request.url.path == "/pick"
+    ] == ["百事可乐瓶装", "可口可乐罐装"]
+
+
+@pytest.mark.asyncio
+async def test_task1_still_picks_deferred_product_when_it_is_the_only_product() -> None:
+    mock = Task1Mock()
+    mock.names = {"可口可乐罐装": "H2_F_L1_C01"}
+    task_settings = settings().model_copy(
+        update={"defer_product_names": ["可口可乐罐装"]}
+    )
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
+
+    assert [target.product_name for target in result.target_items] == ["可口可乐罐装"]
+    assert result.target_items[0].placed is True
+
+
+@pytest.mark.parametrize(
+    ("skip_names", "defer_names", "message"),
+    [
+        ([""], [], "must not be empty"),
+        (["可口可乐罐装", "可口可乐罐装"], [], "must not contain duplicates"),
+        ([" 可口可乐罐装 "], ["可口可乐罐装"], "must not overlap"),
+    ],
+)
+def test_task1_rejects_invalid_product_policy_configuration(
+    skip_names: list[str], defer_names: list[str], message: str
+) -> None:
+    raw_settings = settings().model_dump()
+    raw_settings["skip_product_names"] = skip_names
+    raw_settings["defer_product_names"] = defer_names
+
+    with pytest.raises(ValueError, match=message):
+        Task1Settings.model_validate(raw_settings)
 
 
 @pytest.mark.asyncio
@@ -651,7 +818,7 @@ async def test_task1_recovers_grasp_after_left_nudge_and_second_return() -> None
 
 
 @pytest.mark.asyncio
-async def test_task1_does_not_retry_pick_when_recovery_pose_fails() -> None:
+async def test_task1_retries_recovery_pose_before_retrying_pick() -> None:
     mock = Task1Mock()
     mock.pick_failure = {
         "error_code": "EXECUTION_FAILED",
@@ -665,12 +832,12 @@ async def test_task1_does_not_retry_pick_when_recovery_pose_fails() -> None:
     client = Task1Client(settings(), transport=mock.transport)
 
     async with client:
-        with pytest.raises(Task1ServiceError) as error:
-            await Task1Orchestrator(settings(), client).run(
-                Task1Request(), "task1-pose-failure"
-            )
+        result = await Task1Orchestrator(settings(), client).run(
+            Task1Request(), "task1-pose-failure"
+        )
 
-    assert error.value.code == "TASK_ACTIONS_FAILED"
+    assert result.status == "SUCCEEDED"
+    assert [item.placed for item in result.target_items] == [True, True]
     first_product_picks = [
         request
         for request in mock.requests
@@ -678,12 +845,18 @@ async def test_task1_does_not_retry_pick_when_recovery_pose_fails() -> None:
         and payload(request)["product_name"] == "可口可乐罐装"
     ]
     assert [request.headers["Idempotency-Key"] for request in first_product_picks] == [
-        "task1-pose-failure:task1.pick.0.pick"
+        "task1-pose-failure:task1.pick.0.pick",
+        "task1-pose-failure:task1.pick.0.pick:recovery.retry",
     ]
     recovery_pose = next(
         request
         for request in mock.requests
         if request.headers.get("Idempotency-Key") == recovery_pose_key
+    )
+    recovery_pose_retry = next(
+        request
+        for request in mock.requests
+        if request.headers.get("Idempotency-Key") == f"{recovery_pose_key}:retry"
     )
     nudge_requests = [
         request for request in mock.requests if request.url.path == "/navigation/nudge"
@@ -693,11 +866,13 @@ async def test_task1_does_not_retry_pick_when_recovery_pose_fails() -> None:
         {"action": "return"},
     ]
     assert mock.requests.index(nudge_requests[0]) < mock.requests.index(recovery_pose)
-    assert mock.requests.index(recovery_pose) < mock.requests.index(nudge_requests[1])
+    assert mock.requests.index(recovery_pose) < mock.requests.index(recovery_pose_retry)
+    assert mock.requests.index(recovery_pose_retry) < mock.requests.index(first_product_picks[1])
+    assert mock.requests.index(first_product_picks[1]) < mock.requests.index(nudge_requests[1])
 
 
 @pytest.mark.asyncio
-async def test_task1_stops_after_two_nudge_return_failures_and_navigates_start() -> None:
+async def test_task1_continues_after_two_nudge_return_failures() -> None:
     mock = Task1Mock()
     mock.pick_failure = {
         "error_code": "EXECUTION_FAILED",
@@ -710,12 +885,11 @@ async def test_task1_stops_after_two_nudge_return_failures_and_navigates_start()
     client = Task1Client(settings(), transport=mock.transport)
 
     async with client:
-        with pytest.raises(Task1ServiceError) as error:
-            await Task1Orchestrator(settings(), client).run(
-                Task1Request(), "task1-return-failure"
-            )
+        result = await Task1Orchestrator(settings(), client).run(
+            Task1Request(), "task1-return-failure"
+        )
 
-    assert error.value.code == "NUDGE_RETURN_FAILED"
+    assert result.status == "SUCCEEDED"
     nudge_requests = [
         request for request in mock.requests if request.url.path == "/navigation/nudge"
     ]
@@ -728,17 +902,18 @@ async def test_task1_stops_after_two_nudge_return_failures_and_navigates_start()
     assert [payload(request)["product_name"] for request in pick_requests] == [
         "可口可乐罐装",
         "可口可乐罐装",
+        "百事可乐瓶装",
     ]
     navigation_targets = [
         payload(request)["target_id"]
         for request in mock.requests
         if request.url.path == "/navigation/navigate"
     ]
-    assert navigation_targets[-1] == "start"
+    assert navigation_targets[-1] == "task_boundary"
 
 
 @pytest.mark.asyncio
-async def test_task1_reports_failed_release_after_returning_start(tmp_path: Path) -> None:
+async def test_task1_falls_back_to_individual_release_after_dual_failure(tmp_path: Path) -> None:
     mock = Task1Mock()
     mock.place_failure = {
         "error_code": "EXECUTION_FAILED",
@@ -751,18 +926,17 @@ async def test_task1_reports_failed_release_after_returning_start(tmp_path: Path
     client = Task1Client(task_settings, transport=mock.transport)
 
     async with client:
-        with pytest.raises(Task1ServiceError) as error:
-            await Task1Orchestrator(task_settings, client).run(Task1Request())
+        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
 
-    assert error.value.code == "TASK_ACTIONS_FAILED"
-    assert error.value.step == "抓放失败汇总"
+    assert result.status == "SUCCEEDED"
+    assert [item.placed for item in result.target_items] == [True, True]
+    assert len([request for request in mock.requests if request.url.path == "/place"]) == 2
     navigation_targets = [
         payload(request)["target_id"]
         for request in mock.requests
         if request.url.path == "/navigation/navigate"
     ]
-    assert navigation_targets[-1] == "start"
-    assert "task_boundary" not in navigation_targets
+    assert navigation_targets[-1] == "task_boundary"
     [log_dir] = list(tmp_path.iterdir())
     events = [
         json.loads(line)
@@ -780,9 +954,30 @@ async def test_task1_reports_failed_release_after_returning_start(tmp_path: Path
     assert not [
         request for request in mock.requests if request.url.path == "/navigation/nudge"
     ]
-    assert events[-2]["event"] == "失败回开始点"
-    assert events[-2]["status"] == "succeeded"
-    assert events[-1]["error_code"] == "TASK_ACTIONS_FAILED"
+    assert events[-1]["event"] == "operation"
+    assert events[-1]["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_task1_unknown_pick_disables_only_affected_hand() -> None:
+    mock = Task1Mock()
+    mock.pick_failure = {
+        "error_code": "ACTION_RESULT_UNKNOWN",
+        "message": "pick result unknown",
+    }
+    mock.pick_failure_limit = 1
+    client = Task1Client(settings(), transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(settings(), client).run(Task1Request())
+
+    assert result.status == "SUCCEEDED"
+    assert [item.placed for item in result.target_items] == [False, True]
+    assert [
+        payload(request)["target_id"]
+        for request in mock.requests
+        if request.url.path == "/navigation/navigate"
+    ][-1] == "task_boundary"
 
 
 @pytest.mark.asyncio
@@ -847,3 +1042,22 @@ async def test_task1_writes_pickplace_style_operation_log(tmp_path) -> None:
     assert '"event": "SKU货位转换"' in events
     assert '"event": "抓取"' in events
     assert '"event": "operation"' in events
+
+
+@pytest.mark.asyncio
+async def test_task1_continues_when_operation_log_cannot_be_initialized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_log_initialization(*args: object, **kwargs: object) -> None:
+        raise OSError("log directory unavailable")
+
+    monkeypatch.setattr(task1_service_module, "_Task1Log", fail_log_initialization)
+    mock = Task1Mock()
+    task_settings = settings()
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
+
+    assert result.status == "SUCCEEDED"
+    assert [item.placed for item in result.target_items] == [True, True]

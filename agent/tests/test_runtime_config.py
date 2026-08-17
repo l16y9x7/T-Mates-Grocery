@@ -63,6 +63,18 @@ def test_production_runtime_uses_one_yaml_and_external_product_map() -> None:
         "right": "right_wrist",
     }
     assert len(settings.tasks.task1.product_hand_options) == 122
+    assert settings.tasks.task1.skip_product_names == [
+        "慢碳十色糙米",
+        "高纤七色糙米",
+        "山西黄小米",
+    ]
+    assert settings.tasks.task1.defer_product_names == [
+        "中盐精制盐",
+        "小苏打",
+        "镇江香醋",
+        "蒸鱼豉油",
+        "薄盐生抽",
+    ]
     assert Path(pick_place.calibration_files["head"]) == CONFIG_DIR / "camera/head.json"
 
 

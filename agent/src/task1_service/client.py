@@ -28,6 +28,8 @@ HEALTH_PATHS = {
     "pick_place": "/health",
     "sku": "/sku/health",
 }
+ACTION_RECONCILIATION_SECONDS = 15.0
+ACTION_RECONCILIATION_INTERVAL_SECONDS = 0.5
 
 
 class Task1Client:
@@ -115,13 +117,25 @@ class Task1Client:
         return True
 
     async def navigate(self, target_id: str, idempotency_key: str) -> None:
-        await self._physical_action(
-            "navigation",
-            "/navigation/navigate",
-            {"target_id": target_id},
-            idempotency_key,
-            self.settings.timeouts.navigation_seconds,
-        )
+        for attempt in (1, 2):
+            key = idempotency_key if attempt == 1 else f"{idempotency_key}:retry"
+            try:
+                await self._physical_action(
+                    "navigation",
+                    "/navigation/navigate",
+                    {"target_id": target_id},
+                    key,
+                    self.settings.timeouts.navigation_seconds,
+                )
+            except Task1ServiceError as exc:
+                if attempt == 2 or exc.code in {
+                    "ACTION_RESULT_UNKNOWN",
+                    "NETWORK_ERROR",
+                    "INVALID_RESPONSE",
+                }:
+                    raise
+                continue
+            return
 
     async def nudge(self, direction: str, idempotency_key: str) -> None:
         await self._physical_action(
@@ -151,13 +165,25 @@ class Task1Client:
         payload: dict[str, str] = {"pose_type": pose_type}
         if shelf_level is not None:
             payload["shelf_level"] = shelf_level
-        await self._physical_action(
-            "pose",
-            "/pose/prepare",
-            payload,
-            idempotency_key,
-            self.settings.timeouts.pose_seconds,
-        )
+        for attempt in (1, 2):
+            key = idempotency_key if attempt == 1 else f"{idempotency_key}:retry"
+            try:
+                await self._physical_action(
+                    "pose",
+                    "/pose/prepare",
+                    payload,
+                    key,
+                    self.settings.timeouts.pose_seconds,
+                )
+            except Task1ServiceError as exc:
+                if attempt == 2 or exc.code in {
+                    "ACTION_RESULT_UNKNOWN",
+                    "NETWORK_ERROR",
+                    "INVALID_RESPONSE",
+                }:
+                    raise
+                continue
+            return
 
     async def parse_receipt(self) -> list[str]:
         response = await self._request(
@@ -172,10 +198,16 @@ class Task1Client:
             raise Task1ServiceError(
                 "INVALID_RESPONSE", "receipt response must contain product_names"
             ) from exc
-        names = [name.strip() for name in result.product_names if isinstance(name, str)]
-        if len(names) != 2 or len(set(names)) != 2 or any(not name for name in names):
+        names = list(
+            dict.fromkeys(
+                name.strip()
+                for name in result.product_names
+                if isinstance(name, str) and name.strip()
+            )
+        )[:2]
+        if not names:
             raise Task1ServiceError(
-                "INVALID_RECEIPT", "receipt must contain two different non-empty product names",
+                "INVALID_RECEIPT", "receipt must contain at least one non-empty product name",
                 status_code=422,
             )
         return names
@@ -191,20 +223,33 @@ class Task1Client:
         )
 
     async def search_by_name(self, name: str) -> SkuResponse:
-        response = await self._request(
-            "sku",
-            "GET",
-            "/sku/search_by_name",
-            params={"name": name},
-            timeout_seconds=self.settings.timeouts.sku_seconds,
-        )
-        try:
-            result = SkuResponse.model_validate(response.json())
-        except (ValueError, ValidationError) as exc:
-            raise Task1ServiceError("INVALID_RESPONSE", "SKU name response is invalid") from exc
-        if result.name != name:
-            raise Task1ServiceError("INVALID_RESPONSE", "SKU response name does not match request")
-        return result
+        last_error: Task1ServiceError | None = None
+        for attempt in (1, 2):
+            try:
+                response = await self._request(
+                    "sku",
+                    "GET",
+                    "/sku/search_by_name",
+                    params={"name": name},
+                    timeout_seconds=self.settings.timeouts.sku_seconds,
+                )
+                try:
+                    result = SkuResponse.model_validate(response.json())
+                except (ValueError, ValidationError) as exc:
+                    raise Task1ServiceError(
+                        "INVALID_RESPONSE", "SKU name response is invalid"
+                    ) from exc
+                if result.name != name:
+                    raise Task1ServiceError(
+                        "INVALID_RESPONSE", "SKU response name does not match request"
+                    )
+                return result
+            except Task1ServiceError as exc:
+                last_error = exc
+                if attempt == 2 or exc.code == "NETWORK_ERROR":
+                    raise
+        assert last_error is not None
+        raise last_error
 
     async def search_by_location(self, location: str) -> SkuResponse:
         response = await self._request(
@@ -294,19 +339,72 @@ class Task1Client:
         idempotency_key: str,
         timeout_seconds: float,
     ) -> None:
-        response = await self._request(
-            service,
-            "POST",
-            path,
-            json=payload,
-            headers={"Idempotency-Key": idempotency_key},
-            timeout_seconds=timeout_seconds,
-            result_unknown_on_exhaustion=True,
-        )
         try:
+            response = await self._request(
+                service,
+                "POST",
+                path,
+                json=payload,
+                headers={"Idempotency-Key": idempotency_key},
+                timeout_seconds=timeout_seconds,
+                result_unknown_on_exhaustion=True,
+            )
             ActionResponse.model_validate(response.json())
         except (ValueError, ValidationError) as exc:
-            raise Task1ServiceError("INVALID_RESPONSE", f"invalid action response from {service}") from exc
+            error = Task1ServiceError(
+                "INVALID_RESPONSE", f"invalid action response from {service}"
+            )
+            if service == "pick_place":
+                await self._reconcile_pick_place_action(idempotency_key, error)
+                return
+            raise error from exc
+        except Task1ServiceError as exc:
+            if service == "pick_place" and exc.code == "ACTION_RESULT_UNKNOWN":
+                await self._reconcile_pick_place_action(idempotency_key, exc)
+                return
+            raise
+
+    async def _reconcile_pick_place_action(
+        self, idempotency_key: str, original_error: Task1ServiceError
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + ACTION_RECONCILIATION_SECONDS
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise original_error
+            try:
+                response = await self._request(
+                    "pick_place",
+                    "GET",
+                    "/operations/result",
+                    params={"idempotency_key": idempotency_key},
+                    timeout_seconds=min(1.0, remaining),
+                )
+            except Task1ServiceError as query_error:
+                if query_error.code in {
+                    "OPERATION_NOT_FOUND",
+                    "UNKNOWN_ENDPOINT",
+                    "NETWORK_ERROR",
+                    "INVALID_RESPONSE",
+                }:
+                    raise original_error from query_error
+                raise
+            if response.status_code == 200:
+                try:
+                    ActionResponse.model_validate(response.json())
+                except (ValueError, ValidationError) as exc:
+                    raise original_error from exc
+                return
+            try:
+                status = response.json().get("status")
+            except (AttributeError, ValueError):
+                raise original_error
+            if response.status_code != 202 or status != "RUNNING":
+                raise original_error
+            await asyncio.sleep(
+                min(ACTION_RECONCILIATION_INTERVAL_SECONDS, max(0.0, remaining))
+            )
 
     async def _request(
         self,
@@ -321,15 +419,18 @@ class Task1Client:
         result_unknown_on_exhaustion: bool = False,
     ) -> httpx.Response:
         url = f"{getattr(self.settings.services, service).rstrip('/')}{path}"
-        timeout = httpx.Timeout(
-            connect=self.settings.timeouts.connect_seconds,
-            read=timeout_seconds,
-            write=10.0,
-            pool=5.0,
-        )
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
         for attempt in range(2):
+            remaining = max(0.001, deadline - loop.time())
+            timeout = httpx.Timeout(
+                connect=min(self.settings.timeouts.connect_seconds, remaining),
+                read=remaining,
+                write=min(10.0, remaining),
+                pool=min(5.0, remaining),
+            )
             try:
-                async with asyncio.timeout(timeout_seconds):
+                async with asyncio.timeout(remaining):
                     response = await self._client.request(
                         method,
                         url,
@@ -350,8 +451,9 @@ class Task1Client:
                     error=str(exc),
                     attempt=attempt + 1,
                 )
-                if attempt == 0:
-                    await asyncio.sleep(0.05)
+                retry_remaining = deadline - loop.time()
+                if attempt == 0 and retry_remaining > 0:
+                    await asyncio.sleep(min(0.05, retry_remaining))
                     continue
                 code = "ACTION_RESULT_UNKNOWN" if result_unknown_on_exhaustion else "NETWORK_ERROR"
                 raise Task1ServiceError(code, f"{service} request result could not be determined") from exc
