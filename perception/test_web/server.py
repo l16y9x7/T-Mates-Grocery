@@ -87,6 +87,7 @@ SHORTAGE_BATCH_SUMMARY_PATH = (
 REAL_SHORTAGE_BATCH_ROOT = DATA_ROOT / "real_shortage_regression"
 REAL_SHORTAGE_SAM_ROWS_ROOT = DATA_ROOT / "real_shortage_sam_rows"
 SAM_ROW_EXPORTER_PATH = INSPECT_ROOT / "export_sam_rows.py"
+SHORTAGE_MAPPING_CONFIG_PATH = INSPECT_ROOT / "shortage_mapping_config.json"
 SHORTAGE_BATCH_DATASETS = {
     "self_collect": {
         "label": "自采缺货批测",
@@ -229,6 +230,8 @@ class SamRowRunRequest(BaseModel):
     row_index: int = Field(ge=1)
     sku_name: str = ""
     prompt: str = ""
+    expected_front_count: int | None = Field(default=None, ge=1)
+    config_group_index: int | None = Field(default=None, ge=1)
 
 
 class QwenDetection(BaseModel):
@@ -478,6 +481,69 @@ def sam_row_artifact_url(relative_path: str, version: int) -> str:
     )
 
 
+def load_shortage_mapping_config() -> dict[str, dict[str, list[dict[str, object]]]]:
+    try:
+        payload = json.loads(SHORTAGE_MAPPING_CONFIG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HTTPException(status_code=500, detail=f"读取 shortage 分组配置失败: {error}") from error
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="shortage 分组配置根节点必须是对象")
+    normalized: dict[str, dict[str, list[dict[str, object]]]] = {}
+    for location_id, levels in payload.items():
+        if not isinstance(location_id, str) or not isinstance(levels, dict):
+            raise HTTPException(status_code=500, detail="shortage 分组配置 view 格式错误")
+        normalized_levels: dict[str, list[dict[str, object]]] = {}
+        for level, groups in levels.items():
+            if not isinstance(level, str) or not isinstance(groups, list):
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"{location_id}/{level} 必须是配置组列表",
+                )
+            normalized_groups: list[dict[str, object]] = []
+            for group_index, group in enumerate(groups, start=1):
+                if not isinstance(group, dict):
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"{location_id}/{level} 第 {group_index} 组必须是对象",
+                    )
+                expected = group.get("expected_front_count")
+                prompt = group.get("sam3_prompt")
+                if (
+                    not isinstance(expected, int)
+                    or isinstance(expected, bool)
+                    or expected <= 0
+                    or not isinstance(prompt, str)
+                    or not prompt.strip()
+                ):
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            f"{location_id}/{level} 第 {group_index} 组需要正整数 "
+                            "expected_front_count 和非空 sam3_prompt"
+                        ),
+                    )
+                normalized_groups.append(
+                    {
+                        "group_index": group_index,
+                        "expected_front_count": expected,
+                        "sam3_prompt": prompt.strip(),
+                    }
+                )
+            normalized_levels[level.upper()] = normalized_groups
+        normalized[location_id.upper()] = normalized_levels
+    return normalized
+
+
+def shortage_prompt_groups(group: str, level: object) -> list[dict[str, object]]:
+    match = INITIAL_SCAN_DIRECTORY_PATTERN.fullmatch(group.strip().upper())
+    if match is None or not isinstance(level, str):
+        return []
+    return load_shortage_mapping_config().get(match.group("target"), {}).get(
+        level.upper(),
+        [],
+    )
+
+
 @app.get("/api/sam-row-debug/records")
 def list_sam_row_debug_records() -> dict:
     mapping = load_prompt_pair_mapping("SORTING")
@@ -527,6 +593,10 @@ def list_sam_row_debug_records() -> dict:
                 row_copy["candidate_skus"] = sam_row_candidate_skus(
                     record_directory.name,
                     row_index,
+                )
+                row_copy["prompt_groups"] = shortage_prompt_groups(
+                    group_directory.name,
+                    row.get("level"),
                 )
                 for key in ("rgb", "valid_depth_mask", "depth_preview"):
                     relative = row.get(key)
@@ -3421,6 +3491,17 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
 
     sku_name = request.sku_name.strip()
     prompt = request.prompt.strip()
+    expected_front_count = request.expected_front_count
+    config_group_index = request.config_group_index
+    if config_group_index is not None:
+        configured_groups = shortage_prompt_groups(request.group, row.get("level"))
+        if not 0 < config_group_index <= len(configured_groups):
+            raise HTTPException(status_code=400, detail="shortage 配置组不存在")
+        configured = configured_groups[config_group_index - 1]
+        if not prompt:
+            prompt = str(configured["sam3_prompt"])
+        if expected_front_count is None:
+            expected_front_count = int(configured["expected_front_count"])
     if not prompt and sku_name:
         pair = load_prompt_pair_mapping("SORTING").get(sku_name)
         prompt = pair["sam3_prompt"].strip() if pair is not None else ""
@@ -3480,6 +3561,16 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
             else None
             for raw_instance, _, _ in decoded
         ],
+        expected_front_count=expected_front_count,
+        horizontal_roi=(
+            (0, round(rgb.shape[1] * 0.82))
+            if request.group.upper().startswith("H1_B_L_INSPECT")
+            else (
+                (round(rgb.shape[1] * 0.05), rgb.shape[1])
+                if "_F_R_INSPECT" in request.group.upper()
+                else None
+            )
+        ),
     )
     overlay = rgb.copy()
     instances: list[dict[str, object]] = []
@@ -3560,6 +3651,24 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
         }
         instances.append(instance)
 
+    count_constraint = selection.get("count_constraint")
+    horizontal_roi = (
+        count_constraint.get("horizontal_roi")
+        if isinstance(count_constraint, dict)
+        else None
+    )
+    if isinstance(horizontal_roi, list) and len(horizontal_roi) == 2:
+        for boundary in (int(horizontal_roi[0]), int(horizontal_roi[1])):
+            if 0 < boundary < rgb.shape[1]:
+                cv2.line(
+                    overlay,
+                    (boundary, 0),
+                    (boundary, rgb.shape[0] - 1),
+                    (0, 255, 255),
+                    3,
+                    cv2.LINE_AA,
+                )
+
     front_mask = selection["combined_front_mask"]
     front_overlay = rgb.copy()
     front_pixels = front_mask > 0
@@ -3584,6 +3693,8 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
         "level": row.get("level"),
         "sku_name": sku_name or None,
         "prompt": prompt,
+        "expected_front_count": expected_front_count,
+        "config_group_index": config_group_index,
         "crop_bbox_xywh": crop_bbox,
         "overlay_data_url": encode_web_image(overlay),
         "front_mask_data_url": encode_web_image(front_mask),
@@ -3591,6 +3702,7 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
         "front_instance_indices": selection["front_indices"],
         "uncertain_instance_indices": selection["uncertain_indices"],
         "occlusion_edges": selection["edges"],
+        "count_constraint": selection["count_constraint"],
         "instances": instances,
         "elapsed_ms": round((time.perf_counter() - started_at) * 1000.0, 1),
     }

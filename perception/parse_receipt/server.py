@@ -13,6 +13,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.error import HTTPError, URLError
@@ -24,6 +25,8 @@ from fastapi.responses import JSONResponse
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
+PERCEPTION_ROOT = Path(__file__).resolve().parents[1]
+
 if __package__ and __package__.startswith("perception."):
     from ..config import (
         QWEN3_URL as CONFIG_QWEN3_URL,
@@ -31,7 +34,6 @@ if __package__ and __package__.startswith("perception."):
         camera_snapshot_url,
     )
 else:
-    PERCEPTION_ROOT = Path(__file__).resolve().parents[1]
     if str(PERCEPTION_ROOT) not in sys.path:
         sys.path.insert(0, str(PERCEPTION_ROOT))
     from config import (
@@ -50,6 +52,7 @@ DEFAULT_CAMERA_TIMEOUT_SECONDS = 5.0
 DEFAULT_QWEN_TIMEOUT_SECONDS = 120.0
 DEFAULT_SKU_BASE_URL = CONFIG_SKU_API_URL
 DEFAULT_SKU_TIMEOUT_SECONDS = 3.0
+DEFAULT_RECEIPT_CAPTURE_DIR = PERCEPTION_ROOT / "test_data" / "receipt_captures"
 
 # Reuse Uvicorn's configured error logger so diagnostics always reach the same
 # terminal/file handler as the HTTP access log.
@@ -65,6 +68,11 @@ ERROR_CONTEXT = {
         "camera_capture",
         True,
         "检查相机接口是否返回非空的 JPEG/PNG 图片。",
+    ),
+    "image_save_error": (
+        "image_persistence",
+        True,
+        "检查 RECEIPT_CAPTURE_DIR 是否存在可写磁盘空间及目录权限。",
     ),
     "qwen_connection_error": (
         "qwen_recognition",
@@ -157,6 +165,7 @@ class Settings:
     qwen_timeout_seconds: float = DEFAULT_QWEN_TIMEOUT_SECONDS
     sku_base_url: str = DEFAULT_SKU_BASE_URL
     sku_timeout_seconds: float = DEFAULT_SKU_TIMEOUT_SECONDS
+    receipt_capture_dir: Path = DEFAULT_RECEIPT_CAPTURE_DIR
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -168,6 +177,12 @@ class Settings:
         )
         sku_base_url = os.getenv("SKU_BASE_URL", "").strip() or DEFAULT_SKU_BASE_URL
         qwen_model = os.getenv("QWEN_MODEL", "").strip() or DEFAULT_QWEN_MODEL
+        configured_capture_dir = os.getenv("RECEIPT_CAPTURE_DIR", "").strip()
+        receipt_capture_dir = Path(
+            configured_capture_dir or DEFAULT_RECEIPT_CAPTURE_DIR
+        ).expanduser()
+        if not receipt_capture_dir.is_absolute():
+            receipt_capture_dir = PERCEPTION_ROOT / receipt_capture_dir
 
         api_key = os.getenv("QWEN_API_KEY")
         return cls(
@@ -185,6 +200,7 @@ class Settings:
             sku_timeout_seconds=float(
                 os.getenv("SKU_TIMEOUT_SECONDS", DEFAULT_SKU_TIMEOUT_SECONDS)
             ),
+            receipt_capture_dir=receipt_capture_dir,
         )
 
 
@@ -280,6 +296,12 @@ def parse_receipt() -> ParseReceiptResponse:
 
     settings = Settings.from_env()
     frame = capture_one_frame(settings)
+    saved_path = save_receipt_frame(frame, settings.receipt_capture_dir)
+    logger.info(
+        "receipt_image_saved path=%s bytes=%s",
+        saved_path,
+        len(frame),
+    )
     recognized_items = recognize_frame(frame, settings)
     if len(recognized_items) != 2:
         raise ServiceError(
@@ -346,6 +368,56 @@ def capture_one_frame(settings: Settings) -> bytes:
             timeout_seconds=settings.camera_timeout_seconds,
         )
     return raw
+
+
+def save_receipt_frame(frame: bytes, capture_root: str | Path) -> Path:
+    """Atomically persist one validated camera frame and return its path."""
+
+    try:
+        with Image.open(io.BytesIO(frame)) as image:
+            image_format = (image.format or "").upper()
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError) as exc:
+        raise ServiceError(
+            502,
+            "camera_response_error",
+            "相机返回的内容不是有效 JPEG/PNG 图片。",
+        ) from exc
+
+    suffix = {"JPEG": ".jpg", "PNG": ".png"}.get(image_format)
+    if suffix is None:
+        raise ServiceError(
+            502,
+            "camera_response_error",
+            f"相机图片格式不受支持：{image_format or 'unknown'}，仅支持 JPEG/PNG。",
+        )
+
+    captured_at = datetime.now(UTC)
+    directory = Path(capture_root).expanduser() / captured_at.strftime("%Y-%m-%d")
+    filename = (
+        f"receipt_{captured_at.strftime('%Y%m%dT%H%M%S_%fZ')}_"
+        f"{uuid.uuid4().hex[:8]}{suffix}"
+    )
+    target = directory / filename
+    temporary = directory / f".{filename}.{uuid.uuid4().hex}.tmp"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        with temporary.open("xb") as file:
+            file.write(frame)
+            file.flush()
+            os.fsync(file.fileno())
+        temporary.replace(target)
+    except OSError as exc:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise ServiceError(
+            500,
+            "image_save_error",
+            f"无法保存小票图片：{exc}",
+        ) from exc
+    return target.resolve()
 
 
 def recognize_frame(

@@ -5,6 +5,7 @@
 ```text
 POST /perception/parse
   -> GET 机器人头部相机当前帧
+  -> 保存原始 JPEG/PNG 图片
   -> Qwen3-VL 输出商品 name + specification
   -> SKU 服务获取全量 name 并按优先级匹配
   -> 返回包含两个标准商品名的对象
@@ -35,6 +36,7 @@ python -m pip install fastapi pillow uvicorn
 ```bash
 export RECEIPT_CAMERA_URL='http://<camera-host>:<port>/camera/snapshot?camera=head&type=color'
 export CAMERA_TIMEOUT_SECONDS='5'
+export RECEIPT_CAPTURE_DIR='/data/receipt_captures'
 export QWEN_BASE_URL='http://<qwen-host>:<port>/v1'
 export QWEN_MODEL='Qwen3-VL-4B-Instruct'
 export QWEN_TIMEOUT_SECONDS='120'
@@ -71,6 +73,10 @@ curl -X POST http://127.0.0.1:28083/perception/parse
 ```
 
 请求体为空，不需要提供图片路径。机器人必须先到达小票拍摄位姿。
+每次调用抓取的原始图片会在调用 Qwen 前持久化。默认目录为
+`test_data/receipt_captures/YYYY-MM-DD/`，可通过 `RECEIPT_CAPTURE_DIR` 修改。
+文件名包含 UTC 时间戳和随机后缀，因此并发请求不会互相覆盖；保存失败时接口返回
+`image_save_error`。
 
 Qwen 内部输出只允许：
 
@@ -148,7 +154,8 @@ SKU 匹配顺序：
 python -m unittest -v test_server.py
 ```
 
-测试使用内存图片和模拟响应，不访问真实相机、Qwen 或 SKU，也不会保存图片文件。
+测试使用内存图片和模拟响应，不访问真实相机、Qwen 或 SKU；图片保存行为仅在系统
+临时目录中验证，不会污染正式保存目录。
 
 `receipt_test_cases.json` 另含 150 条双商品 SKU 匹配样例，覆盖
 `sku/products.json` 中的全部商品。每个 `input` 只包含 Qwen 接口使用的

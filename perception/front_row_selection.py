@@ -117,11 +117,136 @@ def _overlap_ratio(first: tuple[int, int], second: tuple[int, int]) -> float:
     return overlap / max(1, min(first[1] - first[0], second[1] - second[0]))
 
 
+def _apply_expected_count(
+    instances: list[dict[str, Any]],
+    *,
+    scores: Sequence[float | None],
+    expected_count: int,
+    image_shape: tuple[int, int],
+    horizontal_roi: tuple[int, int] | None,
+) -> dict[str, Any]:
+    """Select exactly N well-spaced columns while preferring graph-front masks."""
+
+    image_height, image_width = image_shape
+    roi_left, roi_right = horizontal_roi or (0, image_width)
+    candidates: list[int] = []
+    for index, instance in enumerate(instances):
+        if instance["duplicate_of"] is not None or not instance["depth_estimate"]["reliable"]:
+            continue
+        x1, _, x2, _ = instance["bbox_xyxy"]
+        center_x = (x1 + x2) / 2.0
+        if not roi_left <= center_x < roi_right:
+            instance["selected"] = False
+            instance["selection_reason"] = "outside_view_shelf_roi"
+            continue
+        candidates.append(index)
+    if not candidates:
+        return {
+            "expected": expected_count,
+            "selected": 0,
+            "satisfied": False,
+            "available_candidates": 0,
+            "horizontal_roi": [roi_left, roi_right],
+        }
+
+    def quality(index: int) -> float:
+        instance = instances[index]
+        x1, y1, x2, y2 = instance["bbox_xyxy"]
+        bbox_area = max(1, (x2 - x1) * (y2 - y1))
+        fill = min(1.0, instance["mask_pixels"] / bbox_area)
+        height_score = min(1.0, (y2 - y1) / max(1.0, image_height * 0.45))
+        sam_score = float(scores[index] or 0.0)
+        support = float(instance["depth_estimate"]["support_ratio"])
+        graph_score = 2.5 if not instance["incoming"] else -0.35 * len(instance["incoming"])
+        edge_clearance = min(x1, image_width - x2)
+        if edge_clearance <= image_width * 0.02:
+            edge_penalty = 2.5
+        elif edge_clearance <= image_width * 0.05:
+            edge_penalty = 0.8
+        else:
+            edge_penalty = 0.0
+        return (
+            graph_score
+            + sam_score
+            + 0.55 * support
+            + 0.45 * fill
+            + 0.50 * height_score
+            - edge_penalty
+        )
+
+    ordered = sorted(
+        candidates,
+        key=lambda index: (
+            (instances[index]["bbox_xyxy"][0] + instances[index]["bbox_xyxy"][2]) / 2,
+            -quality(index),
+        ),
+    )
+    centers = {
+        index: (
+            instances[index]["bbox_xyxy"][0] + instances[index]["bbox_xyxy"][2]
+        )
+        / 2.0
+        for index in ordered
+    }
+
+    nominal_slot_width = image_width / max(1, expected_count)
+
+    def solve(minimum_gap: float) -> list[int]:
+        count = min(expected_count, len(ordered))
+        # dp[(amount, end_position)] = (score, selected candidate indices)
+        dp: dict[tuple[int, int], tuple[float, list[int]]] = {}
+        for position, index in enumerate(ordered):
+            dp[(1, position)] = (quality(index), [index])
+        for amount in range(2, count + 1):
+            for position, index in enumerate(ordered):
+                best: tuple[float, list[int]] | None = None
+                for previous_position in range(position):
+                    previous = dp.get((amount - 1, previous_position))
+                    previous_index = ordered[previous_position]
+                    if previous is None or centers[index] - centers[previous_index] < minimum_gap:
+                        continue
+                    candidate = (
+                        previous[0] + quality(index),
+                        previous[1] + [index],
+                    )
+                    if best is None or candidate[0] > best[0]:
+                        best = candidate
+                if best is not None:
+                    dp[(amount, position)] = best
+        choices = [value for (amount, _), value in dp.items() if amount == count]
+        return max(choices, key=lambda value: value[0])[1] if choices else []
+
+    selected: list[int] = []
+    for gap_ratio in (0.28, 0.18, 0.08, 0.0):
+        selected = solve(nominal_slot_width * gap_ratio)
+        if len(selected) == min(expected_count, len(ordered)):
+            break
+    chosen = set(selected)
+    for index in candidates:
+        instance = instances[index]
+        if index in chosen:
+            instance["selected"] = True
+            instance["selection_reason"] = "front_layer_expected_count"
+        else:
+            instance["selected"] = False
+            if not instance["incoming"]:
+                instance["selection_reason"] = "exceeds_expected_front_count"
+    return {
+        "expected": expected_count,
+        "selected": len(selected),
+        "satisfied": len(selected) == expected_count,
+        "available_candidates": len(candidates),
+        "horizontal_roi": [roi_left, roi_right],
+    }
+
+
 def select_front_row_instances(
     masks: Sequence[np.ndarray],
     depth_mm: np.ndarray,
     *,
     scores: Sequence[float | None] | None = None,
+    expected_front_count: int | None = None,
+    horizontal_roi: tuple[int, int] | None = None,
 ) -> dict[str, Any]:
     """Return front instances, duplicate suppression and pairwise depth edges."""
 
@@ -129,7 +254,11 @@ def select_front_row_instances(
     normalized_masks = [np.asarray(mask) > 0 for mask in masks]
     if any(mask.shape != depth.shape for mask in normalized_masks):
         raise ValueError("mask and depth shapes must match")
+    if expected_front_count is not None and expected_front_count <= 0:
+        raise ValueError("expected_front_count must be positive")
     normalized_scores = list(scores or [None] * len(normalized_masks))
+    if len(normalized_scores) != len(normalized_masks):
+        raise ValueError("scores and masks must have the same length")
     instances: list[dict[str, Any]] = []
     inner_masks: list[np.ndarray] = []
     for index, mask in enumerate(normalized_masks):
@@ -266,10 +395,10 @@ def select_front_row_instances(
                 0.012 * min(first_depth, second_depth),
             )
             difference = abs(first_depth - second_depth)
-            if difference <= threshold and comparison_source == "boundary":
+            if comparison_source == "boundary":
                 # Boundary pixels may still be noisy for transparent packages.
-                # Fall back to each instance's stable near-depth cluster when it
-                # provides a clearly stronger separation.
+                # Compare their direction and strength with the complete
+                # instance estimates before accepting a marginal boundary edge.
                 first_global = instances[first_index]["depth_estimate"]
                 second_global = instances[second_index]["depth_estimate"]
                 global_first_depth = float(first_global["depth_mm"])
@@ -285,12 +414,31 @@ def select_front_row_instances(
                     0.012 * min(global_first_depth, global_second_depth),
                 )
                 global_difference = abs(global_first_depth - global_second_depth)
-                if global_difference > global_threshold:
+                local_strength = difference / max(1.0, threshold)
+                global_strength = global_difference / max(1.0, global_threshold)
+                directions_conflict = (
+                    (second_depth - first_depth)
+                    * (global_second_depth - global_first_depth)
+                    < 0
+                )
+                use_global = global_strength > 1.0 and (
+                    local_strength <= 1.0
+                    or global_strength >= local_strength * 1.25
+                )
+                if directions_conflict and local_strength > 1.0 and not use_global:
+                    # Two similarly strong but contradictory estimates are not
+                    # sufficient evidence for either occlusion direction.
+                    continue
+                if use_global:
                     first_depth = global_first_depth
                     second_depth = global_second_depth
                     threshold = global_threshold
                     difference = global_difference
-                    comparison_source = "instance_fallback"
+                    comparison_source = (
+                        "instance_conflict_override"
+                        if directions_conflict
+                        else "instance_fallback"
+                    )
             if difference <= threshold:
                 continue
             front_index, back_index = (
@@ -331,6 +479,21 @@ def select_front_row_instances(
             instance["selection_reason"] = "front_layer"
             front_indices.append(index)
 
+    count_constraint = None
+    if expected_front_count is not None:
+        count_constraint = _apply_expected_count(
+            instances,
+            scores=normalized_scores,
+            expected_count=expected_front_count,
+            image_shape=depth.shape,
+            horizontal_roi=horizontal_roi,
+        )
+        front_indices = [
+            int(instance["instance_index"])
+            for instance in instances
+            if instance["selected"]
+        ]
+
     combined = np.zeros(depth.shape, dtype=np.uint8)
     for index in front_indices:
         combined[normalized_masks[index - 1]] = 255
@@ -339,6 +502,7 @@ def select_front_row_instances(
         "edges": edges,
         "front_indices": front_indices,
         "uncertain_indices": uncertain_indices,
+        "count_constraint": count_constraint,
         "combined_front_mask": combined,
         "inner_masks": inner_masks,
     }

@@ -3,6 +3,7 @@ const recordSelect = document.querySelector("#recordSelect");
 const rowSelect = document.querySelector("#rowSelect");
 const skuSelect = document.querySelector("#skuSelect");
 const promptInput = document.querySelector("#promptInput");
+const expectedCountInput = document.querySelector("#expectedCount");
 const runPromptButton = document.querySelector("#runPrompt");
 const runAllButton = document.querySelector("#runAll");
 
@@ -80,16 +81,48 @@ function rowPromptOptions(row) {
   return filtered.length ? filtered : mapping;
 }
 
+function selectedConfiguredGroup() {
+  const row = selectedRow();
+  if (!skuSelect.value.startsWith("config:")) return null;
+  const index = Number(skuSelect.value.split(":", 2)[1]);
+  return (row?.prompt_groups || []).find((item) => item.group_index === index) || null;
+}
+
+function syncSelectedPrompt() {
+  const configured = selectedConfiguredGroup();
+  if (configured) {
+    promptInput.value = configured.sam3_prompt;
+    expectedCountInput.value = configured.expected_front_count;
+    return;
+  }
+  const mapped = mapping.find((item) => item.sku_name === skuSelect.value);
+  if (mapped) promptInput.value = mapped.prompt;
+  expectedCountInput.value = "";
+}
+
 function populatePrompts(row) {
+  const configuredGroups = row?.prompt_groups || [];
   const options = rowPromptOptions(row);
   const previous = skuSelect.value;
   skuSelect.replaceChildren();
   addOption(skuSelect, "", "自定义 Prompt");
-  options.forEach((item) => addOption(skuSelect, item.sku_name, `${item.sku_name} · ${item.prompt}`));
-  if (options.some((item) => item.sku_name === previous)) skuSelect.value = previous;
-  const mapped = mapping.find((item) => item.sku_name === skuSelect.value);
-  if (mapped) promptInput.value = mapped.prompt;
-  runAllButton.disabled = !(row?.candidate_skus || []).length;
+  if (configuredGroups.length) {
+    configuredGroups.forEach((item) => addOption(
+      skuSelect,
+      `config:${item.group_index}`,
+      `组 ${item.group_index} · ${item.expected_front_count} 列 · ${item.sam3_prompt}`,
+    ));
+    if (configuredGroups.some((item) => `config:${item.group_index}` === previous)) {
+      skuSelect.value = previous;
+    } else {
+      skuSelect.value = `config:${configuredGroups[0].group_index}`;
+    }
+  } else {
+    options.forEach((item) => addOption(skuSelect, item.sku_name, `${item.sku_name} · ${item.prompt}`));
+    if (options.some((item) => item.sku_name === previous)) skuSelect.value = previous;
+  }
+  syncSelectedPrompt();
+  runAllButton.disabled = !configuredGroups.length && !(row?.candidate_skus || []).length;
 }
 
 function renderSelection() {
@@ -125,9 +158,13 @@ function renderResult(result) {
   card.className = "result-card";
   const header = document.createElement("header");
   const title = document.createElement("h2");
-  title.textContent = `${result.sku_name || "CUSTOM"} · ${result.prompt}`;
+  const groupLabel = result.config_group_index ? `GROUP ${result.config_group_index}` : (result.sku_name || "CUSTOM");
+  title.textContent = `${groupLabel} · ${result.prompt}`;
   const timing = document.createElement("span");
-  timing.textContent = `${result.front_instance_indices.length}/${result.instances.length} front · ${Math.round(result.elapsed_ms)} ms`;
+  const countText = result.count_constraint
+    ? ` · expected ${result.count_constraint.expected} ${result.count_constraint.satisfied ? "✓" : "不足"}`
+    : "";
+  timing.textContent = `${result.front_instance_indices.length}/${result.instances.length} front${countText} · ${Math.round(result.elapsed_ms)} ms`;
   header.append(title, timing);
   card.append(header);
 
@@ -202,7 +239,7 @@ function renderResult(result) {
   document.querySelector("#results").prepend(card);
 }
 
-async function runOne(skuName, prompt) {
+async function runOne(skuName, prompt, expectedFrontCount = null, configGroupIndex = null) {
   const record = selectedRecord();
   const row = selectedRow();
   if (!record || !row) throw new Error("请先选择记录和货架层");
@@ -215,12 +252,16 @@ async function runOne(skuName, prompt) {
       row_index: row.row_index,
       sku_name: skuName,
       prompt,
+      expected_front_count: expectedFrontCount,
+      config_group_index: configGroupIndex,
     }),
   });
 }
 
 async function runCurrentPrompt() {
   const prompt = promptInput.value.trim();
+  const configured = selectedConfiguredGroup();
+  const expectedCount = expectedCountInput.value ? Number(expectedCountInput.value) : null;
   if (!prompt) {
     setStatus("#runStatus", "SAM3 Prompt 不能为空", "error");
     return;
@@ -228,7 +269,12 @@ async function runCurrentPrompt() {
   runPromptButton.disabled = true;
   setStatus("#runStatus", "SAM3 正在运行……");
   try {
-    const result = await runOne(skuSelect.value, prompt);
+    const result = await runOne(
+      configured ? "" : skuSelect.value,
+      prompt,
+      expectedCount,
+      configured?.group_index || null,
+    );
     renderResult(result);
     setStatus("#runStatus", `完成：${result.instances.length} 个实例`, "success");
   } catch (error) {
@@ -240,6 +286,27 @@ async function runCurrentPrompt() {
 
 async function runAllMappedPrompts() {
   const row = selectedRow();
+  const configuredGroups = row?.prompt_groups || [];
+  if (configuredGroups.length) {
+    runAllButton.disabled = true;
+    runPromptButton.disabled = true;
+    document.querySelector("#results").replaceChildren();
+    try {
+      for (let index = 0; index < configuredGroups.length; index += 1) {
+        const item = configuredGroups[index];
+        setStatus("#runStatus", `正在运行配置组 ${index + 1}/${configuredGroups.length} · ${item.sam3_prompt}`);
+        const result = await runOne("", item.sam3_prompt, item.expected_front_count, item.group_index);
+        renderResult(result);
+      }
+      setStatus("#runStatus", `全部完成：${configuredGroups.length} 个独立配置组`, "success");
+    } catch (error) {
+      setStatus("#runStatus", error.message, "error");
+    } finally {
+      runPromptButton.disabled = false;
+      runAllButton.disabled = false;
+    }
+    return;
+  }
   const wanted = new Set(row?.candidate_skus || []);
   const unique = [];
   const seen = new Set();
@@ -293,8 +360,7 @@ groupSelect.addEventListener("change", populateRecords);
 recordSelect.addEventListener("change", populateRows);
 rowSelect.addEventListener("change", renderSelection);
 skuSelect.addEventListener("change", () => {
-  const item = mapping.find((entry) => entry.sku_name === skuSelect.value);
-  if (item) promptInput.value = item.prompt;
+  syncSelectedPrompt();
 });
 runPromptButton.addEventListener("click", runCurrentPrompt);
 runAllButton.addEventListener("click", runAllMappedPrompts);

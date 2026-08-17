@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.error import URLError
@@ -96,6 +97,27 @@ class ReceiptServerTests(unittest.TestCase):
         request = mocked.call_args.args[0]
         self.assertEqual(request.full_url, "http://camera.test/snapshot")
         self.assertEqual(request.method, "GET")
+
+    def test_save_receipt_frame_preserves_original_jpeg(self) -> None:
+        image = jpeg_bytes()
+        with tempfile.TemporaryDirectory() as directory:
+            saved_path = server.save_receipt_frame(image, directory)
+            self.assertEqual(saved_path.read_bytes(), image)
+            self.assertEqual(saved_path.suffix, ".jpg")
+            self.assertEqual(saved_path.parent.parent, Path(directory).resolve())
+            self.assertRegex(
+                saved_path.name,
+                r"^receipt_\d{8}T\d{6}_\d{6}Z_[0-9a-f]{8}\.jpg$",
+            )
+
+    def test_save_receipt_frame_reports_unwritable_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            blocker = Path(directory) / "not-a-directory"
+            blocker.write_text("blocked", encoding="utf-8")
+            with self.assertRaises(server.ServiceError) as raised:
+                server.save_receipt_frame(jpeg_bytes(), blocker)
+        self.assertEqual(raised.exception.error_type, "image_save_error")
+        self.assertEqual(raised.exception.stage, "image_persistence")
 
     def test_receipt_endpoint_has_no_upload_request_body(self) -> None:
         operation = server.app.openapi()["paths"]["/perception/parse"]["post"]
@@ -187,18 +209,23 @@ class ReceiptServerTests(unittest.TestCase):
             {"name": "蒙牛纯牛奶", "specification": "250ml"},
         ]
         sku_result = ["NFC桔汁", "蒙牛纯牛奶"]
+        frame = jpeg_bytes()
+        configured = settings()
         with (
-            patch("server.Settings.from_env", return_value=settings()),
-            patch("server.capture_one_frame", return_value=jpeg_bytes()),
+            patch("server.Settings.from_env", return_value=configured),
+            patch("server.capture_one_frame", return_value=frame),
+            patch("server.save_receipt_frame") as save_frame,
             patch("server.recognize_frame", return_value=recognized),
             patch("server.lookup_sku_items", return_value=sku_result),
         ):
             self.assertEqual(server.parse_receipt().product_names, sku_result)
+        save_frame.assert_called_once_with(frame, configured.receipt_capture_dir)
 
     def test_parse_receipt_rejects_result_without_two_items(self) -> None:
         with (
             patch("server.Settings.from_env", return_value=settings()),
             patch("server.capture_one_frame", return_value=jpeg_bytes()),
+            patch("server.save_receipt_frame"),
             patch("server.recognize_frame", return_value=[]),
             patch("server.lookup_sku_items") as lookup,
         ):

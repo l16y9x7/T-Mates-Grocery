@@ -173,6 +173,11 @@ def shelf_bounds_at_y(
     right = int(np.ceil(right_slope * y + right_intercept)) + padding + 1
     left = max(0, min(image_width, left))
     right = max(left, min(image_width, right))
+    # Rail endpoints can be shortened by glare, occlusion or a neighbouring
+    # bay. Never let one inconsistent endpoint remove a large part of a row.
+    maximum_side_trim = round(image_width * 0.12)
+    left = min(left, maximum_side_trim)
+    right = max(right, image_width - maximum_side_trim)
     if right - left < image_width * 0.30:
         return 0, image_width
     return left, right

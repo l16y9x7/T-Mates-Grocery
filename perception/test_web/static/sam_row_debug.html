@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SAM3 行内深度调试</title>
-    <link rel="stylesheet" href="/static/sam_row_debug.css?v=2" />
+    <link rel="stylesheet" href="/static/sam_row_debug.css?v=3" />
   </head>
   <body>
     <main>
@@ -54,17 +54,18 @@
       </section>
 
       <section class="card prompt-panel">
-        <label>映射商品<select id="skuSelect"></select></label>
+        <label>标注分组<select id="skuSelect"></select></label>
+        <label>前排列数<input id="expectedCount" type="number" min="1" step="1" /></label>
         <label class="prompt-field">SAM3 Prompt<textarea id="promptInput" rows="3" placeholder="例如：frontmost bottle"></textarea></label>
         <div class="actions">
           <button id="runPrompt">运行当前 Prompt</button>
-          <button id="runAll" class="secondary">运行本层全部映射 Prompt</button>
+          <button id="runAll" class="secondary">逐组运行本层配置</button>
         </div>
         <span id="runStatus" class="status">等待运行</span>
       </section>
 
       <section id="results" class="results"></section>
     </main>
-    <script src="/static/sam_row_debug.js?v=2"></script>
+    <script src="/static/sam_row_debug.js?v=4"></script>
   </body>
 </html>
