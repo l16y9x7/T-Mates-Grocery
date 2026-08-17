@@ -6,6 +6,10 @@ const requestLevel = document.querySelector("#requestLevel");
 const qwenPrompt = document.querySelector("#qwenPrompt");
 const qwenSku = document.querySelector("#qwenSku");
 const samPrompt = document.querySelector("#samPrompt");
+const qwenReferencePanel = document.querySelector("#qwenReferencePanel");
+const qwenReferenceImage = document.querySelector("#qwenReferenceImage");
+const qwenReferenceEmpty = document.querySelector("#qwenReferenceEmpty");
+const qwenReferenceStatus = document.querySelector("#qwenReferenceStatus");
 const rawQwenCanvas = document.querySelector("#rawQwenCanvas");
 const qwenCanvas = document.querySelector("#qwenCanvas");
 const rawSamCanvas = document.querySelector("#rawSamCanvas");
@@ -39,6 +43,41 @@ let offlineDepthName = "";
 let offlineDepthBase64 = "";
 let batchRecords = [];
 let batchRerunPollTimer = null;
+
+function resetQwenReferencePreview() {
+  const shortage = requestTaskType?.value === "SHORTAGE";
+  qwenReferencePanel.hidden = !shortage;
+  qwenReferenceImage.hidden = true;
+  qwenReferenceImage.removeAttribute("src");
+  qwenReferenceEmpty.hidden = false;
+  qwenReferenceEmpty.textContent = "运行后显示对应 product_name 的 SKU 图片";
+  qwenReferenceStatus.textContent = shortage ? "等待运行" : "仅 SHORTAGE 使用";
+}
+
+function renderQwenReferencePreview(result) {
+  if (requestTaskType?.value !== "SHORTAGE") {
+    resetQwenReferencePreview();
+    return;
+  }
+  qwenReferencePanel.hidden = false;
+  qwenReferenceImage.hidden = true;
+  qwenReferenceEmpty.hidden = false;
+  qwenReferenceEmpty.textContent = "正在加载 SKU 样例图…";
+  qwenReferenceStatus.textContent = result.qwen_reference_image_used
+    ? `本次 Qwen 已附带 · ${result.qwen_reference_image_name || result.sku_id}`
+    : "样例图预览（运行中的8083尚未返回双图启用标记）";
+  qwenReferenceImage.onload = () => {
+    qwenReferenceImage.hidden = false;
+    qwenReferenceEmpty.hidden = true;
+  };
+  qwenReferenceImage.onerror = () => {
+    qwenReferenceImage.hidden = true;
+    qwenReferenceEmpty.hidden = false;
+    qwenReferenceEmpty.textContent = "SKU 样例图读取失败";
+  };
+  qwenReferenceImage.src =
+    `/api/qwen-review/shortage-batch/sku-image/${encodeURIComponent(result.sku_id)}`;
+}
 
 function selectedBatchResultFile() {
   return batchResultFileSelect.value || "";
@@ -733,6 +772,7 @@ async function runQwen() {
   rawResult.textContent = "等待 Locate Debug 返回…";
   setStatus("#qwenStatus", "运行中…", "running");
   setStatus("#samStatus", "运行中…", "running");
+  resetQwenReferencePreview();
   try {
     if (!requestTaskType) {
       throw new Error("页面版本不一致，请按 Ctrl+F5 强制刷新");
@@ -770,6 +810,7 @@ async function runQwen() {
     const instances = result.instances || [];
     const selectedInstance = result.selected_instance || null;
     const selectedInstanceIndex = Number(result.selected_instance_index || 0);
+    renderQwenReferencePreview(result);
     const summarizeInstance = (instance) =>
       instance
         ? {
@@ -816,6 +857,9 @@ async function runQwen() {
         image_size: result.image_size,
         qwen3_prompt_used: result.qwen3_prompt_used,
         sam3_prompt_used: result.sam3_prompt_used,
+        qwen_reference_image_used: Boolean(result.qwen_reference_image_used),
+        qwen_reference_image_name: result.qwen_reference_image_name || null,
+        qwen_reference_image_media_type: result.qwen_reference_image_media_type || null,
         hard_case: result.hard_case || null,
       },
       null,
@@ -1053,6 +1097,7 @@ locateImageInput.addEventListener("change", selectOfflineImage);
 locateDepthInput.addEventListener("change", selectOfflineDepth);
 clearLocateImage.addEventListener("click", clearOfflineImage);
 requestTaskType?.addEventListener("change", () => {
+  resetQwenReferencePreview();
   loadSkus()
     .then(() => loadPromptPairForSelectedSku())
     .catch((error) => {
@@ -1115,3 +1160,4 @@ loadSkus().catch((error) => {
 loadBatchResultFiles().finally(pollBatchRerunStatus);
 
 syncSamPairedSku();
+resetQwenReferencePreview();

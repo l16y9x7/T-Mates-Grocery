@@ -211,6 +211,12 @@ function renderFrontCompare(payload) {
         baseline_incomplete: "基准不完整",
         current_detection_failed: "Current SAM3 未检出（未知）",
       };
+      const baselineInstance = slot.baseline_instance_index == null
+        ? "—"
+        : `#${slot.baseline_instance_index}`;
+      const currentInstance = slot.current_instance_index == null
+        ? "—"
+        : `#${slot.current_instance_index}`;
       const values = [
         `SLOT ${slot.slot_index}`,
         slot.product_name || "未配置",
@@ -218,7 +224,7 @@ function renderFrontCompare(payload) {
         slot.baseline_depth_mm == null ? "—" : `${slot.baseline_depth_mm} mm`,
         slot.current_depth_mm == null ? "—" : `${slot.current_depth_mm} mm`,
         slot.depth_delta_mm == null ? "—" : `${slot.depth_delta_mm} mm`,
-        `#${slot.baseline_instance_index} → ${slot.current_instance_index == null ? "—" : `#${slot.current_instance_index}`}`,
+        `${baselineInstance} → ${currentInstance}`,
       ];
       values.forEach((value) => {
         const td = document.createElement("td");

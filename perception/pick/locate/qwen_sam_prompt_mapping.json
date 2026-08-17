@@ -412,8 +412,8 @@
     "sam3_prompt": "frontmost cardboard box"
   },
   "费列罗巧克力": {
-    "qwen3_prompt": "找到图片中货架上的费列罗巧克力包装盒堆，输出满足条件的所有费列罗巧克力包装盒堆的bbox。返回格式：{\"name\": \"费列罗巧克力包装盒堆\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "topmost ferrero package"
+    "qwen3_prompt": "找到图片中货架上的金色费列罗巧克力包装盒堆，输出满足条件的所有费列罗巧克力包装盒堆的bbox。返回格式：{\"name\": \"费列罗巧克力包装盒堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "sam3_prompt": "top ferrero golden pack"
   },
   "镇江香醋": {
     "qwen3_prompt": "找到图片中货架上的恒顺香醋，输出满足条件的所有恒顺香醋的bbox，每一堆分开。返回格式：{\"name\": \"恒顺香醋\", \"bbox\": [x1, y1, x2, y2]}",

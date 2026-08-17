@@ -19,7 +19,11 @@ from typing import Any
 PERCEPTION_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = PERCEPTION_ROOT / "test_data" / "real_shortage_output"
 DEFAULT_TARGET = PERCEPTION_ROOT / "test_data" / "real_shortage_regression"
+DEFAULT_FRONT_COMPARE_TARGET = (
+    PERCEPTION_ROOT / "test_data" / "real_shortage_front_compare"
+)
 SUMMARY_FILENAME = "shortage_inspection_batch_results.json"
+DEPTH_DELTA_THRESHOLD_MM = 40.0
 
 
 def read_json(path: Path, *, required: bool = True) -> dict[str, Any]:
@@ -162,7 +166,157 @@ def convert_record(source_record: Path, target_root: Path) -> dict[str, Any] | N
     }
 
 
-def convert_all(source_root: Path, target_root: Path) -> tuple[int, Path]:
+def convert_sam_shortage_analysis(
+    source_record: Path,
+    *,
+    group: str,
+    record: str,
+    front_compare_root: Path,
+) -> bool:
+    """Expose a saved formal SAM shortage result on the existing compare panel."""
+
+    api_result = read_json(source_record / "result.json", required=False)
+    analysis = api_result.get("sam_shortage_analysis")
+    if not isinstance(analysis, dict):
+        return False
+    comparisons = analysis.get("comparisons")
+    if not isinstance(comparisons, list):
+        return False
+
+    rows_by_level: dict[str, list[dict[str, Any]]] = {}
+    finding_details: list[dict[str, Any]] = []
+    for raw_comparison in comparisons:
+        if not isinstance(raw_comparison, dict):
+            continue
+        level = str(raw_comparison.get("level") or "").strip().upper()
+        group_index = raw_comparison.get("group_index")
+        if not level or not isinstance(group_index, int):
+            continue
+        raw_slots = raw_comparison.get("slots")
+        slots = [dict(item) for item in raw_slots if isinstance(item, dict)] \
+            if isinstance(raw_slots, list) else []
+        missing_slots = [
+            item
+            for item in slots
+            if str(item.get("status") or "").startswith("missing_")
+        ]
+        for slot in slots:
+            slot.setdefault("baseline_instance_index", None)
+            slot.setdefault("current_instance_index", None)
+        missing_names = list(
+            dict.fromkeys(
+                str(item.get("product_name") or "").strip()
+                for item in missing_slots
+                if str(item.get("product_name") or "").strip()
+            )
+        )
+        depth_deltas = [
+            float(item["depth_delta_mm"])
+            for item in slots
+            if isinstance(item.get("depth_delta_mm"), (int, float))
+        ]
+        systematic_detected = bool(
+            raw_comparison.get("systematic_depth_shift")
+        )
+        expected = int(raw_comparison.get("expected_front_count") or 0)
+        baseline_count = int(raw_comparison.get("baseline_front_count") or 0)
+        current_count = int(raw_comparison.get("current_front_count") or 0)
+        prompt_group = {
+            "group_index": group_index,
+            "prompt": str(raw_comparison.get("prompt") or ""),
+            "slot_product_names": [
+                str(item.get("product_name") or "") for item in slots
+            ],
+            "expected_front_count": expected,
+            "baseline_front_count": baseline_count,
+            "current_front_count": current_count,
+            "current_detection_failed": any(
+                item.get("status") == "current_detection_failed" for item in slots
+            ),
+            "resolved_slot_count": len(slots),
+            "baseline_complete": baseline_count == expected,
+            "slot_coordinate_space": "source_image",
+            "slot_matching_strategy": (
+                "ordinal_left_to_right"
+                if baseline_count == current_count
+                else "monotonic_sequence_alignment"
+            ),
+            "depth_delta_threshold_mm": DEPTH_DELTA_THRESHOLD_MM,
+            "systematic_depth_shift": {
+                "detected": systematic_detected,
+                "accepted_range_mm": [30.0, 80.0],
+                "median_delta_mm": (
+                    sorted(depth_deltas)[len(depth_deltas) // 2]
+                    if depth_deltas
+                    else None
+                ),
+                "min_delta_mm": min(depth_deltas) if depth_deltas else None,
+                "max_delta_mm": max(depth_deltas) if depth_deltas else None,
+                "matched_slot_count": len(depth_deltas),
+            },
+            "slots": slots,
+            "missing_slots": missing_slots,
+            "missing_product_names": missing_names,
+            "artifacts": {},
+            "source": "formal_sam_shortage_analysis",
+        }
+        rows_by_level.setdefault(level, []).append(prompt_group)
+        finding_details.extend(
+            {
+                "shortage_product_name": name,
+                "level": level,
+                "group_index": group_index,
+                "slot_index": slot.get("slot_index"),
+                "status": slot.get("status"),
+            }
+            for slot in missing_slots
+            for name in [str(slot.get("product_name") or "").strip()]
+            if name
+        )
+
+    rows = [
+        {
+            "level": level,
+            "baseline_row_index": None,
+            "current_row_index": None,
+            "prompt_groups": sorted(
+                prompt_groups,
+                key=lambda item: int(item["group_index"]),
+            ),
+        }
+        for level, prompt_groups in sorted(rows_by_level.items())
+    ]
+    if not rows:
+        return False
+    unique_names = list(
+        dict.fromkeys(item["shortage_product_name"] for item in finding_details)
+    )
+    target = front_compare_root / group / record / "result.json"
+    write_json(
+        target,
+        {
+            "schema_version": 10,
+            "generated_at": datetime.now(UTC).isoformat(),
+            "group": group,
+            "record": record,
+            "rows": rows,
+            "findings": [
+                {"shortage_product_name": name} for name in unique_names
+            ],
+            "finding_details": finding_details,
+            "missing_slot_count": len(finding_details),
+            "converted_from": str((source_record / "result.json").resolve()),
+            "source": "formal_sam_shortage_analysis",
+        },
+    )
+    return True
+
+
+def convert_all(
+    source_root: Path,
+    target_root: Path,
+    front_compare_root: Path | None = None,
+) -> tuple[int, Path]:
     if not source_root.is_dir():
         raise FileNotFoundError(f"source directory does not exist: {source_root}")
     target_root.mkdir(parents=True, exist_ok=True)
@@ -185,6 +339,13 @@ def convert_all(source_root: Path, target_root: Path) -> tuple[int, Path]:
         if result is None:
             continue
         indexed_results[(result["group"], result["record"])] = result
+        if front_compare_root is not None:
+            convert_sam_shortage_analysis(
+                source_record,
+                group=str(result["group"]),
+                record=str(result["record"]),
+                front_compare_root=front_compare_root,
+            )
         converted_count += 1
 
     results = sorted(
@@ -213,12 +374,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--target", type=Path, default=DEFAULT_TARGET)
+    parser.add_argument(
+        "--front-compare-target",
+        type=Path,
+        default=DEFAULT_FRONT_COMPARE_TARGET,
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    converted_count, summary_path = convert_all(args.source.resolve(), args.target.resolve())
+    converted_count, summary_path = convert_all(
+        args.source.resolve(),
+        args.target.resolve(),
+        args.front_compare_target.resolve(),
+    )
     print(f"converted {converted_count} SHORTAGE record(s)")
     print(f"review summary: {summary_path}")
     print("open http://127.0.0.1:8082/qwen-review and select 真实数据测试")

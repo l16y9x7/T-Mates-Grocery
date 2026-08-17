@@ -45,6 +45,7 @@ POSE_LEVELS: dict[PoseType, tuple[str, ...]] = {
     "SHELF_VIEW_LOWER": ("L3", "L4", "L5"),
 }
 DEPTH_DELTA_THRESHOLD_MM = 40.0
+DEPTH_CONSISTENCY_THRESHOLD_MM = 10.0
 SYSTEMATIC_DEPTH_SHIFT_MIN_MM = 30.0
 SYSTEMATIC_DEPTH_SHIFT_MAX_MM = 80.0
 
@@ -636,6 +637,13 @@ def compare_group(
                 if current.detection_failed
                 else ("missing_unmatched" if baseline_complete else "baseline_incomplete")
             )
+        elif (
+            depth_delta is not None
+            and abs(depth_delta) < DEPTH_CONSISTENCY_THRESHOLD_MM
+        ):
+            # A matched RGB-D slot with effectively unchanged depth is occupied,
+            # regardless of weaker geometry/ordering heuristics.
+            status = "occupied_depth_consistent"
         elif systematic_shift:
             status = "occupied_systematic_shift"
         elif depth_delta is not None and depth_delta > DEPTH_DELTA_THRESHOLD_MM:
@@ -749,7 +757,10 @@ def analyze_shortage(
                 location_id=normalized_location,
                 multiple_groups_on_level=len(configs) > 1,
                 level_uses_upper_pick=level_uses_upper_pick,
-                enforce_expected_count=False,
+                # Use the same completion rule as the baseline.  Missingness is
+                # decided afterwards from slot matching and depth, rather than
+                # from asymmetric front-instance candidate filtering.
+                enforce_expected_count=True,
                 sam3_caller=sam3_caller,
             )
             analysis.comparisons.append(

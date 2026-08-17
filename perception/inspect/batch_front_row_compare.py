@@ -34,8 +34,9 @@ from test_web import server as web_server  # noqa: E402
 
 DEFAULT_DATA_ROOT = PERCEPTION_ROOT / "test_data" / "real_shortage_regression"
 DEFAULT_OUTPUT_ROOT = PERCEPTION_ROOT / "test_data" / "real_shortage_front_compare"
-COMPARISON_SCHEMA_VERSION = 10
+COMPARISON_SCHEMA_VERSION = 11
 DEPTH_DELTA_THRESHOLD_MM = 40.0
+DEPTH_CONSISTENCY_THRESHOLD_MM = 10.0
 SYSTEMATIC_DEPTH_SHIFT_MIN_MM = 30.0
 SYSTEMATIC_DEPTH_SHIFT_MAX_MM = 80.0
 PRINT_LOCK = threading.Lock()
@@ -384,6 +385,11 @@ def compare_prompt_group(
             config_group_index=group_index,
             source="current",
             comparison_full_width=True,
+            # Baseline and current must use the same candidate-completion rule.
+            # Otherwise a small SAM-mask geometry change can make the baseline
+            # promote a valid front instance while current silently drops it,
+            # which creates an artificial missing slot before depth comparison.
+            enforce_expected_count=True,
         )
     )
 
@@ -474,6 +480,15 @@ def compare_prompt_group(
                     if baseline_complete
                     else "baseline_incomplete"
                 )
+        # A matched slot whose depth is effectively unchanged cannot be a
+        # shortage.  Keep this as a final decision invariant so later matching
+        # or geometry heuristics cannot turn a depth-consistent pair back into
+        # a missing result.
+        elif (
+            depth_delta is not None
+            and abs(depth_delta) < DEPTH_CONSISTENCY_THRESHOLD_MM
+        ):
+            status = "occupied_depth_consistent"
         elif systematic_depth_shift:
             status = "occupied_systematic_shift"
         elif depth_delta is not None and depth_delta > DEPTH_DELTA_THRESHOLD_MM:
@@ -577,6 +592,7 @@ def compare_prompt_group(
             else "monotonic_sequence_alignment"
         ),
         "depth_delta_threshold_mm": DEPTH_DELTA_THRESHOLD_MM,
+        "depth_consistency_threshold_mm": DEPTH_CONSISTENCY_THRESHOLD_MM,
         "systematic_depth_shift": {
             "detected": systematic_depth_shift,
             "accepted_range_mm": [

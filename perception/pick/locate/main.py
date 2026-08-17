@@ -14,8 +14,9 @@ import tempfile
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 import requests
 import numpy as np
@@ -337,6 +338,13 @@ class RawQwenBBoxRecord(BaseModel):
     bbox_original: list[float]
 
 
+@dataclass(frozen=True)
+class QwenReferenceImage:
+    logical_name: str
+    media_type: str
+    content: bytes
+
+
 class LocateDebugResponse(BaseModel):
     sku_id: str
     product_name: str
@@ -348,6 +356,9 @@ class LocateDebugResponse(BaseModel):
     inference_image_size: list[int] | None = None
     qwen3_prompt_used: str | None = None
     sam3_prompt_used: str | None = None
+    qwen_reference_image_used: bool = False
+    qwen_reference_image_name: str | None = None
+    qwen_reference_image_media_type: str | None = None
     raw_qwen_bboxes: list[RawQwenBBoxRecord] = Field(default_factory=list)
     qwen_bboxes: list[QwenBBoxRecord] = Field(default_factory=list)
     raw_sam_instances: list[LocatedInstance] = Field(default_factory=list)
@@ -634,6 +645,39 @@ def lookup_sku_by_name(name: str) -> dict[str, Any]:
     ):
         raise HTTPException(status_code=502, detail="SKU 查询响应缺少 sku_id 或 name")
     return product
+
+
+def fetch_sku_reference_image(product: dict[str, Any]) -> QwenReferenceImage:
+    """Fetch the first catalog image for a SHORTAGE target exactly once."""
+    images = product.get("images")
+    image_path = images[0] if isinstance(images, list) and images else None
+    if not isinstance(image_path, str) or not image_path.strip():
+        raise HTTPException(status_code=502, detail="SHORTAGE 商品缺少 SKU 样例图")
+
+    logical_path = PurePosixPath(image_path.strip().replace("\\", "/"))
+    if logical_path.is_absolute() or ".." in logical_path.parts:
+        raise HTTPException(status_code=502, detail="SHORTAGE SKU 样例图路径不合法")
+    try:
+        response = requests.get(
+            f"{SKU_API_URL}/{quote(logical_path.as_posix(), safe='/')}",
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except requests.RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"SHORTAGE SKU 样例图读取失败: {error}",
+        ) from error
+    if not response.content:
+        raise HTTPException(status_code=502, detail="SHORTAGE SKU 样例图为空")
+    media_type = response.headers.get("Content-Type", "image/jpeg").split(";", 1)[0]
+    if not media_type.startswith("image/"):
+        media_type = "image/jpeg"
+    return QwenReferenceImage(
+        logical_name=logical_path.as_posix(),
+        media_type=media_type,
+        content=response.content,
+    )
 
 
 def lookup_sku_row(location_id: str) -> list[dict[str, Any]]:
@@ -953,14 +997,48 @@ def prepare_rgb_inference_image(
     return inference_image, inference_bytes
 
 
-def call_qwen3(prompt: str, image_source: Path | bytes) -> str:
+def qwen_image_content(image_bytes: bytes, media_type: str) -> dict[str, Any]:
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{media_type};base64,{encoded}"},
+    }
+
+
+def call_qwen3(
+    prompt: str,
+    image_source: Path | bytes,
+    *,
+    reference_image: QwenReferenceImage | None = None,
+) -> str:
     if isinstance(image_source, Path):
         media_type = mimetypes.guess_type(image_source.name)[0] or "image/jpeg"
         image_bytes = image_source.read_bytes()
     else:
         media_type = "image/jpeg"
         image_bytes = image_source
-    image_base64 = base64.b64encode(image_bytes).decode("ascii")
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    if reference_image is not None:
+        content.extend(
+            [
+                {
+                    "type": "text",
+                    "text": (
+                        "下面第一张图是目标商品的标准 SKU 样例图，仅用于识别商品外观；"
+                        "不要输出这张样例图中的 bbox。"
+                    ),
+                },
+                qwen_image_content(reference_image.content, reference_image.media_type),
+                {
+                    "type": "text",
+                    "text": (
+                        "下面第二张图是待定位货架图。只输出第二张图中目标商品的 bbox，"
+                        "bbox 坐标必须以第二张图为准。"
+                    ),
+                },
+            ]
+        )
+    content.append(qwen_image_content(image_bytes, media_type))
     print(f"[Locate Qwen3] prompt before request:\n{prompt}", flush=True)
     response = requests.post(
         QWEN3_URL,
@@ -969,15 +1047,7 @@ def call_qwen3(prompt: str, image_source: Path | bytes) -> str:
             "messages": [
                 {
                     "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{media_type};base64,{image_base64}"
-                            },
-                        },
-                    ],
+                    "content": content,
                 }
             ],
             "temperature": QWEN_TEMPERATURE,
@@ -1128,12 +1198,22 @@ class QwenConsensusBBoxes(list[list[float]]):
 def get_stable_qwen_bboxes(
     prompt: str,
     image_source: Path | bytes,
+    *,
+    reference_image: QwenReferenceImage | None = None,
 ) -> list[list[float]]:
     samples: list[tuple[int, list[dict[str, Any]]]] = []
     errors: list[str] = []
     for sample_index in range(1, QWEN_SAMPLE_COUNT + 1):
         try:
-            content = call_qwen3(prompt, image_source)
+            content = (
+                call_qwen3(
+                    prompt,
+                    image_source,
+                    reference_image=reference_image,
+                )
+                if reference_image is not None
+                else call_qwen3(prompt, image_source)
+            )
             samples.append((sample_index, parse_qwen_detections(content)))
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as error:
             errors.append(f"第 {sample_index} 次: {error}")
@@ -2372,7 +2452,20 @@ def locate_product_in_image(
         original_image
     )
 
-    qwen_bboxes = get_stable_qwen_bboxes(qwen_prompt, inference_image_bytes)
+    qwen_reference_image = (
+        fetch_sku_reference_image(product)
+        if task_type.strip().upper() == "SHORTAGE"
+        else None
+    )
+    qwen_bboxes = (
+        get_stable_qwen_bboxes(
+            qwen_prompt,
+            inference_image_bytes,
+            reference_image=qwen_reference_image,
+        )
+        if qwen_reference_image is not None
+        else get_stable_qwen_bboxes(qwen_prompt, inference_image_bytes)
+    )
     if hard_case is not None and len(qwen_bboxes) > 1:
         # Hard cases use Qwen only to obtain one broad brand-row crop. Product
         # columns/flavours are determined from SAM instances afterwards.
@@ -2578,6 +2671,17 @@ def locate_product_in_image(
         inference_image_size=list(inference_image.size),
         qwen3_prompt_used=qwen_prompt,
         sam3_prompt_used=sam_prompt,
+        qwen_reference_image_used=qwen_reference_image is not None,
+        qwen_reference_image_name=(
+            qwen_reference_image.logical_name
+            if qwen_reference_image is not None
+            else None
+        ),
+        qwen_reference_image_media_type=(
+            qwen_reference_image.media_type
+            if qwen_reference_image is not None
+            else None
+        ),
         raw_qwen_bboxes=raw_qwen_bbox_records,
         qwen_bboxes=qwen_bbox_records,
         raw_sam_instances=raw_sam_instances,

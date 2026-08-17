@@ -568,6 +568,37 @@ textarea:focus {
   background-size: 16px 16px;
 }
 
+.qwen-reference-panel {
+  margin: 16px 0;
+}
+
+.qwen-reference-frame {
+  position: relative;
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #05090d;
+}
+
+.qwen-reference-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 360px;
+  object-fit: contain;
+}
+
+.qwen-reference-frame span {
+  position: absolute;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
 canvas {
   display: block;
   width: 100%;
