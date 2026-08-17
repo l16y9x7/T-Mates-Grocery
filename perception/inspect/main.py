@@ -1,19 +1,22 @@
 """Unified shelf-inspection API and algorithm fusion entry point.
 
-The public endpoint currently runs the training-free comparison algorithm.  The
-pipeline keeps localization details internally; the HTTP response exposes the
-stable product-oriented contract that a later Qwen recognition stage will fill.
+The formal SHORTAGE endpoint uses the production baseline/current SAM3
+front-row slot comparison.  The legacy comparison/Qwen path remains available
+for MISPLACED and caller-supplied offline diagnostics.
 """
 
 from __future__ import annotations
 
 import base64
 import binascii
+import json
 import logging
 import re
 import sys
 import time
+import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Protocol, Sequence
 
@@ -29,6 +32,11 @@ if __package__ and __package__.startswith("perception."):
         inspection_temporary_directory,
     )
     from ..initial_scan import InitialScanError, load_initial_scan
+    from .sam_shortage_pipeline import (
+        SamShortageError,
+        analysis_as_dict,
+        analyze_shortage,
+    )
     from .comparison_based import ComparisonConfig, detect_shortage
     from .comparison_based.qwen_review import (
         DEFAULT_DEBUG_ROOT,
@@ -64,6 +72,11 @@ else:
     )
     from initial_scan import InitialScanError, load_initial_scan
     from row_detection import RowDetectionConfig, RowDetectionResult, detect_rows
+    from sam_shortage_pipeline import (
+        SamShortageError,
+        analysis_as_dict,
+        analyze_shortage,
+    )
 
 
 TaskType = Literal["SHORTAGE", "MISPLACED"]
@@ -516,6 +529,23 @@ def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
                 current.directory,
                 int(np.count_nonzero(current.depth_mm > 0)),
             )
+            if (
+                request.task_type == "SHORTAGE"
+                and hasattr(baseline, "inspection_target_id")
+                and hasattr(baseline, "pose_type")
+            ):
+                return inspect_shortage_sam_images(
+                    location_id=getattr(
+                        baseline,
+                        "inspection_target_id",
+                        request.location_id,
+                    ),
+                    pose_type=getattr(baseline, "pose_type", request.pose_type),
+                    baseline=baseline.rgb,
+                    current=current.rgb,
+                    baseline_depth_mm=baseline.depth_mm,
+                    current_depth_mm=current.depth_mm,
+                )
             return inspect_supplied_images(
                 task_type=request.task_type,
                 location_id=request.location_id,
@@ -536,6 +566,114 @@ def inspect_shelf(request: InspectRequest) -> InspectApiResponse:
             status_code=500,
             detail=f"创建巡检临时目录失败: {error}",
         ) from error
+
+
+def inspect_shortage_sam_images(
+    *,
+    location_id: str,
+    pose_type: PoseType,
+    baseline: np.ndarray,
+    current: np.ndarray,
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+) -> InspectApiResponse:
+    """Run the production SAM3 slot comparison on in-memory RGB-D images."""
+
+    try:
+        analysis = analyze_shortage(
+            location_id=location_id,
+            pose_type=pose_type,
+            baseline_rgb=baseline,
+            baseline_depth_mm=baseline_depth_mm,
+            current_rgb=current,
+            current_depth_mm=current_depth_mm,
+        )
+    except SamShortageError as error:
+        detail = str(error)
+        status_code = 502 if detail.startswith("SAM3 ") else 500
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "type": "sam_shortage_failed",
+                "message": detail,
+            },
+        ) from error
+    response = InspectApiResponse(
+        findings=[
+            ShortageProductFinding(shortage_product_name=name)
+            for name in dict.fromkeys(analysis.missing_product_names)
+            if name.strip()
+        ]
+    )
+    try:
+        save_sam_shortage_debug_artifacts(
+            location_id=location_id,
+            pose_type=pose_type,
+            baseline=baseline,
+            current=current,
+            baseline_depth_mm=baseline_depth_mm,
+            current_depth_mm=current_depth_mm,
+            response=response,
+            analysis=analysis_as_dict(analysis),
+        )
+    except OSError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"保存 SAM3 shortage 巡检日志失败: {error}",
+        ) from error
+    return response
+
+
+def save_sam_shortage_debug_artifacts(
+    *,
+    location_id: str,
+    pose_type: PoseType,
+    baseline: np.ndarray,
+    current: np.ndarray,
+    baseline_depth_mm: np.ndarray,
+    current_depth_mm: np.ndarray,
+    response: InspectApiResponse,
+    analysis: dict[str, object],
+) -> Path:
+    """Persist the exact formal SHORTAGE RGB-D inputs and slot result."""
+
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S_%fZ")
+    safe_location = re.sub(r"[^A-Za-z0-9_.-]+", "_", location_id.strip())
+    directory = DEFAULT_DEBUG_ROOT / (
+        f"{timestamp}_{safe_location}_SHORTAGE_{uuid.uuid4().hex[:8]}"
+    )
+    directory.mkdir(parents=True, exist_ok=False)
+
+    def write_image(name: str, image: np.ndarray) -> None:
+        success, encoded = cv2.imencode(".jpg", np.asarray(image))
+        if not success:
+            raise OSError(f"无法编码巡检日志图片: {name}")
+        (directory / name).write_bytes(encoded.tobytes())
+
+    (directory / "request.json").write_text(
+        json.dumps(
+            {
+                "task_type": "SHORTAGE",
+                "location_id": location_id,
+                "pose_type": pose_type,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    write_image("baseline_rgb.jpg", baseline)
+    write_image("current_rgb.jpg", current)
+    np.save(directory / "baseline_depth_mm.npy", baseline_depth_mm, allow_pickle=False)
+    np.save(directory / "current_depth_mm.npy", current_depth_mm, allow_pickle=False)
+    saved_result = response.model_dump(mode="json")
+    saved_result["sam_shortage_analysis"] = analysis
+    (directory / "result.json").write_text(
+        json.dumps(saved_result, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return directory
 
 
 def inspect_supplied_images(

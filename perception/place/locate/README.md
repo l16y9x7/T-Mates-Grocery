@@ -2,15 +2,16 @@
 
 目标接口：`POST /perception/place/locate`
 
-接口已挂载到统一的 `8083` 感知服务。它适用于货架整体保持静止、
-相机观察位姿发生变化，但目标商品从标准场景中消失的补货场景。
+接口已挂载到统一的 `8083` 感知服务。正式 `SHORTAGE` 与 inspect 共用
+baseline/current SAM3 前排槽位对比，不再使用旧版 RGB-D 配准结果寻找目标槽位。
 
 ## 当前接口契约
 
 `/perception/inspect` 负责判断异常货架与商品名称；本接口固定从
 `agent/output/task0` 读取正常场景 RGB-D，并像 `/perception/inspect` 一样从头部相机
-获取当前场景 RGB-D。Task0 用于确定目标槽位，最终返回的参照物 bbox/mask 均位于
-当前头部相机图像坐标系。
+获取当前场景 RGB-D。Task0 用于确定目标槽位；输入 `name` 只执行目标所在货架层，
+但该层全部 SAM3 配置组都会参与邻居选择。最终返回的参照物 bbox/mask 均位于当前
+头部相机图像坐标系。
 
 ```json
 {
@@ -36,8 +37,9 @@ agent/output/task0/H1_B_L_INSPECT_LOWER/
 inspection 一样为必填。可用 `INITIAL_SCAN_ROOT` 覆盖 task0 根目录，使用
 `PRODUCT_HAND_OPTIONS_PATH` 覆盖货位映射文件。
 
-Task0 和当前缺货检测固定使用 `head_color_optical_frame`，请求不再接收相机内参。
-代码内置的 `1280×720` 标定为：
+正式 SHORTAGE 只使用已对齐的 RGB-D、row detection、SAM3 mask 和每个 mask 的稳健
+深度，不需要相机内参。保留的 debug/旧 MISPLACED 配准流程仍使用
+`head_color_optical_frame` 内置标定：
 
 ```text
 K = [[910.744324, 0,          650.132690],
@@ -64,9 +66,8 @@ distortion_model = plumb_bob
 }
 ```
 
-`level` 来自目标 bbox 对应的货架行：UPPER 的第 1/2 行映射为 `L1/L2`，LOWER 的
-第 1/2/3 行映射为 `L3/L4/L5`。若 `location_id` 本身包含明确的 `L1`—`L5`，则优先
-使用该层号并校验它与 `pose_type` 一致。
+`level` 来自已确认缺失槽位所在行：UPPER 的第 1/2 行映射为 `L1/L2`，LOWER 的
+第 1/2/3 行映射为 `L3/L4/L5`。
 
 `bbox` 是当前图像像素坐标的 `[x1,y1,x2,y2]` 数组，`mask` 与之逐项对应，且每张
 mask 都和 `current_image_path` 指向的 RGB 完全同尺寸、同坐标系。水平放置优先返回
@@ -88,24 +89,19 @@ mask 都和 `current_image_path` 指向的 RGB 完全同尺寸、同坐标系。
 ├── baseline_depth_mm.npy
 ├── current_rgb.jpg
 ├── current_depth_mm.npy
-├── change_mask_reference.png
-├── reference_component_mask.png
 ├── current_reference_crop_01.jpg
 ├── current_reference_crop_02.jpg
 ├── current_reference_mask_01.png
-├── current_reference_mask_02.png
-├── sam3_crop.jpg
-└── reference_sam3_mask.png
+└── current_reference_mask_02.png
 ```
 
 `current_reference_crop_*.jpg` 与 `current_reference_mask_*.png` 按响应数组顺序保存，
-来源都是当前 RGB。`sam3_crop.jpg` 和 `reference_sam3_mask.png` 保留 Task0 目标槽位
-识别过程，便于排查槽位投影错误。`result.json` 保留正式响应字段并记录所有产物路径。
+来源都是当前 RGB。`result.json` 保留正式响应字段、各槽位深度判定和所有产物路径。
 Place Locate 不接收 `reference_pose`，也不计算或返回商品 `target_pose`。
 
-`pose_type` 与 inspection 含义一致，支持 `""`、`SHELF_VIEW_UPPER` 和
-`SHELF_VIEW_LOWER`。接口复用顶层 `perception/row_detection`，将 reference mask
-限制到目标商品所在货架层；无法可靠检测行时自动回退到未裁层的 change mask。
+`pose_type` 与 inspection 含义一致，正式调用使用 `SHELF_VIEW_UPPER` 或
+`SHELF_VIEW_LOWER`。接口复用顶层 `perception/row_detection`，并读取
+`inspect/shortage_mapping_config.json` 的 prompt、列数和商品顺序。
 
 `POST /perception/place/locate/debug` 保留显式传入当前 RGB-D 的诊断请求，并额外返回缺货差异 bbox、
 reference mask 来源、SAM3 crop/bbox、匹配的 `row_index/row_bbox`、RGB-D 配准质量
@@ -120,9 +116,10 @@ test_web 的 `/qwen-review` 中结合已有 shortage 批测结果核验这一阶
 或 6D 位姿校验阻断。网页直接复用已得到的商品名、reference bbox 和 region mask，
 不再提供单独的上传页面。
 
-## 结论
+## 旧版配准调试能力（不属于正式 SHORTAGE）
 
-方案是合理的，但这里的“转移矩阵”必须是两个相机坐标系之间的 `4×4 SE(3)`
+以下 SE(3) 能力仍供 debug 和其它几何任务使用，但正式 SHORTAGE 路由不再执行这条
+链路。若其它任务需要转移 6D pose，“转移矩阵”必须是两个相机坐标系之间的 `4×4 SE(3)`
 刚体变换，不能直接使用 inspection 中用于二维图像对齐的 `3×3 homography`。
 
 设：
@@ -161,13 +158,15 @@ agent/output/task0/<inspection_target_id>_<UPPER|LOWER>/
 - 相机内参固定使用代码内置的头部相机标定。
 - 运行时还需要当前 RGB 和与其对齐的毫米深度。
 
-## 推荐流程
+## 正式 SHORTAGE 流程
 
-1. 根据 `name + location_id` 加载正常场景 RGB-D。
-2. 配准 Task0 和当前 RGB-D，在 Task0 中确定目标槽位并投影到当前图。
-3. 复用 Pick Locate 的商品 Prompt，在当前图目标货架行检测同名商品实例。
-4. 水平放置按目标槽位的左右位置选择两个邻居；上下放置选择正下方支撑物。
-5. 返回当前图 bbox/mask、方向、层号及当前 RGB 路径。
+1. 根据 `location_id + pose_type` 加载 Task0 baseline RGB-D，并采集当前 RGB-D。
+2. 两张图分别执行 row detection，并按 `shortage_mapping_config.json` 裁出目标层。
+3. 对目标层的所有配置组分别运行 SAM3、稳健深度前排筛选和预期列数约束。
+4. baseline/current 按从左到右的单调顺序比较槽位，使用 40 mm 深度阈值确认缺失。
+5. 根据输入 `name` 定位缺失槽位；水平商品选左右邻居或同侧两个，上下商品优先选
+   正下方支撑物。
+6. 返回当前图 bbox/mask、方向、层号及持久化当前 RGB 路径。
 
 inspection 的 ORB + homography 可以作为 RGB 特征初值或调试图，但不能替代三维
 刚体配准，因为 homography 不包含可靠的三维平移、尺度和离平面旋转。
@@ -177,14 +176,14 @@ inspection 的 ORB + homography 可以作为 RGB 特征初值或调试图，但�
 正式响应返回当前场景参照物的全分辨率二值 mask。每个 mask 与 `bbox` 同序，并与
 `current_image_path` 指向的当前 RGB 保持同尺寸、同坐标系。
 
-## Debug 响应
+## 旧版 Debug 响应
 
 正式请求和响应见文档开头的“当前接口契约”。Debug 接口额外返回缺货差异 region、
 货架行约束、SAM3 选择信息、投影后的 `target_bbox_current`、当前候选数，以及 RGB
 重投影 RMSE、三维 RMSE、对应点数量和 inlier ratio。注册矩阵仅保留在 Debug 的
 registration 诊断信息中，不属于正式接口响应。
 
-## 配准质量门槛
+## 旧版配准质量门槛
 
 当前 HTTP 层先执行以下保守门槛，后续需要用实际数据继续标定：
 
@@ -234,14 +233,15 @@ bbox/mask 和 `direction="up"`。下游可结合该 mask 内深度拟合顶部�
 
 - `POST /perception/place/locate` 正式接口；
 - `POST /perception/place/locate/debug` 诊断接口；
+- 正式 SHORTAGE 复用 inspect 的 baseline/current SAM3 槽位比较与商品顺序配置；
+- 仅运行目标商品所在层，同时汇总该层全部 prompt 组作为相邻参照候选；
+- 返回当前图全分辨率 bbox/mask、`left/right/both/up`、`L1`—`L5` 和持久化图片路径；
 - RGB 与 NPY/PNG/TIFF/RAW 深度解码及对齐尺寸校验；
 - 内置 `head_color_optical_frame` 的 `1280×720` 标定，并按输入 RGB 尺寸缩放；
-- 将 current 配准到 Task0 reference 后，在 reference 坐标系提取唯一缺货 bbox；
+- 旧版 debug 将 current 配准到 Task0 reference 后，在 reference 坐标系提取缺货 bbox；
 - SHORTAGE 使用已有商品 `sam3_prompt` 在 Task0 原图 bbox 附近分割实际商品，按与
   缺货 component 的重叠选择实例，并映射成与 Task0 depth 对齐的全图 reference mask；
 - MISPLACED 保留原有的差异 component 深度细化；
-- 在当前图目标货架行复用 Pick Locate 检测同名商品实例；
-- 按左右邻居或正下方支撑物规则返回当前图 bbox/mask；
 - 正式接口不返回旋转矩阵，也不接收或转换商品 6D pose。
 
 运行核心测试：

@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import sys
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -32,6 +33,13 @@ if __package__ and __package__.startswith("perception."):
         inspection_temporary_directory,
     )
     from ...initial_scan import InitialScanError, load_initial_scan
+    from ...inspect.sam_shortage_pipeline import (
+        SamShortageError,
+        analysis_as_dict,
+        analyze_shortage,
+        full_image_mask,
+        select_place_references,
+    )
     from ...row_detection import (
         PoseType,
         RowDetectionConfig,
@@ -39,12 +47,24 @@ if __package__ and __package__.startswith("perception."):
         detect_rows,
     )
 else:
+    PERCEPTION_ROOT = Path(__file__).resolve().parents[2]
+    INSPECT_ROOT = PERCEPTION_ROOT / "inspect"
+    for module_root in (PERCEPTION_ROOT, INSPECT_ROOT):
+        if str(module_root) not in sys.path:
+            sys.path.insert(0, str(module_root))
     from camera_capture import (
         CameraCaptureError,
         capture_head_rgbd,
         inspection_temporary_directory,
     )
     from initial_scan import InitialScanError, load_initial_scan
+    from sam_shortage_pipeline import (
+        SamShortageError,
+        analysis_as_dict,
+        analyze_shortage,
+        full_image_mask,
+        select_place_references,
+    )
     from row_detection import (
         PoseType,
         RowDetectionConfig,
@@ -547,7 +567,7 @@ def mask_bbox_xyxy(mask: np.ndarray) -> list[int]:
 
 
 def create_place_locate_artifact_directory(
-    request: PlaceLocateDebugRequest,
+    request: PlaceLocateDebugRequest | PlaceLocateRequest,
     *,
     artifact_root: str | Path | None = None,
 ) -> Path:
@@ -556,7 +576,12 @@ def create_place_locate_artifact_directory(
     root = Path(artifact_root) if artifact_root is not None else DEFAULT_ARTIFACT_ROOT
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S_%fZ")
     safe_location = re.sub(r"[^A-Za-z0-9_.-]+", "_", request.location_id.strip())
-    safe_product = re.sub(r"[^A-Za-z0-9_.-]+", "_", request.product_name.strip())
+    product_name = (
+        request.product_name
+        if isinstance(request, PlaceLocateDebugRequest)
+        else request.name
+    )
+    safe_product = re.sub(r"[^A-Za-z0-9_.-]+", "_", product_name.strip())
     directory = root / (
         f"{timestamp}_{safe_location}_{request.task_type}_{safe_product}_"
         f"{uuid.uuid4().hex[:8]}"
@@ -756,6 +781,89 @@ def save_place_locate_artifacts(
         directory,
         response.name,
         response.level,
+    )
+
+
+def save_sam_shortage_place_artifacts(
+    directory: Path,
+    *,
+    request: PlaceLocateRequest,
+    response: PlaceLocateResponse,
+    baseline_rgb: np.ndarray,
+    baseline_depth_mm: np.ndarray,
+    current_rgb: np.ndarray,
+    current_depth_mm: np.ndarray,
+    reference_masks: Sequence[np.ndarray],
+    analysis: dict[str, Any],
+) -> None:
+    """Persist the formal SAM3 shortage locate result in inspect-style form."""
+
+    directory.mkdir(parents=True, exist_ok=True)
+    _write_artifact_json(directory / "request.json", request.model_dump(mode="json"))
+    _write_artifact_image(directory / "baseline_rgb.jpg", baseline_rgb)
+    _write_artifact_depth(directory / "baseline_depth_mm.npy", baseline_depth_mm)
+    _write_artifact_image(directory / "current_rgb.jpg", current_rgb)
+    _write_artifact_depth(directory / "current_depth_mm.npy", current_depth_mm)
+    _write_artifact_json(
+        directory / "rgbd.json",
+        {
+            "schema_version": 1,
+            "depth_unit": "millimeter",
+            "depth_aligned_to": "matching_rgb",
+            "baseline": {
+                "rgb": "baseline_rgb.jpg",
+                "depth": "baseline_depth_mm.npy",
+                "image_size": [
+                    int(baseline_rgb.shape[1]),
+                    int(baseline_rgb.shape[0]),
+                ],
+            },
+            "current": {
+                "rgb": "current_rgb.jpg",
+                "depth": "current_depth_mm.npy",
+                "image_size": [
+                    int(current_rgb.shape[1]),
+                    int(current_rgb.shape[0]),
+                ],
+            },
+        },
+    )
+
+    crop_names: list[str] = []
+    mask_names: list[str] = []
+    for index, (bbox, mask) in enumerate(
+        zip(response.bbox, reference_masks, strict=True),
+        start=1,
+    ):
+        x1, y1, x2, y2 = _clamped_crop_box(bbox, current_rgb.shape)
+        crop_name = f"current_reference_crop_{index:02d}.jpg"
+        mask_name = f"current_reference_mask_{index:02d}.png"
+        _write_artifact_image(
+            directory / crop_name,
+            np.asarray(current_rgb)[y1:y2, x1:x2],
+        )
+        _write_artifact_image(directory / mask_name, mask)
+        crop_names.append(crop_name)
+        mask_names.append(mask_name)
+
+    saved_result = response.model_dump(mode="json")
+    saved_result["artifacts"] = {
+        "baseline_rgb": "baseline_rgb.jpg",
+        "baseline_depth_mm": "baseline_depth_mm.npy",
+        "current_rgb": "current_rgb.jpg",
+        "current_depth_mm": "current_depth_mm.npy",
+        "rgbd": "rgbd.json",
+        "bbox_crop": crop_names,
+        "sam3_mask": mask_names,
+        "mask_coordinate_system": "current_rgb",
+        "bbox_format": ["x1", "y1", "x2", "y2"],
+    }
+    saved_result["shortage_analysis"] = analysis
+    _write_artifact_json(directory / "result.json", saved_result)
+    logger.info(
+        "SAM3 shortage Place Locate artifacts saved: directory=%s product=%s",
+        directory,
+        response.name,
     )
 
 
@@ -1407,11 +1515,107 @@ def locate_place_debug(
         ) from error
 
 
+def locate_shortage_place_from_rgbd(
+    request: PlaceLocateRequest,
+    *,
+    current_rgb: np.ndarray,
+    current_depth_mm: np.ndarray,
+    artifact_root: str | Path | None = None,
+) -> PlaceLocateResponse:
+    """Use the production SAM3 slot comparison to locate placement references."""
+
+    try:
+        initial_scan = load_initial_scan(request.location_id, request.pose_type)
+    except InitialScanError as error:
+        raise HTTPException(
+            status_code=422,
+            detail={"type": "initial_scan_error", "message": str(error)},
+        ) from error
+
+    try:
+        analysis = analyze_shortage(
+            location_id=initial_scan.inspection_target_id,
+            pose_type=cast(PoseType, initial_scan.pose_type),
+            baseline_rgb=initial_scan.rgb,
+            baseline_depth_mm=initial_scan.depth_mm,
+            current_rgb=current_rgb,
+            current_depth_mm=current_depth_mm,
+            product_name_filter=request.name,
+        )
+        selection = select_place_references(analysis, request.name)
+    except SamShortageError as error:
+        message = str(error)
+        status_code = 502 if message.startswith("SAM3 ") else 422
+        raise HTTPException(
+            status_code=status_code,
+            detail={"type": "sam_shortage_place_failed", "message": message},
+        ) from error
+
+    image_height, image_width = current_rgb.shape[:2]
+    bboxes: list[list[int]] = []
+    full_masks: list[np.ndarray] = []
+    for instance in selection.references:
+        bbox = [
+            max(0, min(image_width, int(round(instance.bbox_original_xyxy[0])))),
+            max(0, min(image_height, int(round(instance.bbox_original_xyxy[1])))),
+            max(0, min(image_width, int(round(instance.bbox_original_xyxy[2])))),
+            max(0, min(image_height, int(round(instance.bbox_original_xyxy[3])))),
+        ]
+        _clamped_crop_box(bbox, current_rgb.shape)
+        bboxes.append(bbox)
+        full_masks.append(
+            full_image_mask(instance, selection.current_row, current_rgb.shape)
+        )
+
+    artifact_directory = create_place_locate_artifact_directory(
+        request,
+        artifact_root=artifact_root,
+    )
+    current_image_path = (artifact_directory / "current_rgb.jpg").resolve()
+    response = PlaceLocateResponse(
+        name=request.name,
+        bbox=bboxes,
+        mask=[encode_png_base64(mask) for mask in full_masks],
+        direction=selection.direction,
+        image_path=str(initial_scan.rgb_path.resolve()),
+        current_image_path=str(current_image_path),
+        level=cast(ShelfLevel, selection.level),
+    )
+    try:
+        save_sam_shortage_place_artifacts(
+            artifact_directory,
+            request=request,
+            response=response,
+            baseline_rgb=initial_scan.rgb,
+            baseline_depth_mm=initial_scan.depth_mm,
+            current_rgb=current_rgb,
+            current_depth_mm=current_depth_mm,
+            reference_masks=full_masks,
+            analysis=analysis_as_dict(analysis),
+        )
+    except OSError as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"保存 Place Locate SAM3 结果失败: {error}",
+        ) from error
+    return response
+
+
 @router.post("/perception/place/locate", response_model=PlaceLocateResponse)
 def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
     try:
         with inspection_temporary_directory() as temporary_directory:
             current = capture_head_rgbd(temporary_directory)
+            if (
+                request.task_type == "SHORTAGE"
+                and hasattr(current, "rgb")
+                and hasattr(current, "depth_mm")
+            ):
+                return locate_shortage_place_from_rgbd(
+                    request,
+                    current_rgb=current.rgb,
+                    current_depth_mm=current.depth_mm,
+                )
             debug_request = PlaceLocateDebugRequest(
                 task_type=request.task_type,
                 product_name=request.name,
