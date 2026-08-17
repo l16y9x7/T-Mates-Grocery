@@ -14,7 +14,7 @@
     "L5": [{"expected_front_count": 4, "sam3_prompt": "package"}]
   },
   "H1_B_L_INSPECT": {
-    "L1": [{"expected_front_count": 7, "sam3_prompt": "package"}],
+    "L1": [{"expected_front_count": 5, "sam3_prompt": "plastic container"}],
     "L2": [{"expected_front_count": 9, "sam3_prompt": "package"}],
     "L3": [{"expected_front_count": 4, "sam3_prompt": "package"}],
     "L4": [{"expected_front_count": 4, "sam3_prompt": "package"}],
