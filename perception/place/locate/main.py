@@ -185,6 +185,7 @@ class PlaceLocateResponse(BaseModel):
     bbox: list[int]
     mask: str
     image_path: str
+    current_image_path: str
     rotate_matrix: list[list[float]]
     level: ShelfLevel
 
@@ -886,11 +887,17 @@ def build_debug_response(
     )
     reference_height, reference_width = reference_image.shape[:2]
     current_height, current_width = current_image.shape[:2]
+    current_image_path = (
+        str((artifact_directory / "current_rgb.jpg").resolve())
+        if artifact_directory is not None
+        else request.current_image_name
+    )
     response = PlaceLocateDebugResponse(
         product_name=request.product_name,
         bbox=reference_product_bbox,
         mask=encode_png_base64(reference_mask),
         image_path=baseline_path,
+        current_image_path=current_image_path,
         rotate_matrix=registration.current_from_reference.tolist(),
         level=level,
         task_type=request.task_type,
@@ -1171,6 +1178,7 @@ def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
         bbox=debug.bbox,
         mask=debug.mask,
         image_path=debug.image_path,
+        current_image_path=debug.current_image_path,
         rotate_matrix=debug.rotate_matrix,
         level=debug.level,
     )

@@ -97,6 +97,7 @@ MAX_FRONT_RIGHT_TOP_FRAGMENT_WIDTH_RATIO = 0.14
 MAX_FRONT_RIGHT_TOP_FRAGMENT_HEIGHT_RATIO = 0.22
 MIN_MOVEMENT_OBJECT_WINDOW_FARTHER_RATIO = 0.20
 MIN_DEPTH_SUPPORTED_OBJECT_WINDOW_RATIO = 0.02
+MIN_NARROW_RGB_FALLBACK_FARTHER_WINDOW_RATIO = 0.12
 RECOVERY_CLOSE_RATIO = 0.05
 MIN_RECOVERY_COMPONENT_AREA_RATIO = 0.0025
 MIN_RECOVERY_WIDTH_TO_ROW_HEIGHT_RATIO = 0.15
@@ -1923,6 +1924,19 @@ def filter_shelf_interference_candidates(
                 and window_farther_ratio < 0.06
             ):
                 reasons.append("front-left RGB shift has no depth-hole support")
+            if (
+                not lower_view
+                and row_index >= 2
+                and bool(support.get("rgb_fallback"))
+                and width_ratio < 0.15
+                and height_ratio < 0.35
+                and window_farther_ratio
+                < MIN_NARROW_RGB_FALLBACK_FARTHER_WINDOW_RATIO
+            ):
+                reasons.append(
+                    "narrow front-left RGB fallback has weak object-window "
+                    "depth-hole support"
+                )
             if (
                 not lower_view
                 and row_index >= 2

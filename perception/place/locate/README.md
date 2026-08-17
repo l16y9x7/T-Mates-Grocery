@@ -59,6 +59,7 @@ distortion_model = plumb_bob
   "bbox": [310, 220, 430, 650],
   "mask": "<Task0 原图同尺寸的 PNG base64>",
   "image_path": "agent/output/task0/H1_F_L_INSPECT_UPPER/rgb.jpg",
+  "current_image_path": "place/locate/debug/<record>/current_rgb.jpg",
   "level": "L2",
   "rotate_matrix": [
     [1, 0, 0, 25],

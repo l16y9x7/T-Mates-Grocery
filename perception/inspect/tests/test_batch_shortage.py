@@ -944,6 +944,58 @@ class ShortageBatchTest(unittest.TestCase):
         self.assertEqual(len(kept), 1)
         self.assertEqual(rejected, [])
 
+    def test_front_left_upper_rejects_narrow_rgb_fallback_without_depth_hole(
+        self,
+    ) -> None:
+        image = np.full((120, 200, 3), 90, dtype=np.uint8)
+        response = batch.INSPECT_API.InspectResponse(
+            location_id="H1_F_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+            task_type="SHORTAGE",
+            has_anomaly=True,
+            image_size=[200, 120],
+            bbox_format=["x", "y", "width", "height"],
+            findings=[],
+            algorithms=[],
+        )
+        execution = batch.INSPECT_API.InspectionExecution(
+            response=response,
+            review_image=image,
+            review_mask=np.zeros((120, 200), dtype=np.uint8),
+            review_homography=np.eye(3, dtype=np.float64),
+        )
+        finding = batch.INSPECT_API.Finding(
+            bbox=[35, 35, 7, 27],
+            center=[38, 48],
+            sources=["comparison_based"],
+            votes=1,
+        )
+        region_mask = np.zeros((120, 200), dtype=np.uint8)
+        region_mask[35:62, 35:42] = 255
+        baseline_depth = np.full((120, 200), 900, dtype=np.float32)
+        current_depth = baseline_depth.copy()
+        current_depth[36:61, 35:39] = 1100
+        row = SimpleNamespace(index=2, bbox=(0, 20, 200, 100), lower_rail_index=0)
+        rail = SimpleNamespace(line=(0, 119, 199, 119), y_center=119)
+
+        kept, rejected = batch.filter_shelf_interference_candidates(
+            [(finding, {"rgb_fallback": True}, region_mask)],
+            execution=execution,
+            baseline_image=None,
+            baseline_depth_mm=baseline_depth,
+            current_depth_mm=current_depth,
+            rows=[row],
+            rails=[rail],
+        )
+
+        self.assertEqual(kept, [])
+        self.assertEqual(len(rejected), 1)
+        self.assertLess(
+            rejected[0]["object_window_farther_ratio"],
+            batch.MIN_NARROW_RGB_FALLBACK_FARTHER_WINDOW_RATIO,
+        )
+        self.assertIn("weak object-window", rejected[0]["reasons"][0])
+
     def test_promoted_background_depth_is_rejected_by_dynamic_row_limit(self) -> None:
         image = np.full((120, 200, 3), 90, dtype=np.uint8)
         response = batch.INSPECT_API.InspectResponse(

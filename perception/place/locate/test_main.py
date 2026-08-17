@@ -97,6 +97,7 @@ class PlaceLocateApiTest(unittest.TestCase):
         self.assertEqual(result.inspection_target_id, "H1_F_L_INSPECT")
         self.assertTrue(result.baseline_path.endswith("rgb.jpg"))
         self.assertEqual(result.image_path, result.baseline_path)
+        self.assertEqual(result.current_image_path, request.current_image_name)
         self.assertEqual(result.image_size, [320, 240])
         self.assertEqual(result.current_image_size, [320, 240])
         self.assertGreater(result.registration.inlier_count, 12)
@@ -202,7 +203,7 @@ class PlaceLocateApiTest(unittest.TestCase):
                 patch.object(api, "load_initial_scan", return_value=scan),
                 patch.object(api, "generate_reference_mask", return_value=sam_result),
             ):
-                api.locate_place_debug(
+                result = api.locate_place_debug(
                     request,
                     persist_artifacts=True,
                     artifact_root=artifact_root,
@@ -212,6 +213,9 @@ class PlaceLocateApiTest(unittest.TestCase):
             artifact_directories = list(artifact_root.iterdir())
             self.assertEqual(len(artifact_directories), 1)
             artifact_directory = artifact_directories[0]
+            expected_current_image_path = (
+                artifact_directory / "current_rgb.jpg"
+            ).resolve()
             expected_files = {
                 "request.json",
                 "result.json",
@@ -251,6 +255,15 @@ class PlaceLocateApiTest(unittest.TestCase):
             )
 
             self.assertEqual(saved_request, request_payload)
+            self.assertEqual(
+                Path(result.current_image_path),
+                expected_current_image_path,
+            )
+            self.assertTrue(expected_current_image_path.is_file())
+            self.assertEqual(
+                Path(saved_result["current_image_path"]),
+                expected_current_image_path,
+            )
             self.assertEqual(saved_result["product_name"], "测试商品")
             self.assertEqual(saved_result["artifacts"]["sam3_mask"], "sam3_mask.png")
             self.assertEqual(
@@ -277,6 +290,7 @@ class PlaceLocateApiTest(unittest.TestCase):
             bbox=[100, 200, 300, 400],
             mask="mask",
             image_path="task0/rgb.jpg",
+            current_image_path="artifacts/current_rgb.jpg",
             rotate_matrix=np.eye(4).tolist(),
             level="L2",
             task_type="SHORTAGE",
@@ -328,6 +342,7 @@ class PlaceLocateApiTest(unittest.TestCase):
                 "bbox": [100, 200, 300, 400],
                 "mask": "mask",
                 "image_path": "task0/rgb.jpg",
+                "current_image_path": "artifacts/current_rgb.jpg",
                 "rotate_matrix": np.eye(4).tolist(),
                 "level": "L2",
             },
