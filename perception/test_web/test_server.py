@@ -13,6 +13,159 @@ import server
 
 
 class PromptMappingTest(unittest.TestCase):
+    def test_sam_row_debug_page_exposes_row_prompt_controls(self) -> None:
+        html = (server.STATIC_DIR / "sam_row_debug.html").read_text(encoding="utf-8")
+        js = (server.STATIC_DIR / "sam_row_debug.js").read_text(encoding="utf-8")
+        review_html = (server.STATIC_DIR / "qwen_review.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('id="rowSelect"', html)
+        self.assertIn('id="promptInput"', html)
+        self.assertIn('id="runAll"', html)
+        self.assertIn("/api/sam-row-debug/records", js)
+        self.assertIn("/api/sam-row-debug/run", js)
+        self.assertIn('href="/sam-row-debug"', review_html)
+
+    def test_sam_row_run_returns_mask_depth_statistics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row_directory = root / "row_01_L1"
+            row_directory.mkdir(parents=True)
+            image = server.np.full((20, 30, 3), 80, dtype=server.np.uint8)
+            depth = server.np.full((20, 30), 900, dtype=server.np.uint16)
+            depth[2:10, 3:12] = 1200
+            success, encoded_rgb = server.cv2.imencode(".jpg", image)
+            self.assertTrue(success)
+            encoded_rgb.tofile(row_directory / "rgb.jpg")
+            server.np.save(row_directory / "depth_mm.npy", depth, allow_pickle=False)
+            mask = server.np.zeros((20, 30), dtype=server.np.uint8)
+            mask[2:10, 3:12] = 255
+            success, encoded_mask = server.cv2.imencode(".png", mask)
+            self.assertTrue(success)
+            mask_base64 = base64.b64encode(encoded_mask.tobytes()).decode("ascii")
+            metadata = {
+                "rows": [
+                    {
+                        "row_index": 1,
+                        "level": "L1",
+                        "crop_bbox_xywh": [0, 40, 30, 20],
+                        "rgb": "row_01_L1/rgb.jpg",
+                        "depth_mm": "row_01_L1/depth_mm.npy",
+                    }
+                ]
+            }
+
+            with (
+                patch.object(
+                    server,
+                    "ensure_sam_row_export",
+                    return_value=(root, metadata),
+                ),
+                patch.object(
+                    server,
+                    "call_sam3_image_path",
+                    return_value={
+                        "instances": [
+                            {
+                                "instance_id": 7,
+                                "score": 0.94,
+                                "bbox_xyxy": [3, 2, 12, 10],
+                                "mask_png_base64": mask_base64,
+                            }
+                        ]
+                    },
+                ),
+            ):
+                result = server.run_sam_row_debug(
+                    server.SamRowRunRequest(
+                        group="H1_F_L_INSPECT_UPPER",
+                        record="record",
+                        row_index=1,
+                        sku_name="景田饮用纯净水",
+                        prompt="frontmost bottle",
+                    )
+                )
+
+        self.assertEqual(len(result["instances"]), 1)
+        instance = result["instances"][0]
+        self.assertEqual(instance["front_depth_mm"], 1200.0)
+        self.assertEqual(instance["depth_median_mm"], 1200.0)
+        self.assertEqual(instance["valid_depth_ratio"], 1.0)
+        self.assertEqual(instance["bbox_original_xyxy"], [3.0, 42.0, 12.0, 50.0])
+        self.assertTrue(instance["mask_data_url"].startswith("data:image/png;base64,"))
+        self.assertTrue(result["overlay_data_url"].startswith("data:image/png;base64,"))
+
+    def test_sam_row_records_include_row_candidate_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_root = root / "rows"
+            group = "H1_F_L_INSPECT_UPPER"
+            record = "20260816T205750_798810Z_H1_F_L_INSPECT_SHORTAGE_1aa7e2d9"
+            source = root / group / record
+            output = output_root / group / record
+            source.mkdir(parents=True)
+            output.mkdir(parents=True)
+            for name in ("rgb.jpg", "depth_mm.npy", "baseline_rgb.jpg"):
+                (source / name).write_bytes(b"data")
+            for name in (
+                "rows.json",
+                "row_detection.jpg",
+                "row_01_L1/rgb.jpg",
+                "row_01_L1/depth_preview.png",
+                "row_01_L1/valid_depth_mask.png",
+            ):
+                path = output / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"data")
+            debug = root / "qwen_debug" / record
+            debug.mkdir(parents=True)
+            (debug / "candidates.json").write_text(
+                json.dumps({"rows": [[{"name": "NFC桔汁"}]]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            metadata = {
+                "pose_type": "SHELF_VIEW_UPPER",
+                "rows": [
+                    {
+                        "row_index": 1,
+                        "level": "L1",
+                        "rgb": "row_01_L1/rgb.jpg",
+                        "depth_mm": "row_01_L1/depth_mm.npy",
+                        "depth_preview": "row_01_L1/depth_preview.png",
+                        "valid_depth_mask": "row_01_L1/valid_depth_mask.png",
+                    }
+                ],
+            }
+            with (
+                patch.object(server, "REAL_SHORTAGE_BATCH_ROOT", root),
+                patch.object(server, "REAL_SHORTAGE_SAM_ROWS_ROOT", output_root),
+                patch.object(
+                    server,
+                    "ensure_sam_row_export",
+                    return_value=(output, metadata),
+                ),
+                patch.object(
+                    server,
+                    "load_prompt_pair_mapping",
+                    return_value={
+                        "NFC桔汁": {
+                            "qwen3_prompt": "unused",
+                            "sam3_prompt": "frontmost carton",
+                        }
+                    },
+                ),
+            ):
+                payload = server.list_sam_row_debug_records()
+
+        self.assertEqual(len(payload["records"]), 1)
+        row = payload["records"][0]["rows"][0]
+        self.assertEqual(row["candidate_skus"], ["NFC桔汁"])
+        self.assertEqual(
+            payload["prompt_mapping"],
+            [{"sku_name": "NFC桔汁", "prompt": "frontmost carton"}],
+        )
+
     def test_locate_pages_expose_offline_full_pipeline_controls(self) -> None:
         index_html = (server.STATIC_DIR / "index.html").read_text(encoding="utf-8")
         app_js = (server.STATIC_DIR / "app.js").read_text(encoding="utf-8")

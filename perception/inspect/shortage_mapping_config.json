@@ -1,0 +1,58 @@
+{
+  "H1_F_L_INSPECT": {
+    "L1": {"expected_front_count": 9, "sam3_prompt": "package"},
+    "L2": {"expected_front_count": 6, "sam3_prompt": "package"},
+    "L3": {"expected_front_count": 5, "sam3_prompt": "package"},
+    "L4": {"expected_front_count": 5, "sam3_prompt": "package"},
+    "L5": {"expected_front_count": 4, "sam3_prompt": "package"}
+  },
+  "H1_F_R_INSPECT": {
+    "L1": {"expected_front_count": 5, "sam3_prompt": "package"},
+    "L2": {"expected_front_count": 7, "sam3_prompt": "package"},
+    "L3": {"expected_front_count": 4, "sam3_prompt": "package"},
+    "L4": {"expected_front_count": 4, "sam3_prompt": "package"},
+    "L5": {"expected_front_count": 4, "sam3_prompt": "package"}
+  },
+  "H1_B_L_INSPECT": {
+    "L1": {"expected_front_count": 7, "sam3_prompt": "package"},
+    "L2": {"expected_front_count": 9, "sam3_prompt": "package"},
+    "L3": {"expected_front_count": 4, "sam3_prompt": "package"},
+    "L4": {"expected_front_count": 4, "sam3_prompt": "package"},
+    "L5": {"expected_front_count": 3, "sam3_prompt": "box"}
+  },
+  "H1_B_R_INSPECT": {
+    "L1": {"expected_front_count": 5, "sam3_prompt": "package"},
+    "L2": {"expected_front_count": 8, "sam3_prompt": "package"},
+    "L3": {"expected_front_count": 7, "sam3_prompt": "package"},
+    "L4": {"expected_front_count": 6, "sam3_prompt": "package"},
+    "L5": {"expected_front_count": 3, "sam3_prompt": "bottle"}
+  },
+  "H2_F_L_INSPECT": {
+    "L1": {"expected_front_count": 6, "sam3_prompt": "drink can"},
+    "L2": {"expected_front_count": 6, "sam3_prompt": "bottle"},
+    "L3": {"expected_front_count": 5, "sam3_prompt": "bottle"},
+    "L4": {"expected_front_count": 6, "sam3_prompt": "bottle"},
+    "L5": {"expected_front_count": 6, "sam3_prompt": "bottle"}
+  },
+  "H2_F_R_INSPECT": {
+    "L1": {"expected_front_count": 6, "sam3_prompt": "bottle"},
+    "L2": {"expected_front_count": 6, "sam3_prompt": "bottle"},
+    "L3": {"expected_front_count": 6, "sam3_prompt": "bottle"},
+    "L4": {"expected_front_count": 7, "sam3_prompt": "bottle"},
+    "L5": {"expected_front_count": 6, "sam3_prompt": "bottle"}
+  },
+  "H2_B_L_INSPECT": {
+    "L1": {"expected_front_count": 5, "sam3_prompt": "package"},
+    "L2": {"expected_front_count": 3, "sam3_prompt": "box"},
+    "L3": {"expected_front_count": 6, "sam3_prompt": "package"},
+    "L4": [{"expected_front_count": 1, "sam3_prompt": "package"}, {"expected_front_count": 1, "sam3_prompt": "bottle"}],
+    "L5": {"expected_front_count": 3, "sam3_prompt": "package"}
+  },
+  "H2_B_R_INSPECT": {
+    "L1": {"expected_front_count": null, "sam3_prompt": ""},
+    "L2": {"expected_front_count": null, "sam3_prompt": ""},
+    "L3": {"expected_front_count": null, "sam3_prompt": ""},
+    "L4": {"expected_front_count": null, "sam3_prompt": ""},
+    "L5": {"expected_front_count": null, "sam3_prompt": ""}
+  }
+}

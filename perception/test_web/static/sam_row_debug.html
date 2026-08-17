@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SAM3 行内深度调试</title>
+    <link rel="stylesheet" href="/static/sam_row_debug.css?v=2" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">ROW DETECTION · SAM3 · DEPTH</p>
+          <h1>SAM3 行内深度调试</h1>
+          <p>选择实测组、记录和货架层，使用映射或自定义 Prompt 检测第一排物品。</p>
+        </div>
+        <nav>
+          <a href="/qwen-review">Inspection Review</a>
+          <a href="/qwen-debug">Qwen / SAM3 Debug</a>
+        </nav>
+      </header>
+
+      <section class="card controls">
+        <label>分组<select id="groupSelect"></select></label>
+        <label>记录<select id="recordSelect"></select></label>
+        <label>货架层<select id="rowSelect"></select></label>
+        <span id="loadStatus" class="status">正在读取数据……</span>
+      </section>
+
+      <section class="compare-grid">
+        <figure id="baselineFigure">
+          <figcaption><strong>Baseline</strong><small>缺货前</small></figcaption>
+          <img id="baselineImage" alt="Baseline RGB" />
+        </figure>
+        <figure>
+          <figcaption><strong>Current</strong><small>当前实测图</small></figcaption>
+          <img id="currentImage" alt="Current RGB" />
+        </figure>
+      </section>
+
+      <section class="row-grid">
+        <figure>
+          <figcaption><strong>Row detection</strong><small>ROW / RAIL 检测</small></figcaption>
+          <img id="rowDetectionImage" alt="Row detection" />
+        </figure>
+        <figure>
+          <figcaption><strong id="rowRgbTitle">Row crop</strong><small id="rowBBox">—</small></figcaption>
+          <img id="rowRgbImage" alt="Row RGB crop" />
+        </figure>
+        <figure>
+          <figcaption><strong>Row depth</strong><small id="rowDepthSummary">有效深度预览</small></figcaption>
+          <img id="rowDepthImage" alt="Row depth preview" />
+        </figure>
+      </section>
+
+      <section class="card prompt-panel">
+        <label>映射商品<select id="skuSelect"></select></label>
+        <label class="prompt-field">SAM3 Prompt<textarea id="promptInput" rows="3" placeholder="例如：frontmost bottle"></textarea></label>
+        <div class="actions">
+          <button id="runPrompt">运行当前 Prompt</button>
+          <button id="runAll" class="secondary">运行本层全部映射 Prompt</button>
+        </div>
+        <span id="runStatus" class="status">等待运行</span>
+      </section>
+
+      <section id="results" class="results"></section>
+    </main>
+    <script src="/static/sam_row_debug.js?v=2"></script>
+  </body>
+</html>

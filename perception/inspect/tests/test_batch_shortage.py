@@ -82,6 +82,49 @@ class ShortageBatchTest(unittest.TestCase):
         self.assertEqual(records[0]["pose_type"], "SHELF_VIEW_UPPER")
         self.assertEqual(records[0]["location_id"], "H1_B_R_INSPECT")
 
+    def test_discovers_converted_live_shortage_record_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_name = (
+                "20260816T205750_798810Z_"
+                "H1_F_L_INSPECT_SHORTAGE_1aa7e2d9"
+            )
+            record = root / "H1_F_L_INSPECT_UPPER" / record_name
+            record.mkdir(parents=True)
+
+            records = batch.discover_records(root)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["record"], record_name)
+        self.assertEqual(records[0]["inspection_target_id"], "H1_F_L_INSPECT")
+        self.assertEqual(records[0]["pose_type"], "SHELF_VIEW_UPPER")
+
+    def test_collects_result_from_converted_live_shortage_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record_name = (
+                "20260816T205750_798810Z_"
+                "H1_F_L_INSPECT_SHORTAGE_1aa7e2d9"
+            )
+            result_path = (
+                root
+                / "H1_F_L_INSPECT_UPPER"
+                / record_name
+                / batch.RESULT_DIRECTORY_NAME
+                / "result.json"
+            )
+            batch.write_json_atomic(
+                result_path,
+                {"record": record_name, "status": "success"},
+            )
+
+            results = batch.collect_results(root)
+
+        self.assertEqual(
+            results,
+            [{"record": record_name, "status": "success"}],
+        )
+
     def test_detection_stage_rejects_candidate_outside_shelf_span(self) -> None:
         row = SimpleNamespace(
             bbox=[0, 273, 1280, 377],

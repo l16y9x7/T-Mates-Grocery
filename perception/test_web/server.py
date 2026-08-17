@@ -30,6 +30,7 @@ PERCEPTION_ROOT = ROOT.parent
 if str(PERCEPTION_ROOT) not in sys.path:
     sys.path.insert(0, str(PERCEPTION_ROOT))
 from config import QWEN3_MODEL, QWEN3_URL, SAM3_URL, SERVICE_BIND_HOST  # noqa: E402
+from front_row_selection import select_front_row_instances  # noqa: E402
 from initial_scan import InitialScanError, initial_scan_root, load_initial_scan  # noqa: E402
 from place.locate.reference_mask import (  # noqa: E402
     ReferenceMaskError,
@@ -84,6 +85,8 @@ SHORTAGE_BATCH_SUMMARY_PATH = (
     SHORTAGE_BATCH_ROOT / "shortage_inspection_batch_results.json"
 )
 REAL_SHORTAGE_BATCH_ROOT = DATA_ROOT / "real_shortage_regression"
+REAL_SHORTAGE_SAM_ROWS_ROOT = DATA_ROOT / "real_shortage_sam_rows"
+SAM_ROW_EXPORTER_PATH = INSPECT_ROOT / "export_sam_rows.py"
 SHORTAGE_BATCH_DATASETS = {
     "self_collect": {
         "label": "自采缺货批测",
@@ -220,6 +223,14 @@ class SamCropRequest(BaseModel):
     crop_box_original: list[float]
 
 
+class SamRowRunRequest(BaseModel):
+    group: str
+    record: str
+    row_index: int = Field(ge=1)
+    sku_name: str = ""
+    prompt: str = ""
+
+
 class QwenDetection(BaseModel):
     name: str
     bbox: list[float]
@@ -253,6 +264,11 @@ def qwen_review_page() -> FileResponse:
     """Serve the canonical inspection review page; keep the old URL as an alias."""
 
     return FileResponse(STATIC_DIR / "qwen_review.html")
+
+
+@app.get("/sam-row-debug")
+def sam_row_debug_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "sam_row_debug.html")
 
 
 def resolve_initial_scan_for_web(scan_name: str) -> Path:
@@ -361,6 +377,220 @@ def get_initial_scan_row_overlay(scan_name: str) -> FileResponse:
         / "04_rows_and_rails.jpg"
     )
     return FileResponse(path, media_type="image/jpeg")
+
+
+def load_sam_row_exporter() -> ModuleType:
+    module_name = "perception_sam_row_exporter_web_api"
+    existing = sys.modules.get(module_name)
+    if isinstance(existing, ModuleType):
+        return existing
+    spec = importlib.util.spec_from_file_location(module_name, SAM_ROW_EXPORTER_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load SAM row exporter from {SAM_ROW_EXPORTER_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def resolve_sam_row_record(group: str, record: str) -> tuple[Path, str]:
+    match = INITIAL_SCAN_DIRECTORY_PATTERN.fullmatch(group.strip().upper())
+    if match is None:
+        raise HTTPException(status_code=400, detail="SAM 行调试分组名称不合法")
+    if Path(record).name != record or not record.strip():
+        raise HTTPException(status_code=400, detail="SAM 行调试 record 名称不合法")
+    root = REAL_SHORTAGE_BATCH_ROOT.resolve()
+    directory = (root / group / record).resolve()
+    if directory.parent != (root / group).resolve() or not directory.is_dir():
+        raise HTTPException(status_code=404, detail="SAM 行调试 record 不存在")
+    pose_type = f"SHELF_VIEW_{match.group('pose')}"
+    return directory, pose_type
+
+
+def ensure_sam_row_export(group: str, record: str) -> tuple[Path, dict]:
+    record_directory, pose_type = resolve_sam_row_record(group, record)
+    rgb_path = record_directory / "rgb.jpg"
+    depth_path = record_directory / "depth_mm.npy"
+    if not rgb_path.is_file() or not depth_path.is_file():
+        raise HTTPException(status_code=404, detail="实测 record 缺少 rgb.jpg/depth_mm.npy")
+    output_directory = REAL_SHORTAGE_SAM_ROWS_ROOT / group / record
+    metadata_path = output_directory / "rows.json"
+    dependency_mtime = max(
+        rgb_path.stat().st_mtime_ns,
+        depth_path.stat().st_mtime_ns,
+        ROW_DETECTOR_SOURCE_PATH.stat().st_mtime_ns,
+        SAM_ROW_EXPORTER_PATH.stat().st_mtime_ns,
+    )
+    cache_current = metadata_path.is_file() and metadata_path.stat().st_mtime_ns >= dependency_mtime
+    metadata: dict | None = None
+    if cache_current:
+        metadata = load_json_file(metadata_path, "SAM 行切分 metadata")
+        rows = metadata.get("rows", [])
+        cache_current = isinstance(rows, list) and bool(rows) and all(
+            isinstance(row, dict)
+            and isinstance(row.get("rgb"), str)
+            and isinstance(row.get("depth_mm"), str)
+            and (output_directory / row["rgb"]).is_file()
+            and (output_directory / row["depth_mm"]).is_file()
+            for row in rows
+        )
+    if not cache_current:
+        try:
+            metadata = load_sam_row_exporter().export_record(
+                record_directory,
+                output_directory,
+                pose_type=pose_type,
+                overwrite=True,
+            )
+        except (RuntimeError, ValueError, cv2.error) as error:
+            raise HTTPException(
+                status_code=422,
+                detail=f"row_detection/行切分失败: {error}",
+            ) from error
+    assert metadata is not None
+    return output_directory, metadata
+
+
+def sam_row_candidate_skus(record: str, row_index: int) -> list[str]:
+    path = REAL_SHORTAGE_BATCH_ROOT / "qwen_debug" / record / "candidates.json"
+    if not path.is_file():
+        return []
+    payload = load_json_file(path, "SAM 行调试候选")
+    rows = payload.get("rows", [])
+    if not isinstance(rows, list) or not 0 < row_index <= len(rows):
+        return []
+    row = rows[row_index - 1]
+    if not isinstance(row, list):
+        return []
+    return [
+        str(item["name"]).strip()
+        for item in row
+        if isinstance(item, dict)
+        and isinstance(item.get("name"), str)
+        and str(item["name"]).strip()
+    ]
+
+
+def sam_row_artifact_url(relative_path: str, version: int) -> str:
+    normalized = relative_path.replace("\\", "/")
+    return (
+        f"/api/sam-row-debug/file/{quote(normalized, safe='/')}?v={version}"
+    )
+
+
+@app.get("/api/sam-row-debug/records")
+def list_sam_row_debug_records() -> dict:
+    mapping = load_prompt_pair_mapping("SORTING")
+    prompt_mapping = [
+        {"sku_name": sku_name, "prompt": pair["sam3_prompt"]}
+        for sku_name, pair in sorted(mapping.items())
+        if pair["sam3_prompt"].strip()
+    ]
+    records: list[dict[str, object]] = []
+    errors: list[dict[str, str]] = []
+    if not REAL_SHORTAGE_BATCH_ROOT.is_dir():
+        raise HTTPException(status_code=404, detail="真实实测数据目录不存在")
+    for group_directory in sorted(
+        REAL_SHORTAGE_BATCH_ROOT.iterdir(), key=lambda path: path.name
+    ):
+        if (
+            not group_directory.is_dir()
+            or INITIAL_SCAN_DIRECTORY_PATTERN.fullmatch(group_directory.name) is None
+        ):
+            continue
+        for record_directory in sorted(
+            group_directory.iterdir(), key=lambda path: path.name
+        ):
+            if not record_directory.is_dir():
+                continue
+            try:
+                output_directory, metadata = ensure_sam_row_export(
+                    group_directory.name,
+                    record_directory.name,
+                )
+            except HTTPException as error:
+                errors.append(
+                    {
+                        "group": group_directory.name,
+                        "record": record_directory.name,
+                        "error": str(error.detail),
+                    }
+                )
+                continue
+            version = (output_directory / "rows.json").stat().st_mtime_ns
+            rows = []
+            for row in metadata.get("rows", []):
+                if not isinstance(row, dict):
+                    continue
+                row_index = int(row.get("row_index", len(rows) + 1))
+                row_copy = dict(row)
+                row_copy["candidate_skus"] = sam_row_candidate_skus(
+                    record_directory.name,
+                    row_index,
+                )
+                for key in ("rgb", "valid_depth_mask", "depth_preview"):
+                    relative = row.get(key)
+                    if isinstance(relative, str):
+                        artifact = output_directory / relative
+                        row_copy[f"{key}_url"] = sam_row_artifact_url(
+                            f"{group_directory.name}/{record_directory.name}/{relative}",
+                            artifact.stat().st_mtime_ns if artifact.is_file() else version,
+                        )
+                rows.append(row_copy)
+            source_prefix = (
+                f"/api/sam-row-debug/source/"
+                f"{quote(group_directory.name, safe='')}/"
+                f"{quote(record_directory.name, safe='')}"
+            )
+            baseline_path = record_directory / "baseline_rgb.jpg"
+            records.append(
+                {
+                    "group": group_directory.name,
+                    "record": record_directory.name,
+                    "pose_type": metadata.get("pose_type"),
+                    "baseline_url": (
+                        f"{source_prefix}/baseline?v={baseline_path.stat().st_mtime_ns}"
+                        if baseline_path.is_file()
+                        else None
+                    ),
+                    "current_url": (
+                        f"{source_prefix}/current?v="
+                        f"{(record_directory / 'rgb.jpg').stat().st_mtime_ns}"
+                    ),
+                    "row_detection_url": sam_row_artifact_url(
+                        f"{group_directory.name}/{record_directory.name}/row_detection.jpg",
+                        version,
+                    ),
+                    "rows": rows,
+                }
+            )
+    return {
+        "records": records,
+        "prompt_mapping": prompt_mapping,
+        "errors": errors,
+    }
+
+
+@app.get("/api/sam-row-debug/source/{group}/{record}/{kind}")
+def get_sam_row_source(group: str, record: str, kind: str) -> FileResponse:
+    record_directory, _ = resolve_sam_row_record(group, record)
+    filenames = {"baseline": "baseline_rgb.jpg", "current": "rgb.jpg"}
+    filename = filenames.get(kind)
+    if filename is None:
+        raise HTTPException(status_code=400, detail="不支持的 SAM 行调试图片类型")
+    path = record_directory / filename
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"SAM 行调试图片不存在: {filename}")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@app.get("/api/sam-row-debug/file/{relative_path:path}")
+def get_sam_row_file(relative_path: str) -> FileResponse:
+    path = resolve_descendant(REAL_SHORTAGE_SAM_ROWS_ROOT, relative_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="SAM 行调试文件不存在")
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type)
 
 
 def resolve_shortage_batch_dataset(dataset: str) -> tuple[Path, Path, str]:
@@ -3069,6 +3299,301 @@ def run_sam3_crop(request: SamCropRequest) -> dict:
             ]
     result["crop_box_original"] = request.crop_box_original
     return result
+
+
+def call_sam3_image_path(image_path: Path, prompt: str) -> dict:
+    media_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
+    try:
+        with image_path.open("rb") as image_file:
+            response = requests.post(
+                SAM3_URL,
+                files={"image": (image_path.name, image_file, media_type)},
+                data={
+                    "prompt": prompt,
+                    "threshold": 0.5,
+                    "mask_threshold": 0.5,
+                },
+                timeout=120,
+            )
+        response.raise_for_status()
+        result = response.json()
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail=f"SAM3 请求失败: {error}") from error
+    except ValueError as error:
+        raise HTTPException(status_code=502, detail=f"SAM3 返回格式错误: {error}") from error
+    if not isinstance(result, dict) or not isinstance(result.get("instances"), list):
+        raise HTTPException(status_code=502, detail="SAM3 响应缺少 instances")
+    return result
+
+
+def decode_sam_row_mask(value: object, image_shape: tuple[int, int]) -> np.ndarray:
+    if not isinstance(value, str) or not value.strip():
+        raise HTTPException(status_code=502, detail="SAM3 实例缺少 mask_png_base64")
+    encoded_value = value.split(",", 1)[-1]
+    try:
+        encoded = base64.b64decode(encoded_value, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise HTTPException(status_code=502, detail="SAM3 mask Base64 无效") from error
+    mask = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8), cv2.IMREAD_GRAYSCALE)
+    if mask is None:
+        raise HTTPException(status_code=502, detail="SAM3 mask PNG 无效")
+    if mask.shape != image_shape:
+        raise HTTPException(
+            status_code=502,
+            detail=f"SAM3 mask 尺寸与行 crop 不一致: mask={mask.shape}, crop={image_shape}",
+        )
+    return np.where(mask > 127, 255, 0).astype(np.uint8)
+
+
+def sam_row_masked_depth_preview(depth_mm: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    depth = np.asarray(depth_mm, dtype=np.float32)
+    selected = (mask > 0) & np.isfinite(depth) & (depth > 0)
+    preview = np.zeros((*depth.shape, 3), dtype=np.uint8)
+    values = depth[selected]
+    if values.size == 0:
+        return preview
+    near, far = np.percentile(values, (2.0, 98.0))
+    if far <= near:
+        far = near + 1.0
+    normalized = np.zeros(depth.shape, dtype=np.uint8)
+    normalized[selected] = np.clip(
+        (far - depth[selected]) * 255.0 / (far - near),
+        0,
+        255,
+    ).astype(np.uint8)
+    preview = cv2.applyColorMap(normalized, cv2.COLORMAP_TURBO)
+    preview[~selected] = 0
+    return preview
+
+
+def sam_row_depth_statistics(depth_mm: np.ndarray, mask: np.ndarray) -> dict[str, object]:
+    selected_pixels = int(np.count_nonzero(mask))
+    valid = (
+        (mask > 0)
+        & np.isfinite(depth_mm)
+        & (np.asarray(depth_mm) > 0)
+    )
+    values = np.asarray(depth_mm, dtype=np.float32)[valid]
+    result: dict[str, object] = {
+        "mask_pixels": selected_pixels,
+        "valid_depth_pixels": int(values.size),
+        "valid_depth_ratio": round(float(values.size) / max(1, selected_pixels), 6),
+        "depth_unit": "mm",
+    }
+    if values.size:
+        p10, p20, p25, median, p75, p90 = np.percentile(
+            values,
+            (10, 20, 25, 50, 75, 90),
+        )
+        result.update(
+            {
+                "front_depth_mm": round(float(p20), 2),
+                "depth_p10_mm": round(float(p10), 2),
+                "depth_p25_mm": round(float(p25), 2),
+                "depth_median_mm": round(float(median), 2),
+                "depth_p75_mm": round(float(p75), 2),
+                "depth_p90_mm": round(float(p90), 2),
+            }
+        )
+    else:
+        result.update(
+            {
+                "front_depth_mm": None,
+                "depth_p10_mm": None,
+                "depth_p25_mm": None,
+                "depth_median_mm": None,
+                "depth_p75_mm": None,
+                "depth_p90_mm": None,
+            }
+        )
+    return result
+
+
+@app.post("/api/sam-row-debug/run")
+def run_sam_row_debug(request: SamRowRunRequest) -> dict:
+    output_directory, metadata = ensure_sam_row_export(request.group, request.record)
+    rows = metadata.get("rows", [])
+    if not isinstance(rows, list) or not 0 < request.row_index <= len(rows):
+        raise HTTPException(status_code=404, detail="SAM 行调试 row 不存在")
+    row = rows[request.row_index - 1]
+    if not isinstance(row, dict):
+        raise HTTPException(status_code=500, detail="SAM 行 metadata 格式错误")
+
+    sku_name = request.sku_name.strip()
+    prompt = request.prompt.strip()
+    if not prompt and sku_name:
+        pair = load_prompt_pair_mapping("SORTING").get(sku_name)
+        prompt = pair["sam3_prompt"].strip() if pair is not None else ""
+    if not prompt:
+        raise HTTPException(status_code=400, detail="请选择映射商品或输入 SAM3 prompt")
+
+    rgb_relative = row.get("rgb")
+    depth_relative = row.get("depth_mm")
+    if not isinstance(rgb_relative, str) or not isinstance(depth_relative, str):
+        raise HTTPException(status_code=500, detail="SAM 行 metadata 缺少 RGB-D 文件")
+    rgb_path = resolve_descendant(output_directory, rgb_relative)
+    depth_path = resolve_descendant(output_directory, depth_relative)
+    try:
+        rgb = cv2.imdecode(
+            np.frombuffer(rgb_path.read_bytes(), dtype=np.uint8),
+            cv2.IMREAD_COLOR,
+        )
+        depth = np.load(depth_path, allow_pickle=False)
+    except (OSError, ValueError, TypeError) as error:
+        raise HTTPException(status_code=500, detail=f"读取行 RGB-D 失败: {error}") from error
+    if rgb is None or depth.ndim != 2 or depth.shape != rgb.shape[:2]:
+        raise HTTPException(status_code=500, detail="行 RGB-D 尺寸不一致")
+
+    started_at = time.perf_counter()
+    sam_result = call_sam3_image_path(rgb_path, prompt)
+    crop_bbox = row.get("crop_bbox_xywh", [0, 0, rgb.shape[1], rgb.shape[0]])
+    crop_x = int(crop_bbox[0]) if isinstance(crop_bbox, list) and len(crop_bbox) == 4 else 0
+    crop_y = int(crop_bbox[1]) if isinstance(crop_bbox, list) and len(crop_bbox) == 4 else 0
+    decoded: list[tuple[dict[str, object], np.ndarray, list[float]]] = []
+    for raw_instance in sam_result["instances"]:
+        if not isinstance(raw_instance, dict):
+            continue
+        mask = decode_sam_row_mask(
+            raw_instance.get("mask_png_base64"),
+            rgb.shape[:2],
+        )
+        if not np.any(mask):
+            continue
+        selected_pixels = mask > 0
+        bbox = raw_instance.get("bbox_xyxy")
+        if not (
+            isinstance(bbox, list)
+            and len(bbox) == 4
+            and all(isinstance(value, (int, float)) for value in bbox)
+        ):
+            ys, xs = np.where(selected_pixels)
+            bbox = [float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1)]
+        bbox_values = [float(value) for value in bbox]
+        decoded.append((raw_instance, mask, bbox_values))
+
+    selection = select_front_row_instances(
+        [mask for _, mask, _ in decoded],
+        depth,
+        scores=[
+            float(raw_instance["score"])
+            if isinstance(raw_instance.get("score"), (int, float))
+            else None
+            for raw_instance, _, _ in decoded
+        ],
+    )
+    overlay = rgb.copy()
+    instances: list[dict[str, object]] = []
+    status_colors = {
+        "front": (60, 220, 90),
+        "back": (70, 70, 245),
+        "uncertain": (0, 210, 255),
+        "duplicate": (150, 150, 150),
+    }
+    for index, ((raw_instance, mask, bbox_values), analysis) in enumerate(
+        zip(decoded, selection["instances"]),
+        start=1,
+    ):
+        if analysis["duplicate_of"] is not None:
+            status = "duplicate"
+        elif not analysis["depth_estimate"]["reliable"]:
+            status = "uncertain"
+        elif analysis["selected"]:
+            status = "front"
+        else:
+            status = "back"
+        color = status_colors[status]
+        selected_pixels = mask > 0
+        colored = np.full(
+            (int(np.count_nonzero(selected_pixels)), 3),
+            color,
+            dtype=np.uint8,
+        )
+        overlay[selected_pixels] = cv2.addWeighted(
+            overlay[selected_pixels],
+            0.42,
+            colored,
+            0.58,
+            0,
+        )
+        x1, y1, x2, y2 = [int(round(value)) for value in bbox_values]
+        cv2.rectangle(overlay, (x1, y1), (x2, y2), color, 3)
+        cv2.putText(
+            overlay,
+            f"#{index} {status.upper()}",
+            (max(0, x1), max(20, y1 - 6)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+        instance = {
+            "instance_index": index,
+            "instance_id": raw_instance.get("instance_id", index),
+            "score": raw_instance.get("score"),
+            "bbox_crop_xyxy": bbox_values,
+            "bbox_original_xyxy": [
+                bbox_values[0] + crop_x,
+                bbox_values[1] + crop_y,
+                bbox_values[2] + crop_x,
+                bbox_values[3] + crop_y,
+            ],
+            "mask_data_url": encode_web_image(mask),
+            "masked_depth_data_url": encode_web_image(
+                sam_row_masked_depth_preview(depth, mask)
+            ),
+            "inner_mask_data_url": encode_web_image(
+                np.asarray(selection["inner_masks"][index - 1], dtype=np.uint8) * 255
+            ),
+            "front_selected": bool(analysis["selected"]),
+            "front_status": status,
+            "selection_reason": analysis["selection_reason"],
+            "duplicate_of": analysis["duplicate_of"],
+            "occluded_by": analysis["incoming"],
+            "occludes": analysis["outgoing"],
+            "erode_kernel_px": analysis["erode_kernel_px"],
+            "stable_depth_mm": analysis["depth_estimate"]["depth_mm"],
+            "depth_mad_mm": analysis["depth_estimate"]["mad_mm"],
+            "depth_cluster_support_ratio": analysis["depth_estimate"]["support_ratio"],
+            "depth_reliable": analysis["depth_estimate"]["reliable"],
+            **sam_row_depth_statistics(depth, mask),
+        }
+        instances.append(instance)
+
+    front_mask = selection["combined_front_mask"]
+    front_overlay = rgb.copy()
+    front_pixels = front_mask > 0
+    if np.any(front_pixels):
+        green = np.full(
+            (int(np.count_nonzero(front_pixels)), 3),
+            status_colors["front"],
+            dtype=np.uint8,
+        )
+        front_overlay[front_pixels] = cv2.addWeighted(
+            front_overlay[front_pixels],
+            0.30,
+            green,
+            0.70,
+            0,
+        )
+
+    return {
+        "group": request.group,
+        "record": request.record,
+        "row_index": request.row_index,
+        "level": row.get("level"),
+        "sku_name": sku_name or None,
+        "prompt": prompt,
+        "crop_bbox_xywh": crop_bbox,
+        "overlay_data_url": encode_web_image(overlay),
+        "front_mask_data_url": encode_web_image(front_mask),
+        "front_overlay_data_url": encode_web_image(front_overlay),
+        "front_instance_indices": selection["front_indices"],
+        "uncertain_instance_indices": selection["uncertain_indices"],
+        "occlusion_edges": selection["edges"],
+        "instances": instances,
+        "elapsed_ms": round((time.perf_counter() - started_at) * 1000.0, 1),
+    }
 
 
 def resolve_image(image_name: str) -> Path:

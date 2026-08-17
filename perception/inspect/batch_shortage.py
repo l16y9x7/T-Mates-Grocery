@@ -37,7 +37,14 @@ RESULT_DIRECTORY_NAME = "shortage_inspection"
 GROUP_PATTERN = re.compile(
     r"^(?P<target>H[12]_[FB]_[LR]_INSPECT)_(?P<pose>UPPER|LOWER)$"
 )
-RECORD_PATTERN = re.compile(r"^record_\d{8}_\d{6}_\d{6}$")
+RECORD_PATTERN = re.compile(
+    r"^(?:"
+    r"record_\d{8}_\d{6}_\d{6}"
+    r"|"
+    r"\d{8}T\d{6}_\d{6}Z_"
+    r"H[12]_[FB]_[LR]_INSPECT_SHORTAGE_[0-9a-fA-F]{8}"
+    r")$"
+)
 DEPTH_CHANGE_THRESHOLD_MM = 60.0
 MIN_DEPTH_VALID_PIXELS = 50
 MIN_DEPTH_VALID_RATIO = 0.02
@@ -2961,7 +2968,14 @@ def run_record(
 
 def collect_results(data_root: Path) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-    for path in sorted(data_root.glob(f"*/record_*/{RESULT_DIRECTORY_NAME}/result.json")):
+    for entry in discover_records(data_root):
+        path = (
+            entry["record_directory"]
+            / RESULT_DIRECTORY_NAME
+            / "result.json"
+        )
+        if not path.is_file():
+            continue
         try:
             results.append(read_json(path))
         except RuntimeError:
