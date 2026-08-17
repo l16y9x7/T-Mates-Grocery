@@ -11,8 +11,10 @@ import sys
 import threading
 import time
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path, PureWindowsPath
 from types import ModuleType
+from typing import Any
 from urllib.parse import quote
 
 import cv2
@@ -32,6 +34,7 @@ if str(PERCEPTION_ROOT) not in sys.path:
 from config import QWEN3_MODEL, QWEN3_URL, SAM3_URL, SERVICE_BIND_HOST  # noqa: E402
 from front_row_selection import select_front_row_instances  # noqa: E402
 from initial_scan import InitialScanError, initial_scan_root, load_initial_scan  # noqa: E402
+from pick.locate.main import UPPER_CONFIDENCE_PICK_PRODUCTS  # noqa: E402
 from place.locate.reference_mask import (  # noqa: E402
     ReferenceMaskError,
     generate_reference_mask,
@@ -86,6 +89,7 @@ SHORTAGE_BATCH_SUMMARY_PATH = (
 )
 REAL_SHORTAGE_BATCH_ROOT = DATA_ROOT / "real_shortage_regression"
 REAL_SHORTAGE_SAM_ROWS_ROOT = DATA_ROOT / "real_shortage_sam_rows"
+REAL_SHORTAGE_FRONT_COMPARE_ROOT = DATA_ROOT / "real_shortage_front_compare"
 SAM_ROW_EXPORTER_PATH = INSPECT_ROOT / "export_sam_rows.py"
 SHORTAGE_MAPPING_CONFIG_PATH = INSPECT_ROOT / "shortage_mapping_config.json"
 SHORTAGE_BATCH_DATASETS = {
@@ -232,6 +236,9 @@ class SamRowRunRequest(BaseModel):
     prompt: str = ""
     expected_front_count: int | None = Field(default=None, ge=1)
     config_group_index: int | None = Field(default=None, ge=1)
+    source: str = "current"
+    comparison_full_width: bool = False
+    enforce_expected_count: bool = False
 
 
 class QwenDetection(BaseModel):
@@ -410,13 +417,30 @@ def resolve_sam_row_record(group: str, record: str) -> tuple[Path, str]:
     return directory, pose_type
 
 
-def ensure_sam_row_export(group: str, record: str) -> tuple[Path, dict]:
+def ensure_sam_row_export(
+    group: str,
+    record: str,
+    source: str = "current",
+) -> tuple[Path, dict]:
     record_directory, pose_type = resolve_sam_row_record(group, record)
-    rgb_path = record_directory / "rgb.jpg"
-    depth_path = record_directory / "depth_mm.npy"
+    normalized_source = source.strip().lower()
+    source_files = {
+        "current": ("rgb.jpg", "depth_mm.npy"),
+        "baseline": ("baseline_rgb.jpg", "baseline_depth_mm.npy"),
+    }
+    filenames = source_files.get(normalized_source)
+    if filenames is None:
+        raise HTTPException(status_code=400, detail="source 必须是 current 或 baseline")
+    rgb_path = record_directory / filenames[0]
+    depth_path = record_directory / filenames[1]
     if not rgb_path.is_file() or not depth_path.is_file():
-        raise HTTPException(status_code=404, detail="实测 record 缺少 rgb.jpg/depth_mm.npy")
+        raise HTTPException(
+            status_code=404,
+            detail=f"实测 record 缺少 {filenames[0]}/{filenames[1]}",
+        )
     output_directory = REAL_SHORTAGE_SAM_ROWS_ROOT / group / record
+    if normalized_source == "baseline":
+        output_directory = output_directory / "baseline"
     metadata_path = output_directory / "rows.json"
     dependency_mtime = max(
         rgb_path.stat().st_mtime_ns,
@@ -444,6 +468,9 @@ def ensure_sam_row_export(group: str, record: str) -> tuple[Path, dict]:
                 output_directory,
                 pose_type=pose_type,
                 overwrite=True,
+                rgb_filename=filenames[0],
+                depth_filename=filenames[1],
+                source_variant=normalized_source,
             )
         except (RuntimeError, ValueError, cv2.error) as error:
             raise HTTPException(
@@ -508,6 +535,7 @@ def load_shortage_mapping_config() -> dict[str, dict[str, list[dict[str, object]
                     )
                 expected = group.get("expected_front_count")
                 prompt = group.get("sam3_prompt")
+                slot_product_names = group.get("slot_product_names", [])
                 if (
                     not isinstance(expected, int)
                     or isinstance(expected, bool)
@@ -522,11 +550,33 @@ def load_shortage_mapping_config() -> dict[str, dict[str, list[dict[str, object]
                             "expected_front_count 和非空 sam3_prompt"
                         ),
                     )
+                if not isinstance(slot_product_names, list) or any(
+                    not isinstance(name, str) or not name.strip()
+                    for name in slot_product_names
+                ):
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            f"{location_id}/{level} 第 {group_index} 组的 "
+                            "slot_product_names 必须是非空字符串列表"
+                        ),
+                    )
+                if slot_product_names and len(slot_product_names) != expected:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=(
+                            f"{location_id}/{level} 第 {group_index} 组的 "
+                            f"slot_product_names 数量必须等于 expected_front_count={expected}"
+                        ),
+                    )
                 normalized_groups.append(
                     {
                         "group_index": group_index,
                         "expected_front_count": expected,
                         "sam3_prompt": prompt.strip(),
+                        "slot_product_names": [
+                            name.strip() for name in slot_product_names
+                        ],
                     }
                 )
             normalized_levels[level.upper()] = normalized_groups
@@ -542,6 +592,39 @@ def shortage_prompt_groups(group: str, level: object) -> list[dict[str, object]]
         level.upper(),
         [],
     )
+
+
+@lru_cache(maxsize=32)
+def inspection_level_uses_upper_pick(group: str, level: str) -> bool:
+    """Reuse pick/locate's stacked-product allow-list for shortage Y checks."""
+
+    match = INITIAL_SCAN_DIRECTORY_PATTERN.fullmatch(group.strip().upper())
+    normalized_level = level.strip().upper()
+    if match is None or re.fullmatch(r"L[1-5]", normalized_level) is None:
+        return False
+    target_parts = match.group("target").split("_")
+    location_prefix = f"{target_parts[0]}_{target_parts[1]}_{normalized_level}_"
+    try:
+        catalog = json.loads(SKU_CATALOG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    products = catalog.get("products")
+    if not isinstance(products, list):
+        return False
+    for product in products:
+        if not isinstance(product, dict):
+            continue
+        name = product.get("name")
+        locations = product.get("locations")
+        if name not in UPPER_CONFIDENCE_PICK_PRODUCTS or not isinstance(locations, list):
+            continue
+        if any(
+            isinstance(location, str)
+            and location.strip().upper().startswith(location_prefix)
+            for location in locations
+        ):
+            return True
+    return False
 
 
 @app.get("/api/sam-row-debug/records")
@@ -613,6 +696,12 @@ def list_sam_row_debug_records() -> dict:
                 f"{quote(record_directory.name, safe='')}"
             )
             baseline_path = record_directory / "baseline_rgb.jpg"
+            front_compare_path = (
+                REAL_SHORTAGE_FRONT_COMPARE_ROOT
+                / group_directory.name
+                / record_directory.name
+                / "result.json"
+            )
             records.append(
                 {
                     "group": group_directory.name,
@@ -631,6 +720,7 @@ def list_sam_row_debug_records() -> dict:
                         f"{group_directory.name}/{record_directory.name}/row_detection.jpg",
                         version,
                     ),
+                    "front_compare_available": front_compare_path.is_file(),
                     "rows": rows,
                 }
             )
@@ -659,6 +749,97 @@ def get_sam_row_file(relative_path: str) -> FileResponse:
     path = resolve_descendant(REAL_SHORTAGE_SAM_ROWS_ROOT, relative_path)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="SAM 行调试文件不存在")
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type)
+
+
+def front_compare_artifact_url(relative_path: str, version: int) -> str:
+    normalized = relative_path.replace("\\", "/")
+    return (
+        f"/api/sam-row-compare/file/{quote(normalized, safe='/')}?v={version}"
+    )
+
+
+@app.get("/api/sam-row-compare/result/{group}/{record}/{level}")
+def get_sam_row_compare_result(group: str, record: str, level: str) -> dict:
+    resolve_sam_row_record(group, record)
+    normalized_level = level.strip().upper()
+    if re.fullmatch(r"L[1-5]", normalized_level) is None:
+        raise HTTPException(status_code=400, detail="level 必须是 L1-L5")
+    record_directory = resolve_descendant(
+        REAL_SHORTAGE_FRONT_COMPARE_ROOT,
+        f"{group}/{record}",
+    )
+    result_path = record_directory / "result.json"
+    if not result_path.is_file():
+        raise HTTPException(status_code=404, detail="尚未生成前后流程对比结果")
+    payload = load_json_file(result_path, "前后流程对比结果")
+    rows = payload.get("rows", [])
+    row = next(
+        (
+            item
+            for item in rows
+            if isinstance(item, dict)
+            and str(item.get("level", "")).upper() == normalized_level
+        ),
+        None,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="该层没有前后流程对比结果")
+    response_row = dict(row)
+    response_groups: list[dict[str, Any]] = []
+    for prompt_group in row.get("prompt_groups", []):
+        if not isinstance(prompt_group, dict):
+            continue
+        group_copy = dict(prompt_group)
+        group_index = int(group_copy.get("group_index", len(response_groups) + 1))
+        artifact_directory = (
+            record_directory / normalized_level / f"group_{group_index:02d}"
+        )
+        artifact_urls: dict[str, str] = {}
+        for name, filename in group_copy.get("artifacts", {}).items():
+            if not isinstance(name, str) or not isinstance(filename, str):
+                continue
+            artifact = artifact_directory / filename
+            if artifact.is_file():
+                relative = artifact.relative_to(REAL_SHORTAGE_FRONT_COMPARE_ROOT)
+                artifact_urls[name] = front_compare_artifact_url(
+                    relative.as_posix(), artifact.stat().st_mtime_ns
+                )
+        group_copy["artifact_urls"] = artifact_urls
+        response_groups.append(group_copy)
+    response_row["prompt_groups"] = response_groups
+    finding_details = [
+        {
+            "shortage_product_name": slot["product_name"],
+            "level": normalized_level,
+            "group_index": prompt_group.get("group_index"),
+            "slot_index": slot.get("slot_index"),
+            "status": slot.get("status"),
+        }
+        for prompt_group in response_groups
+        for slot in prompt_group.get("missing_slots", [])
+        if isinstance(slot, dict) and isinstance(slot.get("product_name"), str)
+    ]
+    return {
+        "group": group,
+        "record": record,
+        "level": normalized_level,
+        "generated_at": payload.get("generated_at"),
+        "prompt_groups": response_groups,
+        "findings": [
+            {"shortage_product_name": item["shortage_product_name"]}
+            for item in finding_details
+        ],
+        "finding_details": finding_details,
+    }
+
+
+@app.get("/api/sam-row-compare/file/{relative_path:path}")
+def get_sam_row_compare_file(relative_path: str) -> FileResponse:
+    path = resolve_descendant(REAL_SHORTAGE_FRONT_COMPARE_ROOT, relative_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="前后流程对比文件不存在")
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     return FileResponse(path, media_type=media_type)
 
@@ -3371,7 +3552,12 @@ def run_sam3_crop(request: SamCropRequest) -> dict:
     return result
 
 
-def call_sam3_image_path(image_path: Path, prompt: str) -> dict:
+def call_sam3_image_path(
+    image_path: Path,
+    prompt: str,
+    *,
+    threshold: float = 0.5,
+) -> dict:
     media_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
     try:
         with image_path.open("rb") as image_file:
@@ -3380,7 +3566,7 @@ def call_sam3_image_path(image_path: Path, prompt: str) -> dict:
                 files={"image": (image_path.name, image_file, media_type)},
                 data={
                     "prompt": prompt,
-                    "threshold": 0.5,
+                    "threshold": threshold,
                     "mask_threshold": 0.5,
                 },
                 timeout=120,
@@ -3481,7 +3667,12 @@ def sam_row_depth_statistics(depth_mm: np.ndarray, mask: np.ndarray) -> dict[str
 
 @app.post("/api/sam-row-debug/run")
 def run_sam_row_debug(request: SamRowRunRequest) -> dict:
-    output_directory, metadata = ensure_sam_row_export(request.group, request.record)
+    normalized_source = request.source.strip().lower()
+    output_directory, metadata = ensure_sam_row_export(
+        request.group,
+        request.record,
+        normalized_source,
+    )
     rows = metadata.get("rows", [])
     if not isinstance(rows, list) or not 0 < request.row_index <= len(rows):
         raise HTTPException(status_code=404, detail="SAM 行调试 row 不存在")
@@ -3493,6 +3684,7 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
     prompt = request.prompt.strip()
     expected_front_count = request.expected_front_count
     config_group_index = request.config_group_index
+    max_same_prompt_depth_spread_mm: float | None = None
     if config_group_index is not None:
         configured_groups = shortage_prompt_groups(request.group, row.get("level"))
         if not 0 < config_group_index <= len(configured_groups):
@@ -3502,6 +3694,8 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
             prompt = str(configured["sam3_prompt"])
         if expected_front_count is None:
             expected_front_count = int(configured["expected_front_count"])
+        if len(configured_groups) > 1:
+            max_same_prompt_depth_spread_mm = 30.0
     if not prompt and sku_name:
         pair = load_prompt_pair_mapping("SORTING").get(sku_name)
         prompt = pair["sam3_prompt"].strip() if pair is not None else ""
@@ -3526,35 +3720,68 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
         raise HTTPException(status_code=500, detail="行 RGB-D 尺寸不一致")
 
     started_at = time.perf_counter()
-    sam_result = call_sam3_image_path(rgb_path, prompt)
     crop_bbox = row.get("crop_bbox_xywh", [0, 0, rgb.shape[1], rgb.shape[0]])
     crop_x = int(crop_bbox[0]) if isinstance(crop_bbox, list) and len(crop_bbox) == 4 else 0
     crop_y = int(crop_bbox[1]) if isinstance(crop_bbox, list) and len(crop_bbox) == 4 else 0
+    sam3_attempts: list[dict[str, object]] = []
     decoded: list[tuple[dict[str, object], np.ndarray, list[float]]] = []
-    for raw_instance in sam_result["instances"]:
-        if not isinstance(raw_instance, dict):
-            continue
-        mask = decode_sam_row_mask(
-            raw_instance.get("mask_png_base64"),
-            rgb.shape[:2],
+    # A visually near-identical baseline/current pair can occasionally straddle
+    # SAM3's default 0.5 score cutoff.  Retry only a genuinely empty result at a
+    # lower detection threshold; normal successful requests still cost one call.
+    for detection_threshold in (0.5, 0.25):
+        sam_result = call_sam3_image_path(
+            rgb_path,
+            prompt,
+            threshold=detection_threshold,
         )
-        if not np.any(mask):
-            continue
-        selected_pixels = mask > 0
-        bbox = raw_instance.get("bbox_xyxy")
-        if not (
-            isinstance(bbox, list)
-            and len(bbox) == 4
-            and all(isinstance(value, (int, float)) for value in bbox)
-        ):
-            ys, xs = np.where(selected_pixels)
-            bbox = [float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1)]
-        bbox_values = [float(value) for value in bbox]
-        decoded.append((raw_instance, mask, bbox_values))
+        attempt_decoded: list[
+            tuple[dict[str, object], np.ndarray, list[float]]
+        ] = []
+        raw_instances = sam_result["instances"]
+        for raw_instance in raw_instances:
+            if not isinstance(raw_instance, dict):
+                continue
+            mask = decode_sam_row_mask(
+                raw_instance.get("mask_png_base64"),
+                rgb.shape[:2],
+            )
+            if not np.any(mask):
+                continue
+            selected_pixels = mask > 0
+            bbox = raw_instance.get("bbox_xyxy")
+            if not (
+                isinstance(bbox, list)
+                and len(bbox) == 4
+                and all(isinstance(value, (int, float)) for value in bbox)
+            ):
+                ys, xs = np.where(selected_pixels)
+                bbox = [
+                    float(xs.min()),
+                    float(ys.min()),
+                    float(xs.max() + 1),
+                    float(ys.max() + 1),
+                ]
+            bbox_values = [float(value) for value in bbox]
+            attempt_decoded.append((raw_instance, mask, bbox_values))
+        sam3_attempts.append(
+            {
+                "threshold": detection_threshold,
+                "raw_instance_count": len(raw_instances),
+                "decoded_instance_count": len(attempt_decoded),
+            }
+        )
+        decoded = attempt_decoded
+        if decoded:
+            break
 
     normalized_group = request.group.strip().upper()
     prefer_global_depth_layer = normalized_group.startswith(
         ("H2_F_L_INSPECT", "H2_F_R_INSPECT")
+    )
+    level = row.get("level")
+    prefer_vertical_position_anomaly = (
+        isinstance(level, str)
+        and inspection_level_uses_upper_pick(request.group, level)
     )
     selection = select_front_row_instances(
         [mask for _, mask, _ in decoded],
@@ -3567,13 +3794,21 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
         ],
         expected_front_count=expected_front_count,
         prefer_global_depth_layer=prefer_global_depth_layer,
+        prefer_regular_columns=prefer_global_depth_layer,
+        prefer_vertical_position_anomaly=prefer_vertical_position_anomaly,
+        max_same_prompt_depth_spread_mm=max_same_prompt_depth_spread_mm,
+        enforce_expected_count=request.enforce_expected_count,
         horizontal_roi=(
-            (0, round(rgb.shape[1] * 0.82))
-            if request.group.upper().startswith("H1_B_L_INSPECT")
+            None
+            if request.comparison_full_width
             else (
-                (round(rgb.shape[1] * 0.05), rgb.shape[1])
-                if "_F_R_INSPECT" in request.group.upper()
-                else None
+                (0, round(rgb.shape[1] * 0.82))
+                if request.group.upper().startswith("H1_B_L_INSPECT")
+                else (
+                    (round(rgb.shape[1] * 0.05), rgb.shape[1])
+                    if "_F_R_INSPECT" in request.group.upper()
+                    else None
+                )
             )
         ),
     )
@@ -3691,15 +3926,69 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
             0,
         )
 
+    suspected_missing_regions = (
+        count_constraint.get("suspected_missing_regions", [])
+        if isinstance(count_constraint, dict)
+        else []
+    )
+
+    def draw_dashed_missing_box(
+        canvas: np.ndarray,
+        bbox_xyxy: list[float],
+        label: str,
+    ) -> None:
+        x1, y1, x2, y2 = [int(round(value)) for value in bbox_xyxy]
+        x1 = max(0, min(canvas.shape[1] - 1, x1))
+        x2 = max(0, min(canvas.shape[1] - 1, x2))
+        y1 = max(0, min(canvas.shape[0] - 1, y1))
+        y2 = max(0, min(canvas.shape[0] - 1, y2))
+        color = (255, 0, 255)
+        dash, gap = 12, 7
+        for start in range(x1, x2 + 1, dash + gap):
+            end = min(x2, start + dash)
+            cv2.line(canvas, (start, y1), (end, y1), color, 3, cv2.LINE_AA)
+            cv2.line(canvas, (start, y2), (end, y2), color, 3, cv2.LINE_AA)
+        for start in range(y1, y2 + 1, dash + gap):
+            end = min(y2, start + dash)
+            cv2.line(canvas, (x1, start), (x1, end), color, 3, cv2.LINE_AA)
+            cv2.line(canvas, (x2, start), (x2, end), color, 3, cv2.LINE_AA)
+        cv2.putText(
+            canvas,
+            label,
+            (x1, max(20, y1 - 7)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.62,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+
+    for missing_index, region in enumerate(suspected_missing_regions, start=1):
+        if not isinstance(region, dict):
+            continue
+        bbox = region.get("bbox_xyxy")
+        if not (
+            isinstance(bbox, list)
+            and len(bbox) == 4
+            and all(isinstance(value, (int, float)) for value in bbox)
+        ):
+            continue
+        label = f"MISSING? {missing_index}"
+        draw_dashed_missing_box(overlay, bbox, label)
+        draw_dashed_missing_box(front_overlay, bbox, label)
+
     return {
         "group": request.group,
         "record": request.record,
+        "source": normalized_source,
         "row_index": request.row_index,
         "level": row.get("level"),
         "sku_name": sku_name or None,
         "prompt": prompt,
         "expected_front_count": expected_front_count,
         "config_group_index": config_group_index,
+        "sam3_detection_status": "detected" if decoded else "empty_after_retry",
+        "sam3_attempts": sam3_attempts,
         "crop_bbox_xywh": crop_bbox,
         "overlay_data_url": encode_web_image(overlay),
         "front_mask_data_url": encode_web_image(front_mask),
@@ -3708,6 +3997,7 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
         "uncertain_instance_indices": selection["uncertain_indices"],
         "occlusion_edges": selection["edges"],
         "count_constraint": selection["count_constraint"],
+        "suspected_missing_regions": suspected_missing_regions,
         "instances": instances,
         "elapsed_ms": round((time.perf_counter() - started_at) * 1000.0, 1),
     }

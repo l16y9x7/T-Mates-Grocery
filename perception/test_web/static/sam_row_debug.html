@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SAM3 行内深度调试</title>
-    <link rel="stylesheet" href="/static/sam_row_debug.css?v=3" />
+    <link rel="stylesheet" href="/static/sam_row_debug.css?v=4" />
   </head>
   <body>
     <main>
@@ -53,6 +53,17 @@
         </figure>
       </section>
 
+      <section class="card flow-compare-panel">
+        <header>
+          <div>
+            <p class="eyebrow">BASELINE PIPELINE ↔ CURRENT PIPELINE</p>
+            <h2>前后流程槽位对比</h2>
+          </div>
+          <span id="frontCompareStatus" class="status">等待选择记录</span>
+        </header>
+        <div id="frontCompareResults" class="flow-compare-results"></div>
+      </section>
+
       <section class="card prompt-panel">
         <label>标注分组<select id="skuSelect"></select></label>
         <label>前排列数<input id="expectedCount" type="number" min="1" step="1" /></label>
@@ -66,6 +77,6 @@
 
       <section id="results" class="results"></section>
     </main>
-    <script src="/static/sam_row_debug.js?v=4"></script>
+    <script src="/static/sam_row_debug.js?v=7"></script>
   </body>
 </html>

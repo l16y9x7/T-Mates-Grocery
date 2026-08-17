@@ -125,8 +125,12 @@ def _apply_expected_count(
     image_shape: tuple[int, int],
     horizontal_roi: tuple[int, int] | None,
     prefer_global_depth_layer: bool,
+    prefer_regular_columns: bool,
+    prefer_vertical_position_anomaly: bool,
+    max_same_prompt_depth_spread_mm: float | None,
+    enforce_expected_count: bool,
 ) -> dict[str, Any]:
-    """Select exactly N well-spaced columns while preferring graph-front masks."""
+    """Select front columns while preferring graph-front, shelf-aligned masks."""
 
     image_height, image_width = image_shape
     roi_left, roi_right = horizontal_roi or (0, image_width)
@@ -190,7 +194,13 @@ def _apply_expected_count(
     ]
     if plausible_widths.size == 0:
         plausible_widths = candidate_widths
-    typical_width = float(np.percentile(plausible_widths, 65))
+    # SAM commonly returns more thin rear fragments than complete foreground
+    # objects.  The 65th percentile can therefore still describe a fragment
+    # (for example 52 px versus 80--98 px complete cans).  Use the upper
+    # quartile as the class-width reference; genuinely narrower products are
+    # handled by the soft geometry score and the deliberately loose 0.55 hard
+    # completeness floor below.
+    typical_width = float(np.percentile(plausible_widths, 75))
 
     global_depth_layer: dict[str, Any] = {
         "requested": prefer_global_depth_layer,
@@ -268,6 +278,141 @@ def _apply_expected_count(
                 global_depth_layer["enabled"] = True
                 global_depth_layer["reason"] = "significant_n_to_n_plus_1_gap"
 
+    # For regularly arranged liquids, a complete front-row instance should
+    # terminate on the same shelf/rail line as its neighbours.  SAM frequently
+    # returns caps, labels and visible rear fragments whose depth is plausible,
+    # but whose lower edge is far above that line.  Estimate the line from the
+    # lower envelope of complete-looking masks, then reject those fragments
+    # before the exact-count/column-spacing optimizer sees them.  If an expected
+    # column has no aligned mask, returning fewer than expected is intentional:
+    # that column is a shortage, not an invitation to promote a rear fragment.
+    bottom_line_prior: dict[str, Any] = {
+        "requested": prefer_regular_columns,
+        "enabled": False,
+        "reason": "not_requested",
+    }
+    bottom_line_rejected: set[int] = set()
+    geometry_rejected: set[int] = set()
+    typical_height = 0.0
+    if prefer_regular_columns:
+        complete_width_candidates = []
+        for index in selection_candidates:
+            x1, y1, x2, y2 = instances[index]["bbox_xyxy"]
+            if (x2 - x1) >= max(8.0, 0.55 * typical_width):
+                complete_width_candidates.append(index)
+        bottom_line_prior["reason"] = "insufficient_complete_masks"
+        if len(complete_width_candidates) >= 2:
+            bottoms = np.asarray(
+                [instances[index]["bbox_xyxy"][3] for index in complete_width_candidates],
+                dtype=np.float32,
+            )
+            # The rear row can contain more SAM instances than the true front
+            # row.  A 70th-percentile lower edge then lands between the two and
+            # fits the numerically dominant rear layer.  The physical front row
+            # is the stable bottom-most cluster, so seed the fit from the 90th
+            # percentile while retaining a tolerance for mild rail slope.
+            lower_envelope = float(np.percentile(bottoms, 90))
+            fit_tolerance = max(6.0, min(18.0, image_height * 0.08))
+            fit_indices = [
+                index
+                for index in complete_width_candidates
+                if instances[index]["bbox_xyxy"][3]
+                >= lower_envelope - fit_tolerance
+            ]
+            if len(fit_indices) >= 2:
+                fit_x = np.asarray(
+                    [
+                        (
+                            instances[index]["bbox_xyxy"][0]
+                            + instances[index]["bbox_xyxy"][2]
+                        )
+                        / 2.0
+                        for index in fit_indices
+                    ],
+                    dtype=np.float32,
+                )
+                fit_y = np.asarray(
+                    [instances[index]["bbox_xyxy"][3] for index in fit_indices],
+                    dtype=np.float32,
+                )
+                if len(fit_indices) >= 3 and float(np.ptp(fit_x)) > 1.0:
+                    slope, intercept = np.polyfit(fit_x, fit_y, 1)
+                    # Row crops are already rail-aligned.  A large fitted slope
+                    # almost always means that an outlier influenced the fit.
+                    slope = float(np.clip(slope, -0.06, 0.06))
+                    intercept = float(np.median(fit_y - slope * fit_x))
+                else:
+                    slope = 0.0
+                    intercept = float(np.median(fit_y))
+
+                aligned_candidates: list[int] = []
+                aligned_heights: list[float] = []
+                for index in selection_candidates:
+                    x1, y1, x2, y2 = instances[index]["bbox_xyxy"]
+                    center_x = (x1 + x2) / 2.0
+                    predicted_bottom = slope * center_x + intercept
+                    residual = abs(float(y2) - predicted_bottom)
+                    if residual <= fit_tolerance:
+                        aligned_candidates.append(index)
+                        aligned_heights.append(float(y2 - y1))
+                    else:
+                        bottom_line_rejected.add(index)
+
+                typical_height = (
+                    float(np.median(np.asarray(aligned_heights, dtype=np.float32)))
+                    if aligned_heights
+                    else 0.0
+                )
+                geometry_candidates: list[int] = []
+                for index in aligned_candidates:
+                    x1, y1, x2, y2 = instances[index]["bbox_xyxy"]
+                    width_ratio = (x2 - x1) / max(1.0, typical_width)
+                    height_ratio = (y2 - y1) / max(1.0, typical_height)
+                    if width_ratio < 0.55 or height_ratio < 0.58:
+                        geometry_rejected.add(index)
+                    else:
+                        geometry_candidates.append(index)
+
+                selection_candidates = geometry_candidates
+                bottom_line_prior.update(
+                    {
+                        "enabled": True,
+                        "reason": "front_bottom_line_fitted",
+                        "slope": round(slope, 6),
+                        "intercept_px": round(intercept, 2),
+                        "tolerance_px": round(fit_tolerance, 2),
+                        "fit_instances": [index + 1 for index in fit_indices],
+                        "aligned_instances": [
+                            index + 1 for index in aligned_candidates
+                        ],
+                        "bottom_rejected_instances": [
+                            index + 1 for index in sorted(bottom_line_rejected)
+                        ],
+                        "geometry_rejected_instances": [
+                            index + 1 for index in sorted(geometry_rejected)
+                        ],
+                        "typical_height_px": round(typical_height, 2),
+                    }
+                )
+
+    selection_pool = set(selection_candidates)
+    same_prompt_depth_rejected: set[int] = set()
+    same_prompt_depth_band: dict[str, Any] = {
+        "requested": max_same_prompt_depth_spread_mm is not None,
+        "enabled": False,
+        "reason": "not_requested",
+        "max_spread_mm": max_same_prompt_depth_spread_mm,
+    }
+
+    def effective_incoming(index: int) -> list[int]:
+        """Occluders that survived the same bottom/geometry filtering."""
+
+        return [
+            incoming
+            for incoming in instances[index]["incoming"]
+            if incoming - 1 in selection_pool
+        ]
+
     def quality(index: int) -> float:
         instance = instances[index]
         x1, y1, x2, y2 = instance["bbox_xyxy"]
@@ -275,9 +420,22 @@ def _apply_expected_count(
         fill = min(1.0, instance["mask_pixels"] / bbox_area)
         height_score = min(1.0, (y2 - y1) / max(1.0, image_height * 0.45))
         width_completeness = min(1.0, (x2 - x1) / max(1.0, typical_width))
+        geometry_penalty = 0.0
+        if prefer_regular_columns and typical_height > 0:
+            width_ratio = (x2 - x1) / max(1.0, typical_width)
+            height_ratio = (y2 - y1) / max(1.0, typical_height)
+            # Within a configured liquid group the projected masks should be
+            # comparable to their neighbours.  Use a smooth log-ratio penalty
+            # instead of a brittle hard size threshold so perspective-induced
+            # size changes remain possible while adjacent-shelf products lose.
+            geometry_penalty = (
+                2.5 * abs(float(np.log(max(0.05, width_ratio))))
+                + 1.2 * abs(float(np.log(max(0.05, height_ratio))))
+            )
         sam_score = float(scores[index] or 0.0)
         support = float(instance["depth_estimate"]["support_ratio"])
-        graph_score = 2.5 if not instance["incoming"] else -0.35 * len(instance["incoming"])
+        incoming = effective_incoming(index)
+        graph_score = 2.5 if not incoming else -0.35 * len(incoming)
         if horizontal_roi is not None:
             # The caller already removed candidates whose centers fall outside
             # the view-specific shelf ROI.  Penalizing the full-image edge as
@@ -306,8 +464,98 @@ def _apply_expected_count(
             + 0.45 * fill
             + 0.50 * height_score
             + 0.75 * width_completeness
+            - geometry_penalty
             - edge_penalty
         )
+
+    if max_same_prompt_depth_spread_mm is not None and selection_candidates:
+        depth_limit = float(max_same_prompt_depth_spread_mm)
+        candidate_mads = np.asarray(
+            [
+                float(instances[index]["depth_estimate"].get("mad_mm") or 0.0)
+                for index in selection_candidates
+            ],
+            dtype=np.float32,
+        )
+        # The configured spread describes the physical layer.  Allow a small,
+        # data-driven margin for RGB/depth edge noise so two genuine foreground
+        # masks at (for example) 719 mm and 751 mm are not split solely because
+        # their robust depth estimates straddle the nominal 30 mm boundary.
+        depth_noise_allowance = min(
+            15.0,
+            float(np.median(candidate_mads)) if candidate_mads.size else 0.0,
+        )
+        effective_depth_limit = depth_limit + depth_noise_allowance
+        depth_order = sorted(
+            selection_candidates,
+            key=lambda index: float(instances[index]["depth_estimate"]["depth_mm"]),
+        )
+        best_window: list[int] = []
+        best_rank: tuple[float, int, float, float] | None = None
+        for left_position, left_index in enumerate(depth_order):
+            left_depth = float(instances[left_index]["depth_estimate"]["depth_mm"])
+            window: list[int] = []
+            for index in depth_order[left_position:]:
+                depth_value = float(instances[index]["depth_estimate"]["depth_mm"])
+                if depth_value - left_depth > effective_depth_limit:
+                    break
+                window.append(index)
+            if not window:
+                continue
+            ranked_quality = sorted(
+                (quality(index) for index in window), reverse=True
+            )[:expected_count]
+            window_depths = [
+                float(instances[index]["depth_estimate"]["depth_mm"])
+                for index in window
+            ]
+            spread = max(window_depths) - min(window_depths)
+            median_depth = float(
+                np.median(np.asarray(window_depths, dtype=np.float32))
+            )
+            # Depth is the primary front/back signal.  Do not prefer a farther
+            # cluster merely because it can provide ``expected_count`` masks:
+            # expected_count is the number of physical slots, while the current
+            # image may legitimately contain fewer masks because a slot is
+            # empty.  Quality and support only break ties within the near layer.
+            rank = (
+                -median_depth,
+                min(len(window), expected_count),
+                float(sum(ranked_quality)),
+                -spread,
+            )
+            if best_rank is None or rank > best_rank:
+                best_rank = rank
+                best_window = window
+
+        if best_window:
+            previous_candidates = set(selection_candidates)
+            selection_candidates = best_window
+            selection_pool = set(selection_candidates)
+            same_prompt_depth_rejected = previous_candidates - selection_pool
+            selected_depths = [
+                float(instances[index]["depth_estimate"]["depth_mm"])
+                for index in selection_candidates
+            ]
+            same_prompt_depth_band.update(
+                {
+                    "enabled": True,
+                    "reason": "nearest_same_prompt_depth_band",
+                    "depth_noise_allowance_mm": round(depth_noise_allowance, 2),
+                    "effective_max_spread_mm": round(effective_depth_limit, 2),
+                    "depth_min_mm": round(min(selected_depths), 2),
+                    "depth_max_mm": round(max(selected_depths), 2),
+                    "depth_spread_mm": round(
+                        max(selected_depths) - min(selected_depths), 2
+                    ),
+                    "band_instances": [
+                        index + 1 for index in sorted(selection_candidates)
+                    ],
+                    "rejected_instances": [
+                        index + 1 for index in sorted(same_prompt_depth_rejected)
+                    ],
+                }
+            )
 
     ordered = sorted(
         selection_candidates,
@@ -324,7 +572,11 @@ def _apply_expected_count(
         for index in ordered
     }
 
-    def solve(minimum_gap: float) -> list[int]:
+    def solve(
+        minimum_gap: float,
+        *,
+        target_pitch: float | None = None,
+    ) -> list[int]:
         count = min(expected_count, len(ordered))
         # dp[(amount, end_position)] = (score, selected candidate indices)
         dp: dict[tuple[int, int], tuple[float, list[int]]] = {}
@@ -338,8 +590,13 @@ def _apply_expected_count(
                     previous_index = ordered[previous_position]
                     if previous is None or centers[index] - centers[previous_index] < minimum_gap:
                         continue
+                    spacing_penalty = 0.0
+                    if target_pitch is not None and target_pitch > 0:
+                        actual_gap = centers[index] - centers[previous_index]
+                        relative_error = abs(actual_gap - target_pitch) / target_pitch
+                        spacing_penalty = 1.75 * min(2.0, relative_error**2)
                     candidate = (
-                        previous[0] + quality(index),
+                        previous[0] + quality(index) - spacing_penalty,
                         previous[1] + [index],
                     )
                     if best is None or candidate[0] > best[0]:
@@ -354,21 +611,398 @@ def _apply_expected_count(
         selected = solve(nominal_slot_width * gap_ratio)
         if len(selected) == min(expected_count, len(ordered)):
             break
+    regular_column_prior: dict[str, Any] = {
+        "requested": prefer_regular_columns,
+        "enabled": False,
+        "reason": "not_requested",
+    }
+    if prefer_regular_columns:
+        regular_column_prior["reason"] = "insufficient_selected_columns"
+        if len(selected) >= 3:
+            selected_centers = sorted(centers[index] for index in selected)
+            selected_gaps = np.diff(np.asarray(selected_centers, dtype=np.float32))
+            target_pitch = float(np.median(selected_gaps))
+            regular_column_prior.update(
+                {
+                    "reason": "regularized",
+                    "enabled": True,
+                    "target_pitch_px": round(target_pitch, 2),
+                    "initial_gaps_px": [round(float(gap), 2) for gap in selected_gaps],
+                }
+            )
+            regularized = solve(
+                nominal_slot_width * 0.08,
+                target_pitch=target_pitch,
+            )
+            if len(regularized) == min(expected_count, len(ordered)):
+                selected = regularized
+            # A sequence of N masks that contains a roughly 2× pitch jump has
+            # actually occupied N+1 shelf slots.  This is the common failure
+            # mode where an adjacent/rear object is used to hide a real empty
+            # column.  Trim the weaker edge until the selected run fits within
+            # the configured slot count; the unfilled slot remains a shortage.
+            def occupied_slots(indices: list[int]) -> tuple[int, list[int]]:
+                ordered_indices = sorted(indices, key=lambda item: centers[item])
+                missing_after: list[int] = []
+                slot_total = 1 if ordered_indices else 0
+                for position, (left, right) in enumerate(
+                    zip(ordered_indices, ordered_indices[1:]), start=1
+                ):
+                    gap = centers[right] - centers[left]
+                    jump = max(1, int(round(gap / max(1.0, target_pitch))))
+                    if gap < target_pitch * 1.55:
+                        jump = 1
+                    slot_total += jump
+                    if jump > 1:
+                        missing_after.extend([position] * (jump - 1))
+                return slot_total, missing_after
+
+            slot_span, missing_after = occupied_slots(selected)
+            while len(selected) > 1 and slot_span > expected_count:
+                left_removed = selected[1:]
+                right_removed = selected[:-1]
+                left_span, _ = occupied_slots(left_removed)
+                right_span, _ = occupied_slots(right_removed)
+                left_rank = (
+                    left_span <= expected_count,
+                    -abs(expected_count - left_span),
+                    sum(quality(index) for index in left_removed),
+                )
+                right_rank = (
+                    right_span <= expected_count,
+                    -abs(expected_count - right_span),
+                    sum(quality(index) for index in right_removed),
+                )
+                selected = left_removed if left_rank >= right_rank else right_removed
+                slot_span, missing_after = occupied_slots(selected)
+            final_centers = sorted(centers[index] for index in selected)
+            final_gaps = np.diff(np.asarray(final_centers, dtype=np.float32))
+            missing_columns = max(0, expected_count - len(selected))
+            regular_column_prior.update(
+                {
+                    "final_gaps_px": [round(float(gap), 2) for gap in final_gaps],
+                    "missing_column_count": missing_columns,
+                    "missing_after_selected_positions": missing_after,
+                    "occupied_slot_span": slot_span,
+                }
+            )
+        else:
+            regular_column_prior["missing_column_count"] = max(
+                0, expected_count - len(selected)
+            )
+    forced_promoted: set[int] = set()
+    hard_count_constraint: dict[str, Any] = {
+        "requested": enforce_expected_count,
+        "available_candidates": len(candidates),
+        "promoted_instances": [],
+        "candidate_shortfall": 0,
+    }
+    if enforce_expected_count and len(selected) < expected_count:
+        remaining = sorted(
+            (index for index in candidates if index not in selected),
+            key=lambda index: quality(index),
+            reverse=True,
+        )
+        needed = expected_count - len(selected)
+        forced_promoted = set(remaining[:needed])
+        selected.extend(remaining[:needed])
+        selection_pool.update(forced_promoted)
+        for index in forced_promoted:
+            x1, _, x2, _ = instances[index]["bbox_xyxy"]
+            centers[index] = (x1 + x2) / 2.0
+        hard_count_constraint["promoted_instances"] = [
+            index + 1 for index in sorted(forced_promoted)
+        ]
+        hard_count_constraint["candidate_shortfall"] = max(
+            0, expected_count - len(selected)
+        )
+
     chosen = set(selected)
     depth_layer_pool = set(selection_candidates)
     for index in candidates:
         instance = instances[index]
         if index in chosen:
             instance["selected"] = True
-            instance["selection_reason"] = "front_layer_expected_count"
+            instance["selection_reason"] = (
+                "forced_expected_count"
+                if index in forced_promoted
+                else "front_layer_expected_count"
+            )
         else:
             instance["selected"] = False
-            if not instance["incoming"]:
+            if index in bottom_line_rejected:
+                instance["selection_reason"] = "off_front_bottom_line"
+            elif index in geometry_rejected:
+                instance["selection_reason"] = "incomplete_mask_geometry"
+            elif index in same_prompt_depth_rejected:
+                instance["selection_reason"] = "outside_same_prompt_depth_band"
+            elif not effective_incoming(index):
                 instance["selection_reason"] = (
                     "global_back_depth_layer"
                     if global_depth_layer["enabled"] and index not in depth_layer_pool
                     else "exceeds_expected_front_count"
                 )
+
+    suspected_missing_regions: list[dict[str, Any]] = []
+    selected_left_to_right = sorted(selected, key=lambda index: centers[index])
+    if same_prompt_depth_band.get("enabled"):
+        band_depth_min = float(same_prompt_depth_band["depth_min_mm"])
+        depth_limit = float(same_prompt_depth_band["max_spread_mm"])
+        for index in sorted(same_prompt_depth_rejected):
+            instance_depth = float(instances[index]["depth_estimate"]["depth_mm"])
+            if (
+                instance_depth <= band_depth_min + depth_limit
+                or effective_incoming(index)
+            ):
+                continue
+            suspected_missing_regions.append(
+                {
+                    "strategy": "same_prompt_depth_outlier",
+                    "bbox_xyxy": [
+                        round(float(value), 2) for value in instances[index]["bbox_xyxy"]
+                    ],
+                    "instance_index": index + 1,
+                    "depth_mm": round(instance_depth, 2),
+                    "front_band_min_mm": round(band_depth_min, 2),
+                    "excess_depth_mm": round(instance_depth - band_depth_min, 2),
+                    "threshold_mm": round(depth_limit, 2),
+                }
+            )
+    if prefer_regular_columns and regular_column_prior.get("enabled"):
+        target_pitch = float(regular_column_prior["target_pitch_px"])
+        typical_height = float(bottom_line_prior.get("typical_height_px") or 0.0)
+        slope = float(bottom_line_prior.get("slope") or 0.0)
+        intercept = float(bottom_line_prior.get("intercept_px") or image_height)
+
+        def append_regular_gap(
+            center_x: float,
+            *,
+            strategy: str,
+            details: dict[str, Any],
+        ) -> None:
+            if any(
+                abs(
+                    center_x
+                    - (
+                        float(region["bbox_xyxy"][0])
+                        + float(region["bbox_xyxy"][2])
+                    )
+                    / 2.0
+                )
+                < target_pitch * 0.45
+                for region in suspected_missing_regions
+                if isinstance(region.get("bbox_xyxy"), list)
+            ):
+                return
+            bottom_y = slope * center_x + intercept
+            half_width = max(5.0, typical_width * 0.50)
+            box_height = max(10.0, typical_height)
+            bbox = [
+                max(float(roi_left), center_x - half_width),
+                max(0.0, bottom_y - box_height),
+                min(float(roi_right), center_x + half_width),
+                min(float(image_height), bottom_y),
+            ]
+            suspected_missing_regions.append(
+                {
+                    "strategy": strategy,
+                    "bbox_xyxy": [round(value, 2) for value in bbox],
+                    "center_x_px": round(center_x, 2),
+                    "expected_pitch_px": round(target_pitch, 2),
+                    **details,
+                }
+            )
+
+        for left_index, right_index in zip(
+            selected_left_to_right, selected_left_to_right[1:]
+        ):
+            left_center = centers[left_index]
+            right_center = centers[right_index]
+            gap = right_center - left_center
+            if gap < target_pitch * 1.55:
+                continue
+            slot_jump = max(2, int(round(gap / max(1.0, target_pitch))))
+            for offset in range(1, slot_jump):
+                center_x = left_center + target_pitch * offset
+                if center_x >= right_center - target_pitch * 0.45:
+                    break
+                append_regular_gap(
+                    center_x,
+                    strategy="regular_column_gap",
+                    details={
+                        "left_instance": left_index + 1,
+                        "right_instance": right_index + 1,
+                        "observed_gap_px": round(gap, 2),
+                    },
+                )
+
+        # Internal gaps are unambiguous.  When all detected columns are
+        # continuous but fewer than configured, cautiously extrapolate the two
+        # ends.  Mark an edge only when one side has clearly more shelf room and
+        # no complete bottom-aligned SAM mask already occupies the projected
+        # slot.  Symmetric/ambiguous edge shortages are intentionally left
+        # unlabelled.
+        remaining_missing = max(
+            0,
+            expected_count
+            - len(selected_left_to_right)
+            - len(suspected_missing_regions),
+        )
+        if remaining_missing and selected_left_to_right:
+            aligned_centers = [centers[index] for index in selection_candidates]
+            current_left = centers[selected_left_to_right[0]]
+            current_right = centers[selected_left_to_right[-1]]
+            half_width = max(5.0, typical_width * 0.50)
+            for _ in range(remaining_missing):
+                left_center = current_left - target_pitch
+                right_center = current_right + target_pitch
+
+                def edge_is_free(center_x: float) -> bool:
+                    if not (
+                        center_x - half_width >= roi_left
+                        and center_x + half_width <= roi_right
+                    ):
+                        return False
+                    return all(
+                        abs(center_x - existing_center) > target_pitch * 0.45
+                        for existing_center in aligned_centers
+                    )
+
+                left_free = edge_is_free(left_center)
+                right_free = edge_is_free(right_center)
+                left_margin = current_left - roi_left
+                right_margin = roi_right - current_right
+                if left_free and not right_free:
+                    side = "left"
+                elif right_free and not left_free:
+                    side = "right"
+                elif left_free and right_free:
+                    if abs(left_margin - right_margin) < target_pitch * 0.45:
+                        break
+                    side = "left" if left_margin > right_margin else "right"
+                else:
+                    break
+                center_x = left_center if side == "left" else right_center
+                append_regular_gap(
+                    center_x,
+                    strategy="regular_column_edge_gap",
+                    details={
+                        "edge": side,
+                        "left_margin_px": round(left_margin, 2),
+                        "right_margin_px": round(right_margin, 2),
+                    },
+                )
+                aligned_centers.append(center_x)
+                if side == "left":
+                    current_left = center_x
+                else:
+                    current_right = center_x
+    elif prefer_vertical_position_anomaly and len(selected_left_to_right) >= 3:
+        selected_bottom_y = np.asarray(
+            [
+                float(instances[index]["bbox_xyxy"][3])
+                for index in selected_left_to_right
+            ],
+            dtype=np.float32,
+        )
+        selected_heights = np.asarray(
+            [
+                float(
+                    instances[index]["bbox_xyxy"][3]
+                    - instances[index]["bbox_xyxy"][1]
+                )
+                for index in selected_left_to_right
+            ],
+            dtype=np.float32,
+        )
+        y_threshold = max(16.0, 0.18 * float(np.median(selected_heights)))
+        for position in range(1, len(selected_left_to_right) - 1):
+            left_y = float(selected_bottom_y[position - 1])
+            current_y = float(selected_bottom_y[position])
+            right_y = float(selected_bottom_y[position + 1])
+            delta_left = current_y - left_y
+            delta_right = current_y - right_y
+            # Perspective produces a gradual monotonic Y trend.  A rear/upper
+            # object is different: its bottom is an outlier in the same
+            # direction relative to both immediate neighbours.
+            same_direction = delta_left * delta_right > 0
+            if not (
+                same_direction
+                and abs(delta_left) > y_threshold
+                and abs(delta_right) > y_threshold
+            ):
+                continue
+            index = selected_left_to_right[position]
+            suspected_missing_regions.append(
+                {
+                    "strategy": "bilateral_y_anomaly",
+                    "bbox_xyxy": [
+                        round(float(value), 2) for value in instances[index]["bbox_xyxy"]
+                    ],
+                    "instance_index": index + 1,
+                    "bottom_y_px": round(current_y, 2),
+                    "left_bottom_y_px": round(left_y, 2),
+                    "right_bottom_y_px": round(right_y, 2),
+                    "left_delta_px": round(delta_left, 2),
+                    "right_delta_px": round(delta_right, 2),
+                    "threshold_px": round(y_threshold, 2),
+                }
+            )
+    elif len(selected_left_to_right) >= 3:
+        # For non-regular products, compensate for shelf perspective with a
+        # robust depth-vs-x line.  Only positive residuals are meaningful here:
+        # a substantially farther mask indicates that the front product may be
+        # absent and a rear product/background is visible in its place.
+        selected_x = np.asarray(
+            [centers[index] for index in selected_left_to_right], dtype=np.float32
+        )
+        selected_depth = np.asarray(
+            [
+                float(instances[index]["depth_estimate"]["depth_mm"])
+                for index in selected_left_to_right
+            ],
+            dtype=np.float32,
+        )
+        pair_slopes = []
+        for left_position in range(len(selected_left_to_right)):
+            for right_position in range(left_position + 1, len(selected_left_to_right)):
+                delta_x = float(selected_x[right_position] - selected_x[left_position])
+                if abs(delta_x) < max(8.0, typical_width * 0.35):
+                    continue
+                pair_slopes.append(
+                    float(
+                        (selected_depth[right_position] - selected_depth[left_position])
+                        / delta_x
+                    )
+                )
+        depth_slope = float(np.median(pair_slopes)) if pair_slopes else 0.0
+        depth_intercept = float(np.median(selected_depth - depth_slope * selected_x))
+        expected_depth = depth_slope * selected_x + depth_intercept
+        depth_residual = selected_depth - expected_depth
+        residual_center = float(np.median(depth_residual))
+        residual_mad = float(np.median(np.abs(depth_residual - residual_center)))
+        depth_threshold = max(
+            60.0,
+            3.5 * 1.4826 * residual_mad,
+            0.035 * float(np.median(selected_depth)),
+        )
+        for position, index in enumerate(selected_left_to_right):
+            residual = float(depth_residual[position] - residual_center)
+            if residual <= depth_threshold:
+                continue
+            suspected_missing_regions.append(
+                {
+                    "strategy": "positive_depth_anomaly",
+                    "bbox_xyxy": [
+                        round(float(value), 2) for value in instances[index]["bbox_xyxy"]
+                    ],
+                    "instance_index": index + 1,
+                    "depth_mm": round(float(selected_depth[position]), 2),
+                    "expected_depth_mm": round(float(expected_depth[position]), 2),
+                    "positive_residual_mm": round(residual, 2),
+                    "threshold_mm": round(depth_threshold, 2),
+                }
+            )
     return {
         "expected": expected_count,
         "selected": len(selected),
@@ -379,6 +1013,20 @@ def _apply_expected_count(
         "typical_instance_width_px": round(typical_width, 2),
         "nominal_slot_width_px": round(nominal_slot_width, 2),
         "global_depth_layer": global_depth_layer,
+        "bottom_line_prior": bottom_line_prior,
+        "regular_column_prior": regular_column_prior,
+        "same_prompt_depth_band": same_prompt_depth_band,
+        "hard_count_constraint": hard_count_constraint,
+        "missing_detection_strategy": (
+            "regular_column_gap"
+            if prefer_regular_columns
+            else (
+                "bilateral_y_anomaly"
+                if prefer_vertical_position_anomaly
+                else "positive_depth_anomaly"
+            )
+        ),
+        "suspected_missing_regions": suspected_missing_regions,
     }
 
 
@@ -390,6 +1038,10 @@ def select_front_row_instances(
     expected_front_count: int | None = None,
     horizontal_roi: tuple[int, int] | None = None,
     prefer_global_depth_layer: bool = False,
+    prefer_regular_columns: bool = False,
+    prefer_vertical_position_anomaly: bool = False,
+    max_same_prompt_depth_spread_mm: float | None = None,
+    enforce_expected_count: bool = False,
 ) -> dict[str, Any]:
     """Return front instances, duplicate suppression and pairwise depth edges."""
 
@@ -399,6 +1051,11 @@ def select_front_row_instances(
         raise ValueError("mask and depth shapes must match")
     if expected_front_count is not None and expected_front_count <= 0:
         raise ValueError("expected_front_count must be positive")
+    if (
+        max_same_prompt_depth_spread_mm is not None
+        and max_same_prompt_depth_spread_mm <= 0
+    ):
+        raise ValueError("max_same_prompt_depth_spread_mm must be positive")
     normalized_scores = list(scores or [None] * len(normalized_masks))
     if len(normalized_scores) != len(normalized_masks):
         raise ValueError("scores and masks must have the same length")
@@ -641,6 +1298,10 @@ def select_front_row_instances(
             image_shape=depth.shape,
             horizontal_roi=horizontal_roi,
             prefer_global_depth_layer=prefer_global_depth_layer,
+            prefer_regular_columns=prefer_regular_columns,
+            prefer_vertical_position_anomaly=prefer_vertical_position_anomaly,
+            max_same_prompt_depth_spread_mm=max_same_prompt_depth_spread_mm,
+            enforce_expected_count=enforce_expected_count,
         )
         front_indices = [
             int(instance["instance_index"])

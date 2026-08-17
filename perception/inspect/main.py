@@ -610,27 +610,38 @@ def build_product_findings(
     task_type: TaskType,
     reviewed_findings: Sequence[ReviewedFinding],
 ) -> InspectApiResponse:
-    """Convert validated Qwen findings into the public response contract."""
+    """Convert validated Qwen findings into the deduplicated public contract."""
 
     if task_type == "SHORTAGE":
+        seen_names: set[str] = set()
+        findings: list[ShortageProductFinding] = []
+        for finding in reviewed_findings:
+            name = (finding.shortage_product_name or "").strip()
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            findings.append(ShortageProductFinding(shortage_product_name=name))
         return InspectApiResponse(
-            findings=[
-                ShortageProductFinding(
-                    shortage_product_name=finding.shortage_product_name or ""
-                )
-                for finding in reviewed_findings
-                if finding.shortage_product_name
-            ]
+            findings=findings
+        )
+
+    seen_pairs: set[tuple[str, str]] = set()
+    findings: list[MisplacedProductFinding] = []
+    for finding in reviewed_findings:
+        misplaced_name = (finding.misplaced_product_name or "").strip()
+        gt_name = (finding.gt_product_name or "").strip()
+        key = (misplaced_name, gt_name)
+        if not misplaced_name or not gt_name or key in seen_pairs:
+            continue
+        seen_pairs.add(key)
+        findings.append(
+            MisplacedProductFinding(
+                misplaced_product_name=misplaced_name,
+                gt_product_name=gt_name,
+            )
         )
     return InspectApiResponse(
-        findings=[
-            MisplacedProductFinding(
-                misplaced_product_name=finding.misplaced_product_name or "",
-                gt_product_name=finding.gt_product_name or "",
-            )
-            for finding in reviewed_findings
-            if finding.misplaced_product_name and finding.gt_product_name
-        ]
+        findings=findings
     )
 
 

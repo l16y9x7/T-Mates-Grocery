@@ -9,6 +9,7 @@ const runAllButton = document.querySelector("#runAll");
 
 let records = [];
 let mapping = [];
+let frontCompareRequestKey = "";
 
 async function api(url, options = {}) {
   const response = await fetch(url, options);
@@ -125,6 +126,159 @@ function populatePrompts(row) {
   runAllButton.disabled = !configuredGroups.length && !(row?.candidate_skus || []).length;
 }
 
+function renderFrontCompare(payload) {
+  const container = document.querySelector("#frontCompareResults");
+  container.replaceChildren();
+  const promptGroups = payload.prompt_groups || [];
+  if (!promptGroups.length) {
+    const empty = document.createElement("div");
+    empty.className = "flow-compare-empty";
+    empty.textContent = "该层没有可展示的 Prompt 对比结果";
+    container.append(empty);
+    return;
+  }
+  promptGroups.forEach((item) => {
+    const card = document.createElement("article");
+    card.className = "flow-compare-card";
+    const header = document.createElement("header");
+    const heading = document.createElement("h3");
+    const summary = document.createElement("span");
+    const missingCount = (item.missing_slots || []).length;
+    const systematicShift = item.systematic_depth_shift;
+    const systematicShiftText = systematicShift?.detected
+      ? ` · 共同偏移 ${systematicShift.median_delta_mm >= 0 ? "+" : ""}${systematicShift.median_delta_mm}mm（已抑制）`
+      : "";
+    const missingProductText = (item.missing_product_names || []).length
+      ? ` · 商品：${item.missing_product_names.join("、")}`
+      : "";
+    const detectionFailureText = item.current_detection_failed
+      ? " · Current SAM3 未检出（未判缺失）"
+      : "";
+    const matchingStrategyText = item.slot_matching_strategy === "ordinal_left_to_right"
+      ? " · 左右顺序匹配"
+      : " · 单调序列匹配";
+    heading.textContent = `GROUP ${item.group_index} · ${item.prompt}`;
+    const resolvedSlotCount = item.resolved_slot_count ?? (item.slots || []).length;
+    summary.textContent = `槽位 ${resolvedSlotCount}/${item.expected_front_count} · baseline前排mask ${item.baseline_front_count} · current近层mask ${item.current_front_count}${matchingStrategyText} · Δ>${item.depth_delta_threshold_mm}mm 判缺失 · ${missingCount ? `缺失 ${missingCount}` : "无缺失"}${missingProductText}${systematicShiftText}${detectionFailureText}`;
+    summary.className = (missingCount || item.current_detection_failed) ? "status error" : "status success";
+    header.append(heading, summary);
+    card.append(header);
+
+    const images = document.createElement("div");
+    images.className = "flow-compare-images";
+    [
+      [item.artifact_urls?.baseline_front, "Baseline 新流程", "基准前排 mask"],
+      [item.artifact_urls?.current_front, "Current 新流程", "当前前排 mask"],
+      [item.artifact_urls?.comparison, "槽位对比", "青色=已占用槽位，紫色虚线=缺失"],
+    ].forEach(([url, title, description]) => {
+      const figure = document.createElement("figure");
+      const caption = document.createElement("figcaption");
+      const strong = document.createElement("strong");
+      const small = document.createElement("small");
+      const image = document.createElement("img");
+      strong.textContent = title;
+      small.textContent = description;
+      caption.append(strong, small);
+      if (url) image.src = url;
+      image.alt = title;
+      figure.append(caption, image);
+      images.append(figure);
+    });
+    card.append(images);
+
+    const table = document.createElement("table");
+    table.className = "slot-table";
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    ["槽位", "商品身份", "状态", "Baseline depth", "Current depth", "Δ depth", "实例匹配"].forEach((label) => {
+      const th = document.createElement("th");
+      th.textContent = label;
+      headRow.append(th);
+    });
+    thead.append(headRow);
+    table.append(thead);
+    const tbody = document.createElement("tbody");
+    (item.slots || []).forEach((slot) => {
+      const row = document.createElement("tr");
+      row.className = slot.status.startsWith("missing_") ? "missing" : "occupied";
+      const statusLabels = {
+        occupied: "已占用",
+        occupied_systematic_shift: "已占用（共同偏移）",
+        missing_unmatched: "当前无匹配 mask",
+        missing_depth_delta: "深度后移",
+        baseline_incomplete: "基准不完整",
+        current_detection_failed: "Current SAM3 未检出（未知）",
+      };
+      const values = [
+        `SLOT ${slot.slot_index}`,
+        slot.product_name || "未配置",
+        statusLabels[slot.status] || slot.status,
+        slot.baseline_depth_mm == null ? "—" : `${slot.baseline_depth_mm} mm`,
+        slot.current_depth_mm == null ? "—" : `${slot.current_depth_mm} mm`,
+        slot.depth_delta_mm == null ? "—" : `${slot.depth_delta_mm} mm`,
+        `#${slot.baseline_instance_index} → ${slot.current_instance_index == null ? "—" : `#${slot.current_instance_index}`}`,
+      ];
+      values.forEach((value) => {
+        const td = document.createElement("td");
+        td.textContent = value;
+        row.append(td);
+      });
+      tbody.append(row);
+    });
+    table.append(tbody);
+    card.append(table);
+    container.append(card);
+  });
+}
+
+async function loadFrontCompare(record, row) {
+  const container = document.querySelector("#frontCompareResults");
+  const requestKey = `${record.group}/${record.record}/${row.level || ""}`;
+  frontCompareRequestKey = requestKey;
+  container.replaceChildren();
+  if (!record.front_compare_available) {
+    const empty = document.createElement("div");
+    empty.className = "flow-compare-empty";
+    empty.textContent = "尚未生成。运行 python inspect/batch_front_row_compare.py --workers 4 --overwrite 后刷新页面。";
+    container.append(empty);
+    setStatus("#frontCompareStatus", "尚未生成批量结果");
+    return;
+  }
+  if (!row.level) {
+    setStatus("#frontCompareStatus", "当前行没有物理层编号", "error");
+    return;
+  }
+  setStatus("#frontCompareStatus", "正在读取缓存结果……");
+  try {
+    const payload = await api(
+      `/api/sam-row-compare/result/${encodeURIComponent(record.group)}/${encodeURIComponent(record.record)}/${encodeURIComponent(row.level)}`,
+    );
+    if (frontCompareRequestKey !== requestKey) return;
+    renderFrontCompare(payload);
+    const missingCount = (payload.prompt_groups || []).reduce(
+      (total, item) => total + (item.missing_slots || []).length,
+      0,
+    );
+    const missingProductNames = (payload.findings || []).map(
+      (item) => item.shortage_product_name,
+    );
+    setStatus(
+      "#frontCompareStatus",
+      missingCount
+        ? `完成 · 疑似缺失 ${missingCount}${missingProductNames.length ? ` · ${missingProductNames.join("、")}` : ""}`
+        : "完成 · 无缺失",
+      missingCount ? "error" : "success",
+    );
+  } catch (error) {
+    if (frontCompareRequestKey !== requestKey) return;
+    const empty = document.createElement("div");
+    empty.className = "flow-compare-empty";
+    empty.textContent = error.message;
+    container.append(empty);
+    setStatus("#frontCompareStatus", error.message, "error");
+  }
+}
+
 function renderSelection() {
   const record = selectedRecord();
   const row = selectedRow();
@@ -141,6 +295,7 @@ function renderSelection() {
   populatePrompts(row);
   document.querySelector("#results").replaceChildren();
   setStatus("#loadStatus", `${record.group} · ${record.record} · ROW ${row.row_index}`, "success");
+  loadFrontCompare(record, row);
 }
 
 function metric(label, value, suffix = "") {
@@ -170,7 +325,28 @@ function renderResult(result) {
       ? ` · 深度近层 ≤ ${depthLayer.front_depth_max_mm}mm（断层 ${depthLayer.split_gap_mm}mm）`
       : ` · 深度分层回退（${depthLayer.reason}）`
     : "";
-  timing.textContent = `${result.front_instance_indices.length}/${result.instances.length} front${countText}${depthLayerText} · ${Math.round(result.elapsed_ms)} ms`;
+  const regularColumns = result.count_constraint?.regular_column_prior;
+  const regularColumnsText = regularColumns?.enabled
+    ? ` · 等距列 ${regularColumns.target_pitch_px}px${regularColumns.missing_column_count ? ` · 缺失 ${regularColumns.missing_column_count} 列` : ""}`
+    : "";
+  const bottomLine = result.count_constraint?.bottom_line_prior;
+  const bottomLineText = bottomLine?.enabled
+    ? ` · 底线 ±${bottomLine.tolerance_px}px`
+    : "";
+  const suspectedMissingCount = (result.suspected_missing_regions || []).length;
+  const suspectedMissingText = suspectedMissingCount
+    ? ` · 疑似缺失 ${suspectedMissingCount}`
+    : "";
+  const samePromptDepth = result.count_constraint?.same_prompt_depth_band;
+  const samePromptDepthText = samePromptDepth?.requested
+    ? ` · 同Prompt深度≤${samePromptDepth.max_spread_mm}mm`
+    : "";
+  const samRetryText = (result.sam3_attempts || []).length > 1
+    ? (result.sam3_detection_status === "detected"
+      ? " · SAM3 低阈值重试成功"
+      : " · SAM3 重试后仍未检出")
+    : "";
+  timing.textContent = `${result.front_instance_indices.length}/${result.instances.length} front${countText}${depthLayerText}${bottomLineText}${regularColumnsText}${samePromptDepthText}${suspectedMissingText}${samRetryText} · ${Math.round(result.elapsed_ms)} ms`;
   header.append(title, timing);
   card.append(header);
 
@@ -179,8 +355,8 @@ function renderResult(result) {
   const summary = document.createElement("div");
   summary.className = "result-summary";
   [
-    [result.overlay_data_url, "全部实例：绿=前排，红=后排，黄=深度不可靠"],
-    [result.front_overlay_data_url, "最终 front-row 实例"],
+    [result.overlay_data_url, "全部实例：绿=前排，红=后排，黄=深度不可靠，紫色虚线=疑似缺失"],
+    [result.front_overlay_data_url, "最终 front-row 实例；紫色虚线=疑似缺失"],
     [result.front_mask_data_url, "最终 front-row mask"],
   ].forEach(([url, label]) => {
     const figure = document.createElement("figure");

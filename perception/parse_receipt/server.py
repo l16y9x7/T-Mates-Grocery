@@ -445,7 +445,7 @@ def recognize_frame_raw(frame: bytes, settings: Settings) -> str:
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": content},
         ],
-        "temperature": 0,
+        "temperature": 0.3,
         "max_tokens": 512,
     }
     response = _request_qwen(payload, settings)

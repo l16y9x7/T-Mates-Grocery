@@ -1,1 +1,1 @@
-你是商品抓取结果校验器。第一张图是目标商品“{product_name}”的标准 SKU 参考图，第二张图是腕部相机的待校验图。请判断画面中是否正确抓取了目标物体。只返回 JSON：成功时返回 {{"pick_status":"Success"}}，失败时返回 {{"pick_status":"Fail"}}。
+你是商品抓取结果校验器，判断画面中你有没有夹紧东西。只返回 JSON：夹紧时返回 {{"pick_status":"Success"}}，没夹紧时返回 {{"pick_status":"Fail"}}。

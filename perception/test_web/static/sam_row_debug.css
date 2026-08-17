@@ -34,6 +34,22 @@ button:disabled { cursor: wait; opacity: .55; }
 .compare-grid, .row-grid { display: grid; gap: 12px; margin-top: 12px; }
 .compare-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .row-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.flow-compare-panel { margin-top: 12px; padding: 14px; }
+.flow-compare-panel > header { align-items: center; margin: 0 0 12px; }
+.flow-compare-panel h2 { margin: 3px 0 0; font-size: 21px; }
+.flow-compare-results { display: grid; gap: 12px; }
+.flow-compare-empty { padding: 22px; color: var(--muted); text-align: center; border: 1px dashed #475569; border-radius: 9px; }
+.flow-compare-card { overflow: hidden; border: 1px solid #315266; border-radius: 10px; background: #08131d; }
+.flow-compare-card > header { align-items: baseline; margin: 0; padding: 10px 12px; background: #0d202b; }
+.flow-compare-card h3 { margin: 0; font-size: 16px; }
+.flow-compare-images { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px; }
+.flow-compare-images figure { border-radius: 8px; }
+.flow-compare-images img { height: 270px; }
+.slot-table { width: calc(100% - 20px); margin: 0 10px 10px; border-collapse: collapse; font-size: 12px; }
+.slot-table th, .slot-table td { padding: 7px 8px; border: 1px solid #263b49; text-align: left; }
+.slot-table th { color: #9bddeb; background: #0b1923; }
+.slot-table tr.missing td { color: #f5a3d7; background: #271124; }
+.slot-table tr.occupied td:first-child { color: var(--good); }
 figure { margin: 0; overflow: hidden; background: #03080d; }
 figcaption { display: grid; gap: 3px; min-height: 55px; padding: 9px 11px; background: var(--panel); }
 figcaption small { color: var(--muted); overflow-wrap: anywhere; }
@@ -67,7 +83,7 @@ figure.unavailable img { visibility: hidden; }
 .empty { padding: 24px; color: var(--muted); text-align: center; border: 1px dashed #475569; border-radius: 10px; }
 @media (max-width: 900px) {
   header { align-items: start; flex-direction: column; }
-  .controls, .prompt-panel, .compare-grid, .row-grid, .result-gallery { grid-template-columns: 1fr; }
+  .controls, .prompt-panel, .compare-grid, .row-grid, .result-gallery, .flow-compare-images { grid-template-columns: 1fr; }
   .prompt-field { grid-row: auto; }
   figure img { height: auto; min-height: 220px; }
 }

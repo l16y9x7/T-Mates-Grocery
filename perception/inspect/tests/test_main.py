@@ -318,6 +318,67 @@ class InspectMainTest(unittest.TestCase):
             ]},
         )
 
+    def test_shortage_public_output_deduplicates_product_names(self) -> None:
+        reviewed = [
+            inspect_api.ReviewedFinding(
+                region_index=1,
+                confidence=0.91,
+                shortage_product_name=" 可口可乐罐装 ",
+            ),
+            inspect_api.ReviewedFinding(
+                region_index=2,
+                confidence=0.87,
+                shortage_product_name="可口可乐罐装",
+            ),
+            inspect_api.ReviewedFinding(
+                region_index=3,
+                confidence=0.82,
+                shortage_product_name="雪碧罐装",
+            ),
+        ]
+
+        response = inspect_api.build_product_findings("SHORTAGE", reviewed)
+
+        self.assertEqual(
+            response.model_dump(),
+            {
+                "findings": [
+                    {"shortage_product_name": "可口可乐罐装"},
+                    {"shortage_product_name": "雪碧罐装"},
+                ]
+            },
+        )
+
+    def test_misplaced_public_output_deduplicates_product_pairs(self) -> None:
+        reviewed = [
+            inspect_api.ReviewedFinding(
+                region_index=1,
+                confidence=0.91,
+                misplaced_product_name="可口可乐罐装",
+                gt_product_name="雪碧罐装",
+            ),
+            inspect_api.ReviewedFinding(
+                region_index=2,
+                confidence=0.88,
+                misplaced_product_name="可口可乐罐装",
+                gt_product_name="雪碧罐装",
+            ),
+        ]
+
+        response = inspect_api.build_product_findings("MISPLACED", reviewed)
+
+        self.assertEqual(
+            response.model_dump(),
+            {
+                "findings": [
+                    {
+                        "misplaced_product_name": "可口可乐罐装",
+                        "gt_product_name": "雪碧罐装",
+                    }
+                ]
+            },
+        )
+
     def test_invalid_image_has_clear_client_error(self) -> None:
         with self.assertRaises(HTTPException) as context:
             inspect_api.decode_image("not-base64!", "baseline_image_base64")

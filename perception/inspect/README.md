@@ -47,6 +47,9 @@ Content-Type: application/json
 }
 ```
 
+同一商品即使对应多个缺货槽位，公共响应中也只保留一条
+`shortage_product_name`；内部调试结果仍保留各物理槽位。
+
 `MISPLACED` 使用相同的顶层结构：
 
 ```json

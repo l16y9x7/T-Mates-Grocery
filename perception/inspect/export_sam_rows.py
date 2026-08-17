@@ -233,9 +233,12 @@ def export_record(
     *,
     pose_type: str,
     overwrite: bool,
+    rgb_filename: str = "rgb.jpg",
+    depth_filename: str = "depth_mm.npy",
+    source_variant: str = "current",
 ) -> dict[str, Any]:
-    rgb_path = record_directory / "rgb.jpg"
-    depth_path = record_directory / "depth_mm.npy"
+    rgb_path = record_directory / rgb_filename
+    depth_path = record_directory / depth_filename
     if not rgb_path.is_file() or not depth_path.is_file():
         missing = [
             path.name for path in (rgb_path, depth_path) if not path.is_file()
@@ -350,6 +353,7 @@ def export_record(
     write_image(output_directory / "row_detection.jpg", detection_overlay)
     metadata = {
         "schema_version": 1,
+        "source_variant": source_variant,
         "source_record": str(record_directory.resolve()),
         "source_rgb": str(rgb_path.resolve()),
         "source_depth_mm": str(depth_path.resolve()),

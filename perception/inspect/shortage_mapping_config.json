@@ -1,58 +1,368 @@
 {
   "H1_F_L_INSPECT": {
-    "L1": [{"expected_front_count": 3, "sam3_prompt": "orange carton"}, {"expected_front_count": 3, "sam3_prompt": "white carton"}, {"expected_front_count": 3, "sam3_prompt": "blue and white container"}],
-    "L2": [{"expected_front_count": 6, "sam3_prompt": "package"}],
-    "L3": [{"expected_front_count": 5, "sam3_prompt": "package"}],
-    "L4": [{"expected_front_count": 5, "sam3_prompt": "package"}],
-    "L5": [{"expected_front_count": 4, "sam3_prompt": "package"}]
+    "L1": [
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "orange carton",
+        "slot_product_names": ["NFC桔汁", "NFC桔汁", "NFC桔汁"]
+      },
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "white and green carton",
+        "slot_product_names": ["蒙牛纯牛奶", "蒙牛纯牛奶", "蒙牛纯牛奶"]
+      },
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "blue and white container",
+        "slot_product_names": ["纯甄酸奶", "纯甄酸奶", "纯甄酸奶"]
+      }
+    ],
+    "L2": [
+      {
+        "expected_front_count": 6,
+        "sam3_prompt": "package",
+        "slot_product_names": ["妙芙香芋牛奶味", "妙芙绵醇奶油味", "妙芙巧克力味", "薯愿非油炸清新番茄味", "薯愿非油炸韩国泡菜味", "薯愿非油炸香烤原味"]
+      }
+    ],
+    "L3": [
+      {
+        "expected_front_count": 5,
+        "sam3_prompt": "package",
+        "slot_product_names": ["Lay’s乐事薯片墨西哥鸡汁番茄味", "Lay’s乐事薯片经典原味", "Lay’s乐事薯片黄瓜味", "Lay’s乐事薯片意大利香浓红烩味", "Lay’s乐事薯片青柠味"]
+      }
+    ],
+    "L4": [
+      {
+        "expected_front_count": 5,
+        "sam3_prompt": "package",
+        "slot_product_names": ["卫龙辣条", "卫龙辣条", "卫龙辣条", "百醇草莓香草味", "百醇巧克力味"]
+      }
+    ],
+    "L5": [
+      {
+        "expected_front_count": 1,
+        "sam3_prompt": "red box",
+        "slot_product_names": ["好丽友派"]
+      },
+      {
+        "expected_front_count": 2,
+        "sam3_prompt": "white plastic package",
+        "slot_product_names": ["吐司方方原味", "吐司方方原味"]
+      },
+      {
+        "expected_front_count": 1,
+        "sam3_prompt": "yellow package",
+        "slot_product_names": ["好友趣蜂蜜黄油味"]
+      }
+    ]
   },
   "H1_F_R_INSPECT": {
-    "L1": [{"expected_front_count": 5, "sam3_prompt": "package"}],
-    "L2": [{"expected_front_count": 3, "sam3_prompt": "can"}, {"expected_front_count": 4, "sam3_prompt": "oreo package"}],
-    "L3": [{"expected_front_count": 4, "sam3_prompt": "package"}],
-    "L4": [{"expected_front_count": 4, "sam3_prompt": "package"}],
-    "L5": [{"expected_front_count": 4, "sam3_prompt": "package"}]
+    "L1": [
+      {
+        "expected_front_count": 4,
+        "sam3_prompt": "blue steel can",
+        "slot_product_names": ["百草味海苔肉松蛋卷", "百草味海苔肉松蛋卷", "百草味海苔肉松蛋卷", "百草味海苔肉松蛋卷"]
+      },
+      {
+        "expected_front_count": 2,
+        "sam3_prompt": "lying golden ferrero chocolate bar",
+        "slot_product_names": ["费列罗巧克力", "费列罗巧克力"]
+      }
+    ],
+    "L2": [
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "can",
+        "slot_product_names": ["品客薯片烧烤牛排味", "品客原味", "品客酸乳酪洋葱味"]
+      },
+      {
+        "expected_front_count": 4,
+        "sam3_prompt": "oreo box",
+        "slot_product_names": ["奥利奥香甜不腻", "奥利奥冰淇淋抹茶味", "奥利奥浓醇巧克力味", "奥利奥白桃乌龙味"]
+      }
+    ],
+    "L3": [
+      {
+        "expected_front_count": 4,
+        "sam3_prompt": "package",
+        "slot_product_names": ["呀！土豆番茄酱味", "呀！土豆番茄酱味", "好友趣韩国泡菜味", "好友趣韩国泡菜味"]
+      }
+    ],
+    "L4": [
+      {
+        "expected_front_count": 4,
+        "sam3_prompt": "package",
+        "slot_product_names": ["上好佳鲜虾条", "上好佳鲜虾条", "浪味仙", "浪味仙"]
+      }
+    ],
+    "L5": [
+      {
+        "expected_front_count": 4,
+        "sam3_prompt": "package",
+        "slot_product_names": ["上好佳鲜虾条", "上好佳鲜虾条", "浪味仙", "浪味仙"]
+      }
+    ]
   },
   "H1_B_L_INSPECT": {
-    "L1": [{"expected_front_count": 5, "sam3_prompt": "plastic container"}],
-    "L2": [{"expected_front_count": 9, "sam3_prompt": "package"}],
-    "L3": [{"expected_front_count": 4, "sam3_prompt": "package"}],
-    "L4": [{"expected_front_count": 4, "sam3_prompt": "package"}],
-    "L5": [{"expected_front_count": 3, "sam3_prompt": "box"}]
+    "L1": [
+      {
+        "expected_front_count": 5,
+        "sam3_prompt": "plastic container",
+        "slot_product_names": ["可孚棉签", "可孚棉签", "可孚棉签", "小鹿妈妈牙线", "小鹿妈妈牙线"]
+      }
+    ],
+    "L2": [
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "blue and white square package",
+        "slot_product_names": ["海氏海诺创口贴", "海氏海诺创口贴", "海氏海诺创口贴"]
+      },
+      {
+        "expected_front_count": 2,
+        "sam3_prompt": "orange and beige package",
+        "slot_product_names": ["德佑湿巾", "德佑湿巾"]
+      },
+      {
+        "expected_front_count": 4,
+        "sam3_prompt": "green package",
+        "slot_product_names": ["心相印纸巾", "心相印纸巾", "心相印纸巾", "心相印纸巾"]
+      }
+    ],
+    "L3": [
+      {
+        "expected_front_count": 4,
+        "sam3_prompt": "lying blue and beige package",
+        "slot_product_names": ["妙洁海绵百洁布", "妙洁海绵百洁布", "心相印纸巾", "心相印纸巾"]
+      }
+    ],
+    "L4": [
+      {
+        "expected_front_count": 4,
+        "sam3_prompt": "package",
+        "slot_product_names": ["纯棉酒店大毛巾", "纯棉酒店大毛巾", "京东京造毛巾", "京东京造毛巾"]
+      }
+    ],
+    "L5": [
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "box",
+        "slot_product_names": ["界面医疗医用外科口罩", "界面医疗医用外科口罩", "界面医疗医用外科口罩"]
+      }
+    ]
   },
   "H1_B_R_INSPECT": {
-    "L1": [{"expected_front_count": 5, "sam3_prompt": "package"}],
-    "L2": [{"expected_front_count": 3, "sam3_prompt": "container"}, {"expected_front_count": 3, "sam3_prompt": "package"}],
-    "L3": [{"expected_front_count": 7, "sam3_prompt": "package"}],
-    "L4": [{"expected_front_count": 6, "sam3_prompt": "package"}],
-    "L5": [{"expected_front_count": 3, "sam3_prompt": "bottle"}]
+    "L1": [
+      {
+        "expected_front_count": 5,
+        "sam3_prompt": "package",
+        "slot_product_names": ["草原红太阳烧烤料原味", "草原红太阳烧烤料香辣味", "草原红太阳烧烤酱香辣", "草原红太阳烧烤酱香辣", "草原红太阳烧烤酱原味"]
+      }
+    ],
+    "L2": [
+      {
+        "expected_front_count": 5,
+        "sam3_prompt": "container",
+        "slot_product_names": ["合味道海鲜味", "合味道五香牛肉味", "农心碗面", "农心碗面", "农心碗面"]
+      },
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "package",
+        "slot_product_names": ["健食力低脂香肠", "健食力低脂香肠", "健食力低脂香肠"]
+      }
+    ],
+    "L3": [
+      {
+        "expected_front_count": 4,
+        "sam3_prompt": "package",
+        "slot_product_names": ["康师傅香辣牛肉面", "康师傅鲜虾鱼板面", "康师傅老坛酸菜牛肉面", "好人家火锅底料"]
+      }
+    ],
+    "L4": [
+      {
+        "expected_front_count": 6,
+        "sam3_prompt": "package",
+        "slot_product_names": ["三色藜麦", "三色藜麦", "慢碳十色糙米", "高纤七色糙米", "山西黄小米", "山西黄小米"]
+      }
+    ],
+    "L5": [
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "bottle",
+        "slot_product_names": ["镇江香醋", "蒸鱼豉油", "薄盐生抽"]
+      }
+    ]
   },
   "H2_F_L_INSPECT": {
-    "L1": [{"expected_front_count": 6, "sam3_prompt": "drink can"}],
-    "L2": [{"expected_front_count": 6, "sam3_prompt": "bottle"}],
-    "L3": [{"expected_front_count": 5, "sam3_prompt": "bottle"}],
-    "L4": [{"expected_front_count": 6, "sam3_prompt": "bottle"}],
-    "L5": [{"expected_front_count": 6, "sam3_prompt": "bottle"}]
+    "L1": [
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "red can",
+        "slot_product_names": ["可口可乐罐装", "可口可乐罐装", "可口可乐罐装"]
+      },
+      {
+        "expected_front_count": 2,
+        "sam3_prompt": "green can",
+        "slot_product_names": ["雪碧罐装", "雪碧罐装"]
+      },
+      {
+        "expected_front_count": 1,
+        "sam3_prompt": "orange can on the right",
+        "slot_product_names": ["芬达罐装"]
+      }
+    ],
+    "L2": [
+      {
+        "expected_front_count": 6,
+        "sam3_prompt": "bottle",
+        "slot_product_names": ["小青柠汁饮料", "小青柠汁饮料", "小青柠汁饮料", "美年达瓶装", "美年达瓶装", "名仁苏打水饮料"]
+      }
+    ],
+    "L3": [
+      {
+        "expected_front_count": 5,
+        "sam3_prompt": "bottle",
+        "slot_product_names": ["外星人电解质水椰子口味", "外星人电解质水青柠口味", "外星人电解质水白桃口味0糖", "外星人电解质水西柚口味", "外星人电解质水西柚口味"]
+      }
+    ],
+    "L4": [
+      {
+        "expected_front_count": 6,
+        "sam3_prompt": "bottle",
+        "slot_product_names": ["脉动观梅止渴饮", "脉动芒果口味", "脉动菠萝口味", "脉动猫薄荷瓶", "外星人电解质水青柠口味0糖", "外星人电解质水青柠口味"]
+      }
+    ],
+    "L5": [
+      {
+        "expected_front_count": 6,
+        "sam3_prompt": "bottle",
+        "slot_product_names": ["脉动观梅止渴饮", "脉动芒果口味", "脉动菠萝口味", "脉动猫薄荷瓶", "外星人电解质水白桃口味0糖", "外星人电解质水白桃口味0糖"]
+      }
+    ]
   },
   "H2_F_R_INSPECT": {
-    "L1": [{"expected_front_count": 6, "sam3_prompt": "bottle"}],
-    "L2": [{"expected_front_count": 4, "sam3_prompt": "bottle"}, {"expected_front_count": 2, "sam3_prompt": "cup"}],
-    "L3": [{"expected_front_count": 6, "sam3_prompt": "bottle"}],
-    "L4": [{"expected_front_count": 7, "sam3_prompt": "bottle"}],
-    "L5": [{"expected_front_count": 6, "sam3_prompt": "bottle"}]
+    "L1": [
+      {
+        "expected_front_count": 6,
+        "sam3_prompt": "bottle",
+        "slot_product_names": ["百事可乐瓶装", "百事可乐瓶装", "7喜瓶装", "7喜瓶装", "水溶C100瓶装", "水溶C100瓶装"]
+      }
+    ],
+    "L2": [
+      {
+        "expected_front_count": 2,
+        "sam3_prompt": "blue bottle",
+        "slot_product_names": ["名仁苏打水饮料", "名仁苏打水饮料"]
+      },
+      {
+        "expected_front_count": 2,
+        "sam3_prompt": "yellow bottle",
+        "slot_product_names": ["东方树叶茉莉花茶", "东方树叶茉莉花茶"]
+      },
+      {
+        "expected_front_count": 2,
+        "sam3_prompt": "cup",
+        "slot_product_names": ["绿豆冰沙", "绿豆冰沙"]
+      }
+    ],
+    "L3": [
+      {
+        "expected_front_count": 6,
+        "sam3_prompt": "bottle",
+        "slot_product_names": ["尖叫", "尖叫", "尖叫", "百岁山矿泉水", "百岁山矿泉水", "百岁山矿泉水"]
+      }
+    ],
+    "L4": [
+      {
+        "expected_front_count": 7,
+        "sam3_prompt": "bottle",
+        "slot_product_names": ["宝矿力水特", "宝矿力水特", "宝矿力水特", "宝矿力水特", "百岁山矿泉水", "百岁山矿泉水", "百岁山矿泉水"]
+      }
+    ],
+    "L5": [
+      {
+        "expected_front_count": 6,
+        "sam3_prompt": "bottle",
+        "slot_product_names": ["宝矿力水特", "宝矿力水特", "宝矿力水特", "百岁山矿泉水", "百岁山矿泉水", "百岁山矿泉水"]
+      }
+    ]
   },
   "H2_B_L_INSPECT": {
-    "L1": [{"expected_front_count": 5, "sam3_prompt": "package"}],
-    "L2": [{"expected_front_count": 3, "sam3_prompt": "box"}],
-    "L3": [{"expected_front_count": 6, "sam3_prompt": "package"}],
-    "L4": [{"expected_front_count": 1, "sam3_prompt": "package"}, {"expected_front_count": 1, "sam3_prompt": "bottle"}],
-    "L5": [{"expected_front_count": 3, "sam3_prompt": "transparent package"}]
+    "L1": [
+      {
+        "expected_front_count": 5,
+        "sam3_prompt": "package",
+        "slot_product_names": ["舒肤佳香皂纯白清香型", "舒肤佳香皂芦荟呵护香型", "舒肤佳香皂柠檬清新香型", "汰渍肥皂", "汰渍肥皂"]
+      }
+    ],
+    "L2": [
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "box",
+        "slot_product_names": ["舒克牙膏竹炭薄荷", "舒克牙膏柠檬百香果", "舒克牙膏海盐薄荷"]
+      }
+    ],
+    "L3": [
+      {
+        "expected_front_count": 6,
+        "sam3_prompt": "cosmetic",
+        "slot_product_names": ["Dove沐浴泡泡樱花甜香", "Dove沐浴泡泡白桃果香", "Dove沐浴泡泡清甜奶香", "威露士", "Dove沐浴乳", "Dove沐浴乳"]
+      }
+    ],
+    "L4": [
+      {
+        "expected_front_count": 1,
+        "sam3_prompt": "pink cosmetic package",
+        "slot_product_names": ["Dove沐浴泡泡樱花甜香袋装"]
+      },
+      {
+        "expected_front_count": 4,
+        "sam3_prompt": "bottle",
+        "slot_product_names": ["半亩花田洗发水", "半亩花田洗发水", "半亩花田洗发水", "半亩花田洗发水"]
+      }
+    ],
+    "L5": [
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "white transparent slippers package",
+        "slot_product_names": ["拖鞋", "拖鞋", "拖鞋"]
+      }
+    ]
   },
   "H2_B_R_INSPECT": {
-    "L1": [{"expected_front_count": 2, "sam3_prompt": "cup"}],
-    "L2": [{"expected_front_count": 2, "sam3_prompt": "cup"}],
-    "L3": [{"expected_front_count": 1, "sam3_prompt": "transparent slippers package"}],
-    "L4": [{"expected_front_count": 2, "sam3_prompt": "green and white package"}],
-    "L5": [{"expected_front_count": 2, "sam3_prompt": "green and white package"}]
+    "L1": [
+      {
+        "expected_front_count": 3,
+        "sam3_prompt": "cup",
+        "slot_product_names": ["杯子", "杯子", "杯子"]
+      }
+    ],
+    "L2": [
+      {
+        "expected_front_count": 2,
+        "sam3_prompt": "cup",
+        "slot_product_names": ["杯子", "杯子"]
+      }
+    ],
+    "L3": [
+      {
+        "expected_front_count": 2,
+        "sam3_prompt": "white transparent slippers package",
+        "slot_product_names": ["拖鞋", "拖鞋"]
+      }
+    ],
+    "L4": [
+      {
+        "expected_front_count": 2,
+        "sam3_prompt": "green and white package",
+        "slot_product_names": ["心相印厨房纸巾", "心相印厨房纸巾"]
+      }
+    ],
+    "L5": [
+      {
+        "expected_front_count": 2,
+        "sam3_prompt": "green and white package",
+        "slot_product_names": ["心相印厨房纸巾", "心相印厨房纸巾"]
+      }
+    ]
   }
 }
