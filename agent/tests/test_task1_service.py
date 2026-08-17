@@ -43,6 +43,7 @@ class Task1Mock:
         self.place_failure: dict[str, str] | None = None
         self.place_failure_limit: int | None = None
         self.nudge_return_failures = 0
+        self.pose_failure_keys: set[str] = set()
         self.navigation_failure = False
         self.perception_failure = False
         self.resolution_failures: set[int] = set()
@@ -150,6 +151,11 @@ class Task1Mock:
             )
         if path == "/navigation/navigate" and self.navigation_failure:
             return httpx.Response(500, json={"error_code": "NAVIGATION_FAILED"})
+        if (
+            path == "/pose/prepare"
+            and request.headers.get("Idempotency-Key") in self.pose_failure_keys
+        ):
+            return httpx.Response(500, json={"error_code": "POSE_PREPARE_FAILED"})
         if path in {"/navigation/navigate", "/pose/prepare"}:
             return httpx.Response(200, json={"status": "SUCCEEDED"})
         return httpx.Response(404, json={"error_code": "UNKNOWN_ENDPOINT"})
@@ -569,10 +575,21 @@ async def test_task1_special_product_left_pick_nudges_right_before_first_attempt
         if request.url.path == "/pick"
         and payload(request)["product_name"] == SPECIAL_SHELF_NUDGE_PRODUCT
     ]
+    recovery_pose = next(
+        request
+        for request in mock.requests
+        if request.url.path == "/pose/prepare"
+        and request.headers["Idempotency-Key"].endswith(":recovery.pose")
+    )
     assert len(special_picks) == 2
+    assert payload(recovery_pose) == {
+        "pose_type": "SHELF_PICK_READY",
+        "shelf_level": "L1",
+    }
     assert mock.requests.index(nudge_requests[0]) < mock.requests.index(special_picks[0])
     assert mock.requests.index(special_picks[0]) < mock.requests.index(nudge_requests[1])
-    assert mock.requests.index(nudge_requests[1]) < mock.requests.index(special_picks[1])
+    assert mock.requests.index(nudge_requests[1]) < mock.requests.index(recovery_pose)
+    assert mock.requests.index(recovery_pose) < mock.requests.index(special_picks[1])
     assert mock.requests.index(special_picks[1]) < mock.requests.index(nudge_requests[2])
 
 
@@ -618,6 +635,65 @@ async def test_task1_recovers_grasp_after_left_nudge_and_second_return() -> None
         "task1-recovery:task1.pick.0.pick",
         "task1-recovery:task1.pick.0.pick:recovery.retry",
     ]
+    recovery_pose = next(
+        request
+        for request in mock.requests
+        if request.headers.get("Idempotency-Key")
+        == "task1-recovery:task1.pick.0.pick:recovery.pose"
+    )
+    assert recovery_pose.url.path == "/pose/prepare"
+    assert payload(recovery_pose) == {
+        "pose_type": "SHELF_PICK_READY",
+        "shelf_level": "L1",
+    }
+    assert mock.requests.index(nudge_requests[0]) < mock.requests.index(recovery_pose)
+    assert mock.requests.index(recovery_pose) < mock.requests.index(first_product_picks[1])
+
+
+@pytest.mark.asyncio
+async def test_task1_does_not_retry_pick_when_recovery_pose_fails() -> None:
+    mock = Task1Mock()
+    mock.pick_failure = {
+        "error_code": "EXECUTION_FAILED",
+        "message": "grasp failed",
+        "failed_interface": "manipulation_grasp",
+        "pose": [1, 2, 3, 4, 5, 6],
+    }
+    mock.pick_failure_limit = 1
+    recovery_pose_key = "task1-pose-failure:task1.pick.0.pick:recovery.pose"
+    mock.pose_failure_keys.add(recovery_pose_key)
+    client = Task1Client(settings(), transport=mock.transport)
+
+    async with client:
+        with pytest.raises(Task1ServiceError) as error:
+            await Task1Orchestrator(settings(), client).run(
+                Task1Request(), "task1-pose-failure"
+            )
+
+    assert error.value.code == "TASK_ACTIONS_FAILED"
+    first_product_picks = [
+        request
+        for request in mock.requests
+        if request.url.path == "/pick"
+        and payload(request)["product_name"] == "可口可乐罐装"
+    ]
+    assert [request.headers["Idempotency-Key"] for request in first_product_picks] == [
+        "task1-pose-failure:task1.pick.0.pick"
+    ]
+    recovery_pose = next(
+        request
+        for request in mock.requests
+        if request.headers.get("Idempotency-Key") == recovery_pose_key
+    )
+    nudge_requests = [
+        request for request in mock.requests if request.url.path == "/navigation/nudge"
+    ]
+    assert [payload(request) for request in nudge_requests] == [
+        {"action": "approach", "direction": "right"},
+        {"action": "return"},
+    ]
+    assert mock.requests.index(nudge_requests[0]) < mock.requests.index(recovery_pose)
+    assert mock.requests.index(recovery_pose) < mock.requests.index(nudge_requests[1])
 
 
 @pytest.mark.asyncio

@@ -238,7 +238,7 @@ POST 127.0.0.1:8108/tasks/1/run {}
 
 如果两件商品只能使用同一只手，Task1 会对每件商品执行“抓取 -> 前往交付台 -> 准备放置姿态 -> 放置”，再处理下一件；重复导航到当前已在的目标点时会跳过重复的复位和导航请求。
 
-Task1 仅在 `/pick` 的最终 `grasp` 明确执行失败且错误响应带有非零六维 `pose` 时微调：首值为负向左 3 cm，首值为正向右 3 cm，然后使用新的动作键重试一次相同的 8086 请求并调用 `return`。Task1 的单手 `/place` 和双手 `/manipulation/release/both` 均不微调、不执行动作级重试；单个 HTTP 请求在网络异常时仍使用相同幂等键重试一次。抓取最终失败的商品跳过放置；放置失败时保留持物状态。其他手的独立动作继续执行，单手仍被占用时跳过下一件商品。全部抓放成功时仍前往 `task_boundary`；存在最终失败时跳过判定区、返回 `start` 后统一报错。
+Task1 仅在 `/pick` 的最终 `grasp` 明确执行失败且错误响应带有非零六维 `pose` 时微调：首值为负向左 3 cm，首值为正向右 3 cm。微调成功后先使用新动作键重新准备当前层的 `SHELF_PICK_READY`，再使用另一个新动作键重试一次相同的 8086 请求，最后调用 `return`。如果抓取位姿恢复失败，则不执行第二次 `/pick`，但仍调用 `return` 并汇总该商品失败。Task1 的单手 `/place` 和双手 `/manipulation/release/both` 均不微调、不执行动作级重试；单个 HTTP 请求在网络异常时仍使用相同幂等键重试一次。抓取最终失败的商品跳过放置；放置失败时保留持物状态。其他手的独立动作继续执行，单手仍被占用时跳过下一件商品。全部抓放成功时仍前往 `task_boundary`；存在最终失败时跳过判定区、返回 `start` 后统一报错。
 
 商品“外星人电解质水白桃口味0糖”（配置货位 `H2_F_L3_C03`、`H2_F_L5_C05`）执行货架抓取时，在第一次 8086 动作前先微调：左手操作向右 3 cm，右手操作向左 3 cm。该规则用于 Task1 和 Task3 的货架抓取；Task1 交付台放置、Task2 补货台抓取以及 Task2/3 货架放置均不使用。抓取完成或放弃后调用 `return`。
 
@@ -564,13 +564,15 @@ POST 8086/pick  Idempotency-Key: <动作键>
   <- {"error_code":"EXECUTION_FAILED","failed_interface":"manipulation_grasp","pose":[x,y,z,rx,ry,rz],...}
 POST 8081/navigation/nudge {"action":"approach","direction":"<left|right>"}
   Idempotency-Key: <动作键>:recovery.approach
+[仅 Task1] POST 8084/pose/prepare {"pose_type":"SHELF_PICK_READY","shelf_level":"Lx"}
+  Idempotency-Key: <动作键>:recovery.pose
 POST 8086/pick  Idempotency-Key: <动作键>:recovery.retry
   <- 成功或失败
 POST 8081/navigation/nudge {"action":"return"}
   Idempotency-Key: <动作键>:recovery.return.1
 ```
 
-第一次 `return` 失败时使用 `<动作键>:recovery.return.2` 再调用一次；两次都失败则停止后续物理动作。单个 HTTP 请求自己的网络重试仍复用该请求原有的键。任务没有最终失败时按原流程前往 `task_boundary`；Task1-3 任意整体失败都会先准备 `START_POSITION` 并导航到 `start`。如果失败回 `start` 也失败，对外返回 `FAILURE_RECOVERY_FAILED`，原始失败和回程失败同时记录在任务日志中。
+Task1 的抓取位姿恢复失败时跳过 `recovery.retry`，直接进入 `return`；Task2 和 Task3 不执行该姿态恢复步骤。第一次 `return` 失败时使用 `<动作键>:recovery.return.2` 再调用一次；两次都失败则停止后续物理动作。单个 HTTP 请求自己的网络重试仍复用该请求原有的键。任务没有最终失败时按原流程前往 `task_boundary`；Task1-3 任意整体失败都会先准备 `START_POSITION` 并导航到 `start`。如果失败回 `start` 也失败，对外返回 `FAILURE_RECOVERY_FAILED`，原始失败和回程失败同时记录在任务日志中。
 
 8086 在机器人明确返回最终抓取或释放失败时，会在原有 `error_code`、`message`、`failed_interface` 和 `url` 外附加本次执行使用的六维 `pose`。超时或网络中断不会附加可用于微调重试的位姿。
 

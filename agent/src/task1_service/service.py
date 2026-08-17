@@ -483,6 +483,11 @@ class Task1Orchestrator:
             initial_nudge_direction=initial_shelf_nudge_direction(
                 target.product_name, target.hand.value
             ),
+            before_retry=lambda key: self.client.prepare_pose(
+                "SHELF_PICK_READY",
+                key,
+                shelf_level=target.shelf_level,
+            ),
         )
         if succeeded:
             target.picked = True
@@ -606,6 +611,7 @@ class Task1Orchestrator:
         logger: _Task1Log,
         action_failures: list[dict[str, str]],
         initial_nudge_direction: str | None = None,
+        before_retry: Callable[[str], Awaitable[None]] | None = None,
     ) -> bool:
         if initial_nudge_direction is not None:
             logger.event(
@@ -739,38 +745,72 @@ class Task1Orchestrator:
                 hand=hand.value,
                 direction=direction,
             )
-            logger.event(
-                event_name,
-                "started",
-                product_name=product_name,
-                hand=hand.value,
-                attempt=2,
-            )
-            try:
-                await action(f"{action_key}:recovery.retry")
-            except Task1ServiceError as retry_error:
-                final_error = retry_error
+            retry_ready = True
+            if before_retry is not None:
                 logger.event(
-                    event_name,
-                    "failed",
+                    "抓取位姿恢复",
+                    "started",
                     product_name=product_name,
                     hand=hand.value,
                     attempt=2,
-                    error_code=retry_error.code,
-                    message=retry_error.message,
-                    failed_interface=retry_error.failed_interface,
-                    url=retry_error.url,
                 )
-            else:
-                retry_succeeded = True
+                try:
+                    await before_retry(f"{action_key}:recovery.pose")
+                except Task1ServiceError as pose_error:
+                    retry_ready = False
+                    final_error = pose_error
+                    logger.event(
+                        "抓取位姿恢复",
+                        "failed",
+                        product_name=product_name,
+                        hand=hand.value,
+                        attempt=2,
+                        error_code=pose_error.code,
+                        message=pose_error.message,
+                        failed_interface=pose_error.failed_interface,
+                        url=pose_error.url,
+                    )
+                else:
+                    logger.event(
+                        "抓取位姿恢复",
+                        "succeeded",
+                        product_name=product_name,
+                        hand=hand.value,
+                        attempt=2,
+                    )
+            if retry_ready:
                 logger.event(
                     event_name,
-                    "succeeded",
+                    "started",
                     product_name=product_name,
                     hand=hand.value,
                     attempt=2,
-                    recovered=True,
                 )
+                try:
+                    await action(f"{action_key}:recovery.retry")
+                except Task1ServiceError as retry_error:
+                    final_error = retry_error
+                    logger.event(
+                        event_name,
+                        "failed",
+                        product_name=product_name,
+                        hand=hand.value,
+                        attempt=2,
+                        error_code=retry_error.code,
+                        message=retry_error.message,
+                        failed_interface=retry_error.failed_interface,
+                        url=retry_error.url,
+                    )
+                else:
+                    retry_succeeded = True
+                    logger.event(
+                        event_name,
+                        "succeeded",
+                        product_name=product_name,
+                        hand=hand.value,
+                        attempt=2,
+                        recovered=True,
+                    )
 
         await self._return_from_nudge(
             operation, product_name, hand, action_key, logger
