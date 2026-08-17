@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-08-17",
+  "baselines": {
+    "H1_B_L_INSPECT_LOWER": {
+      "status": "verified_ok",
+      "confirmed_at": "2026-08-17",
+      "scope": "SAM3 row instances and depth-based front-row selection",
+      "note": "Current behavior confirmed OK; treat this view as a regression baseline when changing shared selection logic.",
+      "version": {
+        "git_head": "59673cf",
+        "front_row_selection_sha256": "370334DC012ED71E09FE2324B1608933D2059B5A34C91C9103F2E60500DCCBF1",
+        "shortage_mapping_config_sha256": "9CBF1B14D9B75088AC8FA950F953393FB43771AFB8BA1050414A15F7D9B355E4"
+      }
+    }
+  }
+}

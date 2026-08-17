@@ -149,12 +149,55 @@ def _apply_expected_count(
             "horizontal_roi": [roi_left, roi_right],
         }
 
+    candidate_centers = np.asarray(
+        [
+            (
+                instances[index]["bbox_xyxy"][0]
+                + instances[index]["bbox_xyxy"][2]
+            )
+            / 2.0
+            for index in candidates
+        ],
+        dtype=np.float32,
+    )
+    image_slot_width = image_width / max(1, expected_count)
+    if expected_count > 1 and candidate_centers.size > 1:
+        observed_slot_width = float(
+            (candidate_centers.max() - candidate_centers.min())
+            / (expected_count - 1)
+        )
+        # A prompt group may occupy only a small part of the shelf row.  Using
+        # the full image width then forces legitimate neighboring products too
+        # far apart and can make a detached SAM fragment win instead.
+        nominal_slot_width = min(image_slot_width, max(1.0, observed_slot_width))
+    else:
+        nominal_slot_width = image_slot_width
+    candidate_widths = np.asarray(
+        [
+            instances[index]["bbox_xyxy"][2]
+            - instances[index]["bbox_xyxy"][0]
+            for index in candidates
+        ],
+        dtype=np.float32,
+    )
+    # A single class prompt often returns both complete front objects and thin
+    # visible fragments of the same product behind them.  Estimate the normal
+    # class width from the upper-middle of plausible masks; very large merged
+    # masks are excluded using the expected column spacing.
+    plausible_widths = candidate_widths[
+        candidate_widths <= max(12.0, nominal_slot_width * 1.25)
+    ]
+    if plausible_widths.size == 0:
+        plausible_widths = candidate_widths
+    typical_width = float(np.percentile(plausible_widths, 65))
+
     def quality(index: int) -> float:
         instance = instances[index]
         x1, y1, x2, y2 = instance["bbox_xyxy"]
         bbox_area = max(1, (x2 - x1) * (y2 - y1))
         fill = min(1.0, instance["mask_pixels"] / bbox_area)
         height_score = min(1.0, (y2 - y1) / max(1.0, image_height * 0.45))
+        width_completeness = min(1.0, (x2 - x1) / max(1.0, typical_width))
         sam_score = float(scores[index] or 0.0)
         support = float(instance["depth_estimate"]["support_ratio"])
         graph_score = 2.5 if not instance["incoming"] else -0.35 * len(instance["incoming"])
@@ -171,6 +214,7 @@ def _apply_expected_count(
             + 0.55 * support
             + 0.45 * fill
             + 0.50 * height_score
+            + 0.75 * width_completeness
             - edge_penalty
         )
 
@@ -188,8 +232,6 @@ def _apply_expected_count(
         / 2.0
         for index in ordered
     }
-
-    nominal_slot_width = image_width / max(1, expected_count)
 
     def solve(minimum_gap: float) -> list[int]:
         count = min(expected_count, len(ordered))
@@ -237,6 +279,8 @@ def _apply_expected_count(
         "satisfied": len(selected) == expected_count,
         "available_candidates": len(candidates),
         "horizontal_roi": [roi_left, roi_right],
+        "typical_instance_width_px": round(typical_width, 2),
+        "nominal_slot_width_px": round(nominal_slot_width, 2),
     }
 
 
