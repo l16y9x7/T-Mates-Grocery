@@ -52,6 +52,15 @@ tasks:
     timeouts:
       receipt_seconds: 120
   task2:
+    inspection_points:
+    - H2_F_L_INSPECT
+    - H2_F_R_INSPECT
+    - H1_F_L_INSPECT
+    - H1_F_R_INSPECT
+    - H1_B_L_INSPECT
+    - H1_B_R_INSPECT
+    - H2_B_L_INSPECT
+    - H2_B_R_INSPECT
     replenishment_pickup: replenishment_pickup
   task3: {}
   test1:

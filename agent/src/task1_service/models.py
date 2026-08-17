@@ -72,6 +72,7 @@ class Task1Services(BaseModel):
     pose: str = Field(min_length=1)
     pick_place: str = Field(min_length=1)
     sku: str = Field(min_length=1)
+    camera: str = Field(min_length=1)
 
 
 class Task1Timeouts(BaseModel):
@@ -80,6 +81,7 @@ class Task1Timeouts(BaseModel):
     connect_seconds: float = Field(gt=0, default=3)
     health_seconds: float = Field(gt=0, default=5)
     receipt_seconds: float = Field(gt=0, default=120)
+    resolution_seconds: float = Field(gt=0, default=60)
     sku_seconds: float = Field(gt=0, default=10)
     navigation_seconds: float = Field(gt=0, default=600)
     pose_seconds: float = Field(gt=0, default=300)
@@ -241,6 +243,7 @@ class Task1ServiceError(Exception):
         step: str | None = None,
         failed_interface: str | None = None,
         url: str | None = None,
+        pose: list[float] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -249,3 +252,4 @@ class Task1ServiceError(Exception):
         self.step = step
         self.failed_interface = failed_interface
         self.url = url
+        self.pose = pose

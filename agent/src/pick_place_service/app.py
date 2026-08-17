@@ -44,6 +44,8 @@ def create_app(
             content["failed_interface"] = exc.failed_interface
         if exc.url:
             content["url"] = exc.url
+        if exc.pose is not None:
+            content["pose"] = exc.pose
         return JSONResponse(
             status_code=exc.status_code,
             content=content,

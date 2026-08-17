@@ -100,10 +100,18 @@ class TaskCoordinator:
     ) -> asyncio.Task[object]:
         request = self.build_request(task_id, payload)
         await self._reserve(task_id)
-        return asyncio.create_task(
-            self._execute_reserved(task_id, request, operation_key),
+        started = asyncio.Event()
+
+        async def execute() -> object:
+            started.set()
+            return await self._execute_reserved(task_id, request, operation_key)
+
+        task = asyncio.create_task(
+            execute(),
             name=f"task-{task_id}-{operation_key}",
         )
+        await started.wait()
+        return task
 
     async def health(self) -> dict[str, str]:
         results = await asyncio.gather(

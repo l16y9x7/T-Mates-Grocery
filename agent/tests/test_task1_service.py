@@ -7,6 +7,7 @@ import httpx
 import pytest
 import yaml
 
+import task1_service.service as task1_service_module
 from task1_service.client import Task1Client
 from task1_service.models import (
     ActionResponse,
@@ -17,6 +18,7 @@ from task1_service.models import (
     Task1Timeouts,
 )
 from task1_service.service import Task1Orchestrator
+from manipulation_policy import SPECIAL_SHELF_NUDGE_PRODUCT
 from task_service.settings import TaskServiceSettings
 
 
@@ -34,12 +36,16 @@ class Task1Mock:
         self.sku_locations: dict[str, list[str]] = {}
         self.pick_timeout_once = False
         self.pick_attempts = 0
+        self.pick_failure: dict[str, object] | None = None
+        self.pick_failure_limit: int | None = None
         self.place_timeout_once = False
         self.place_attempts = 0
         self.place_failure: dict[str, str] | None = None
         self.place_failure_limit: int | None = None
         self.nudge_return_failures = 0
         self.navigation_failure = False
+        self.perception_failure = False
+        self.resolution_failures: set[int] = set()
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -54,14 +60,26 @@ class Task1Mock:
             "pose.local": "pose",
             "pick-place.local": "pick_place",
             "sku.local": "sku",
+            "camera.local": "camera",
         }[host]
         path = request.url.path
+        if path == "/camera/head/resolution":
+            resolution = json.loads(request.content)["resolution"]
+            if resolution in self.resolution_failures:
+                return httpx.Response(
+                    500, json={"error_code": "RESOLUTION_SWITCH_FAILED"}
+                )
+            return httpx.Response(200, json={"resolution": resolution})
         if path == "/" + service + "/health" or (service == "pick_place" and path == "/health"):
             payload: dict[str, object] = {"status": self.health[service]}
             if service == "pose":
                 payload["current_pose"] = {"pose_type": "START_POSITION"}
             return httpx.Response(200, json=payload)
         if path == "/perception/parse":
+            if self.perception_failure:
+                return httpx.Response(
+                    500, json={"error_code": "RECEIPT_PARSE_FAILED"}
+                )
             return httpx.Response(200, json={"product_names": list(self.names)})
         if path == "/sku/search_by_name":
             name = request.url.params["name"]
@@ -83,11 +101,27 @@ class Task1Mock:
             )
         if path == "/pick":
             self.pick_attempts += 1
+            if self.pick_failure is not None and (
+                self.pick_failure_limit is None
+                or self.pick_attempts <= self.pick_failure_limit
+            ):
+                return httpx.Response(502, json=self.pick_failure)
             if self.pick_timeout_once:
                 self.pick_timeout_once = False
                 raise httpx.ReadTimeout("temporary timeout", request=request)
             return httpx.Response(200, json={"status": "SUCCEEDED"})
         if path == "/place":
+            self.place_attempts += 1
+            if self.place_failure is not None and (
+                self.place_failure_limit is None
+                or self.place_attempts <= self.place_failure_limit
+            ):
+                return httpx.Response(502, json=self.place_failure)
+            if self.place_timeout_once:
+                self.place_timeout_once = False
+                raise httpx.ReadTimeout("temporary timeout", request=request)
+            return httpx.Response(200, json={"status": "SUCCEEDED"})
+        if path == "/manipulation/release/both":
             self.place_attempts += 1
             if self.place_failure is not None and (
                 self.place_failure_limit is None
@@ -129,11 +163,13 @@ def settings() -> Task1Settings:
             "pose": "http://pose.local",
             "pick_place": "http://pick-place.local",
             "sku": "http://sku.local",
+            "camera": "http://camera.local",
         },
         timeouts=Task1Timeouts(
             connect_seconds=0.1,
             health_seconds=0.2,
             receipt_seconds=0.2,
+            resolution_seconds=0.2,
             sku_seconds=0.2,
             navigation_seconds=0.2,
             pose_seconds=0.2,
@@ -144,6 +180,13 @@ def settings() -> Task1Settings:
             "H2_F_L1_C01": ["LEFT", "RIGHT"],
             "H2_F_L1_C04": ["LEFT", "RIGHT"],
         },
+    )
+
+
+@pytest.fixture(autouse=True)
+def disable_receipt_exposure_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        task1_service_module, "RECEIPT_EXPOSURE_SETTLE_SECONDS", 0.0
     )
 
 
@@ -210,6 +253,27 @@ async def test_health_accepts_pose_metadata() -> None:
 
 
 @pytest.mark.asyncio
+async def test_head_resolution_client_uses_camera_endpoint() -> None:
+    mock = Task1Mock()
+    client = Task1Client(settings(), transport=mock.transport)
+
+    async with client:
+        await client.set_head_resolution(1080)
+        await client.set_head_resolution(720)
+
+    resolution_requests = [
+        request
+        for request in mock.requests
+        if request.url.path == "/camera/head/resolution"
+    ]
+    assert [request.method for request in resolution_requests] == ["POST", "POST"]
+    assert [payload(request) for request in resolution_requests] == [
+        {"resolution": 1080},
+        {"resolution": 720},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_task1_runs_full_pick_place_flow() -> None:
     mock = Task1Mock()
     client = Task1Client(settings(), transport=mock.transport)
@@ -223,10 +287,135 @@ async def test_task1_runs_full_pick_place_flow() -> None:
     assert result.held_items == {}
     assert [payload(request)["hand"] for request in mock.requests if request.url.path == "/pick"] == ["LEFT", "RIGHT"]
     assert [payload(request)["level"] for request in mock.requests if request.url.path == "/pick"] == ["L1", "L1"]
-    assert [payload(request)["hand"] for request in mock.requests if request.url.path == "/place"] == ["LEFT", "RIGHT"]
-    assert all("level" not in payload(request) for request in mock.requests if request.url.path == "/place")
+    [release_both] = [
+        request
+        for request in mock.requests
+        if request.url.path == "/manipulation/release/both"
+    ]
+    assert payload(release_both) == {
+        "task_type": "SORTING",
+        "left": {"product_name": "可口可乐罐装"},
+        "right": {"product_name": "百事可乐瓶装"},
+    }
+    assert not [request for request in mock.requests if request.url.path == "/place"]
     navigation = [payload(request).get("target_id") for request in mock.requests if request.url.path == "/navigation/navigate"]
     assert navigation[-2:] == ["delivery_place", "task_boundary"]
+
+    resolution_requests = [
+        request
+        for request in mock.requests
+        if request.url.path == "/camera/head/resolution"
+    ]
+    assert [payload(request)["resolution"] for request in resolution_requests] == [
+        1080,
+        720,
+    ]
+    switch_index = mock.requests.index(resolution_requests[0])
+    receipt_navigation_index = next(
+        index
+        for index, request in enumerate(mock.requests)
+        if request.url.path == "/navigation/navigate"
+        and payload(request).get("target_id") == "receipt_viewpoint"
+    )
+    receipt_pose_index = next(
+        index
+        for index, request in enumerate(mock.requests)
+        if request.url.path == "/pose/prepare"
+        and payload(request).get("pose_type") == "RECEIPT_VIEW"
+    )
+    parse_index = paths(mock).index("/perception/parse")
+    restore_index = mock.requests.index(resolution_requests[1])
+    sku_index = paths(mock).index("/sku/search_by_name")
+    assert (
+        switch_index
+        < receipt_navigation_index
+        < receipt_pose_index
+        < parse_index
+        < restore_index
+        < sku_index
+    )
+
+
+@pytest.mark.asyncio
+async def test_task1_only_waits_for_unelapsed_exposure_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock = Task1Mock()
+    waited: list[float] = []
+    times = iter((10.0, 10.2))
+
+    async def fake_sleep(seconds: float) -> None:
+        waited.append(seconds)
+
+    monkeypatch.setattr(
+        task1_service_module, "RECEIPT_EXPOSURE_SETTLE_SECONDS", 0.5
+    )
+    monkeypatch.setattr(task1_service_module, "monotonic", lambda: next(times))
+    monkeypatch.setattr(task1_service_module, "sleep", fake_sleep)
+    client = Task1Client(settings(), transport=mock.transport)
+
+    async with client:
+        await Task1Orchestrator(settings(), client).run(Task1Request())
+
+    assert waited == [pytest.approx(0.3)]
+
+
+@pytest.mark.asyncio
+async def test_task1_restores_720_when_receipt_parse_fails() -> None:
+    mock = Task1Mock()
+    mock.perception_failure = True
+    client = Task1Client(settings(), transport=mock.transport)
+
+    async with client:
+        with pytest.raises(Task1ServiceError) as error:
+            await Task1Orchestrator(settings(), client).run(Task1Request())
+
+    assert error.value.code == "RECEIPT_PARSE_FAILED"
+    assert [
+        payload(request)["resolution"]
+        for request in mock.requests
+        if request.url.path == "/camera/head/resolution"
+    ] == [1080, 720]
+    assert "/sku/search_by_name" not in paths(mock)
+    assert "/pick" not in paths(mock)
+
+
+@pytest.mark.asyncio
+async def test_task1_uses_current_resolution_when_1080_switch_fails() -> None:
+    mock = Task1Mock()
+    mock.resolution_failures.add(1080)
+    client = Task1Client(settings(), transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(settings(), client).run(Task1Request())
+
+    assert result.status == "SUCCEEDED"
+    assert [
+        payload(request)["resolution"]
+        for request in mock.requests
+        if request.url.path == "/camera/head/resolution"
+    ] == [1080, 720]
+    assert [
+        request
+        for request in mock.requests
+        if request.url.path == "/navigation/navigate"
+        and payload(request).get("target_id") == "receipt_viewpoint"
+    ]
+    assert "/perception/parse" in paths(mock)
+
+
+@pytest.mark.asyncio
+async def test_task1_continues_when_720_restore_fails() -> None:
+    mock = Task1Mock()
+    mock.resolution_failures.add(720)
+    client = Task1Client(settings(), transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(settings(), client).run(Task1Request())
+
+    assert result.status == "SUCCEEDED"
+    assert "/sku/search_by_name" in paths(mock)
+    assert "/pick" in paths(mock)
 
 
 @pytest.mark.asyncio
@@ -315,7 +504,15 @@ async def test_task1_picks_both_products_and_places_them() -> None:
     pick_requests = [request for request in mock.requests if request.url.path == "/pick"]
     assert [payload(request)["hand"] for request in pick_requests] == ["LEFT", "RIGHT"]
     assert [payload(request)["product_name"] for request in pick_requests] == list(mock.names)
-    assert len([request for request in mock.requests if request.url.path == "/place"]) == 2
+    release_both = [
+        request
+        for request in mock.requests
+        if request.url.path == "/manipulation/release/both"
+    ]
+    assert len(release_both) == 1
+    assert release_both[0].headers["Idempotency-Key"].endswith(
+        ":task1.place.both"
+    )
 
 
 @pytest.mark.asyncio
@@ -339,13 +536,56 @@ async def test_task1_same_hand_is_strictly_serial(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_task1_recovers_release_after_back_nudge_and_second_return() -> None:
+async def test_task1_special_product_left_pick_nudges_right_before_first_attempt() -> None:
     mock = Task1Mock()
-    mock.place_failure = {
-        "error_code": "EXECUTION_FAILED",
-        "message": "release failed",
+    mock.names = {
+        SPECIAL_SHELF_NUDGE_PRODUCT: "H2_F_L1_C01",
+        "百事可乐瓶装": "H2_F_L1_C04",
     }
-    mock.place_failure_limit = 1
+    mock.pick_failure = {
+        "error_code": "EXECUTION_FAILED",
+        "message": "grasp failed",
+        "failed_interface": "manipulation_grasp",
+        "pose": [-1, 2, 3, 4, 5, 6],
+    }
+    mock.pick_failure_limit = 1
+    client = Task1Client(settings(), transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(settings(), client).run(Task1Request())
+
+    assert result.status == "SUCCEEDED"
+    nudge_requests = [
+        request for request in mock.requests if request.url.path == "/navigation/nudge"
+    ]
+    assert [payload(request) for request in nudge_requests] == [
+        {"action": "approach", "direction": "right"},
+        {"action": "approach", "direction": "left"},
+        {"action": "return"},
+    ]
+    special_picks = [
+        request
+        for request in mock.requests
+        if request.url.path == "/pick"
+        and payload(request)["product_name"] == SPECIAL_SHELF_NUDGE_PRODUCT
+    ]
+    assert len(special_picks) == 2
+    assert mock.requests.index(nudge_requests[0]) < mock.requests.index(special_picks[0])
+    assert mock.requests.index(special_picks[0]) < mock.requests.index(nudge_requests[1])
+    assert mock.requests.index(nudge_requests[1]) < mock.requests.index(special_picks[1])
+    assert mock.requests.index(special_picks[1]) < mock.requests.index(nudge_requests[2])
+
+
+@pytest.mark.asyncio
+async def test_task1_recovers_grasp_after_left_nudge_and_second_return() -> None:
+    mock = Task1Mock()
+    mock.pick_failure = {
+        "error_code": "EXECUTION_FAILED",
+        "message": "grasp failed",
+        "failed_interface": "manipulation_grasp",
+        "pose": [-1, 2, 3, 4, 5, 6],
+    }
+    mock.pick_failure_limit = 1
     mock.nudge_return_failures = 1
     client = Task1Client(settings(), transport=mock.transport)
 
@@ -359,35 +599,37 @@ async def test_task1_recovers_release_after_back_nudge_and_second_return() -> No
         request for request in mock.requests if request.url.path == "/navigation/nudge"
     ]
     assert [payload(request) for request in nudge_requests] == [
-        {"action": "approach", "direction": "back"},
+        {"action": "approach", "direction": "left"},
         {"action": "return"},
         {"action": "return"},
     ]
     assert [request.headers["Idempotency-Key"] for request in nudge_requests] == [
-        "task1-recovery:task1.place.0.place:recovery.approach",
-        "task1-recovery:task1.place.0.place:recovery.return.1",
-        "task1-recovery:task1.place.0.place:recovery.return.2",
+        "task1-recovery:task1.pick.0.pick:recovery.approach",
+        "task1-recovery:task1.pick.0.pick:recovery.return.1",
+        "task1-recovery:task1.pick.0.pick:recovery.return.2",
     ]
-    first_product_places = [
+    first_product_picks = [
         request
         for request in mock.requests
-        if request.url.path == "/place"
+        if request.url.path == "/pick"
         and payload(request)["product_name"] == "可口可乐罐装"
     ]
-    assert [request.headers["Idempotency-Key"] for request in first_product_places] == [
-        "task1-recovery:task1.place.0.place",
-        "task1-recovery:task1.place.0.place:recovery.retry",
+    assert [request.headers["Idempotency-Key"] for request in first_product_picks] == [
+        "task1-recovery:task1.pick.0.pick",
+        "task1-recovery:task1.pick.0.pick:recovery.retry",
     ]
 
 
 @pytest.mark.asyncio
 async def test_task1_stops_after_two_nudge_return_failures_and_navigates_start() -> None:
     mock = Task1Mock()
-    mock.place_failure = {
+    mock.pick_failure = {
         "error_code": "EXECUTION_FAILED",
-        "message": "release failed",
+        "message": "grasp failed",
+        "failed_interface": "manipulation_grasp",
+        "pose": [1, 2, 3, 4, 5, 6],
     }
-    mock.place_failure_limit = 1
+    mock.pick_failure_limit = 1
     mock.nudge_return_failures = 2
     client = Task1Client(settings(), transport=mock.transport)
 
@@ -402,12 +644,12 @@ async def test_task1_stops_after_two_nudge_return_failures_and_navigates_start()
         request for request in mock.requests if request.url.path == "/navigation/nudge"
     ]
     assert [payload(request) for request in nudge_requests] == [
-        {"action": "approach", "direction": "back"},
+        {"action": "approach", "direction": "right"},
         {"action": "return"},
         {"action": "return"},
     ]
-    place_requests = [request for request in mock.requests if request.url.path == "/place"]
-    assert [payload(request)["product_name"] for request in place_requests] == [
+    pick_requests = [request for request in mock.requests if request.url.path == "/pick"]
+    assert [payload(request)["product_name"] for request in pick_requests] == [
         "可口可乐罐装",
         "可口可乐罐装",
     ]
@@ -428,7 +670,7 @@ async def test_task1_reports_failed_release_after_returning_start(tmp_path: Path
         "failed_interface": "manipulation_release",
         "url": "http://robot:8084/manipulation/release",
     }
-    mock.place_failure_limit = 2
+    mock.place_failure_limit = 1
     task_settings = settings().model_copy(update={"log_dir": str(tmp_path)})
     client = Task1Client(task_settings, transport=mock.transport)
 
@@ -453,12 +695,15 @@ async def test_task1_reports_failed_release_after_returning_start(tmp_path: Path
     failed_event = next(
         event
         for event in events
-        if event["event"] == "放置"
+        if event["event"] == "双手放置"
         and event["status"] == "failed"
-        and event["attempt"] == 2
+        and event["attempt"] == 1
     )
     assert failed_event["failed_interface"] == "manipulation_release"
     assert failed_event["url"] == "http://robot:8084/manipulation/release"
+    assert not [
+        request for request in mock.requests if request.url.path == "/navigation/nudge"
+    ]
     assert events[-2]["event"] == "失败回开始点"
     assert events[-2]["status"] == "succeeded"
     assert events[-1]["error_code"] == "TASK_ACTIONS_FAILED"

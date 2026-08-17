@@ -21,10 +21,12 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import httpx
+import numpy as np
 
 from pick_place_service.models import (
     FrameBundle,
     LocateResponse,
+    PlaceLocateResponse,
     PickPlaceRequest,
     PickPlaceSettings,
     PoseResponse,
@@ -33,6 +35,7 @@ from pick_place_service.models import (
     action_payload,
     normalize_product_name,
 )
+from pick_place_service.pose_transform import transfer_reference_pose
 
 LOGGER = logging.getLogger(__name__)
 _ACTIVE_LOG_DIR: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
@@ -47,6 +50,13 @@ class FrameProvider(Protocol):
         bbox: list[int | float],
         operation: str,
         mask_base64: str | None = None,
+    ) -> FrameBundle: ...
+
+    async def prepare_reference(
+        self,
+        located: PlaceLocateResponse,
+        camera: str,
+        operation: str,
     ) -> FrameBundle: ...
 
 
@@ -144,6 +154,112 @@ class CameraFrameProvider:
             return frame
         except Exception:
             LOGGER.exception("相机取图失败 camera=%s operation=%s", camera, operation)
+            _remove_directory(directory)
+            raise
+
+    async def prepare_reference(
+        self,
+        located: PlaceLocateResponse,
+        camera: str,
+        operation: str,
+    ) -> FrameBundle:
+        """Prepare Task0 RGB-D and the reference mask for place pose estimation."""
+
+        root = Path(self.settings.temp_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        directory = Path(tempfile.mkdtemp(prefix=f"{operation}-", dir=root))
+        try:
+            try:
+                calibration_file = self.settings.calibration_for(camera)
+            except ValueError as exc:
+                raise ServiceError(
+                    "CALIBRATION_UNAVAILABLE", str(exc), status_code=502
+                ) from exc
+            source_rgb = Path(located.image_path)
+            source_depth = source_rgb.with_name("depth_mm.npy")
+            if not source_rgb.is_file() or not source_depth.is_file():
+                raise ServiceError(
+                    "REFERENCE_INPUT_UNAVAILABLE",
+                    f"Task0 reference RGB-D is unavailable beside {source_rgb}",
+                )
+            current_rgb = Path(located.current_image_path or located.image_path)
+            current_image_source = (
+                "current_image_path"
+                if located.current_image_path is not None
+                else "image_path_fallback"
+            )
+            if not current_rgb.is_file():
+                raise ServiceError(
+                    "CURRENT_INPUT_UNAVAILABLE",
+                    f"Current RGB used for place localization is unavailable: {current_rgb}",
+                )
+            color = source_rgb.read_bytes()
+            current_color = current_rgb.read_bytes()
+            width, height = _image_size(color)
+            current_width, current_height = _image_size(current_color)
+            try:
+                depth_array = np.load(source_depth, allow_pickle=False)
+            except (OSError, ValueError, TypeError) as exc:
+                raise ServiceError(
+                    "REFERENCE_INPUT_INVALID", f"invalid Task0 depth array: {exc}"
+                ) from exc
+            depth = _depth_array_to_png(depth_array, width, height)
+            _validate_pixel_bbox(located.bbox, width, height)
+
+            rgb_path = directory / f"rgb{_image_suffix(color, '.jpg')}"
+            depth_path = directory / "depth.png"
+            mask_path = directory / "mask.png"
+            rgb_path.write_bytes(color)
+            depth_path.write_bytes(depth)
+            _write_locate_mask(mask_path, located.mask, width, height)
+
+            _save_log_file("reference/rgb" + rgb_path.suffix, color)
+            _save_log_file("reference/depth.png", depth)
+            _save_log_file("reference/mask.png", mask_path.read_bytes())
+            calibration_path = Path(calibration_file)
+            if calibration_path.is_file():
+                _save_log_file(
+                    "reference/" + calibration_path.name,
+                    calibration_path.read_bytes(),
+                )
+                _save_log_file(
+                    "current/" + calibration_path.name,
+                    calibration_path.read_bytes(),
+                )
+            _save_log_file(
+                "current/rgb"
+                + _image_suffix(current_color, current_rgb.suffix or ".jpg"),
+                current_color,
+            )
+            _save_log_json(
+                "current/input.json",
+                {
+                    "source_rgb": str(current_rgb),
+                    "source": current_image_source,
+                    "image_size": [current_width, current_height],
+                    "camera": camera,
+                    "calibration": calibration_file,
+                },
+            )
+            _save_log_json(
+                "reference/input.json",
+                {
+                    "source_rgb": str(source_rgb),
+                    "source_depth": str(source_depth),
+                    "image_size": [width, height],
+                    "bbox": located.bbox,
+                    "camera": camera,
+                    "calibration": calibration_file,
+                },
+            )
+            return FrameBundle(
+                rgb=str(rgb_path),
+                depth=str(depth_path),
+                camera=calibration_file,
+                mask=str(mask_path),
+                cleanup_path=str(directory),
+            )
+        except Exception:
             _remove_directory(directory)
             raise
 
@@ -325,6 +441,53 @@ class SubagentClient:
         except Exception as exc:
             LOGGER.exception("定位响应解析失败 kind=%s product=%s", kind, request.product_name)
             raise ServiceError("INVALID_RESPONSE", f"invalid {kind} locate response") from exc
+
+    async def locate_place(self, request: PickPlaceRequest) -> PlaceLocateResponse:
+        if request.location_id is None or request.pose_type is None:
+            raise ServiceError(
+                "INVALID_REQUEST",
+                "SHORTAGE/MISPLACED place requires location_id and pose_type",
+                status_code=422,
+            )
+        locate_url = self.settings.locate_url or self.settings.perception_url
+        payload = {
+            "task_type": request.task_type.value,
+            "product_name": request.product_name,
+            "location_id": request.location_id,
+            "pose_type": request.pose_type,
+        }
+        response = await self._post(
+            locate_url,
+            "/perception/place/locate",
+            payload,
+            self.settings.timeouts.locate_seconds,
+        )
+        try:
+            located = PlaceLocateResponse.model_validate(response.json())
+            if normalize_product_name(located.product_name) != normalize_product_name(
+                request.product_name
+            ):
+                raise ValueError("locate response product_name does not match request")
+            if len(located.bbox) != 4:
+                raise ValueError("bbox must contain four values")
+            return located
+        except Exception as exc:
+            LOGGER.exception(
+                "放置定位响应解析失败 product=%s", request.product_name
+            )
+            raise ServiceError(
+                "INVALID_RESPONSE", "invalid place locate response"
+            ) from exc
+
+    async def prepare_place(self, level: str, operation_key: str) -> None:
+        response = await self._post(
+            self.settings.manipulation_url,
+            "/pose/prepare",
+            {"pose_type": "SHELF_PLACE_READY", "shelf_level": level},
+            self.settings.timeouts.action_seconds,
+            headers={"Idempotency-Key": f"{operation_key}:place-ready"},
+        )
+        self._validate_status(response, "shelf place pose preparation")
 
     async def estimate_pose(
         self, request: PickPlaceRequest, kind: str, frame: FrameBundle
@@ -574,6 +737,7 @@ class PickPlaceOrchestrator:
     async def run(self, request: PickPlaceRequest, kind: str, operation_key: str) -> StatusResponse:
         # 用 step 标记当前阶段；任何下游异常都会在统一日志中指出具体阶段。
         step = "定位"
+        execution_pose: PoseResponse | None = None
         log_dir = _create_operation_log(self.settings, request, kind, operation_key)
         log_token = _ACTIVE_LOG_DIR.set(log_dir)
         try:
@@ -597,15 +761,16 @@ class PickPlaceOrchestrator:
             if kind == "place" and request.task_type.value == "SORTING":
                 step = "释放执行"
                 _append_log_event("释放执行", "started", hand=request.hand.upper())
+                execution_pose = PoseResponse(
+                    pose=[0, 0, 0, 0, 0, 0],
+                    frame="camera",
+                    pose_unit="mm_rad",
+                    rotation_order="zyx",
+                )
                 await self.subagents.execute(
                     request,
                     kind,
-                    PoseResponse(
-                        pose=[0, 0, 0, 0, 0, 0],
-                        frame="camera",
-                        pose_unit="mm_rad",
-                        rotation_order="zyx",
-                    ),
+                    execution_pose,
                     operation_key,
                 )
                 _append_log_event("释放执行", "succeeded", hand=request.hand.upper())
@@ -617,24 +782,85 @@ class PickPlaceOrchestrator:
                     operation_key,
                 )
                 return StatusResponse(status="SUCCEEDED")
-            _append_log_event("定位", "started")
-            located = await self.subagents.locate(request, kind)
-            _append_log_event("定位", "succeeded", bbox=located.bbox, has_mask=bool(located.mask))
-            step = "取图"
-            camera = self.settings.camera_for(kind, request.normalized_hand, request.task_type)
-            _append_log_event("取图", "started", camera=camera)
-            frame = await self.frames.capture(
-                camera,
-                located.bbox,
-                operation_key,
-                located.mask,
+            camera = self.settings.camera_for(
+                kind, request.normalized_hand, request.task_type
             )
-            _append_log_event("取图", "succeeded", camera=camera)
-            step = "位姿估计"
-            _append_log_event("位姿估计", "started")
-            pose = await self.subagents.estimate_pose(request, kind, frame)
-            _append_log_event("位姿估计", "succeeded", pose=pose.pose)
+            if kind == "place":
+                _append_log_event("定位", "started")
+                place_located = await self.subagents.locate_place(request)
+                _append_log_event(
+                    "定位",
+                    "succeeded",
+                    bbox=place_located.bbox,
+                    has_mask=True,
+                    image_path=place_located.image_path,
+                    current_image_path=(
+                        place_located.current_image_path or place_located.image_path
+                    ),
+                    current_image_source=(
+                        "current_image_path"
+                        if place_located.current_image_path is not None
+                        else "image_path_fallback"
+                    ),
+                    level=place_located.level,
+                    rotate_matrix=place_located.rotate_matrix,
+                )
+                step = "参考输入准备"
+                _append_log_event("参考输入准备", "started", camera=camera)
+                frame = await self.frames.prepare_reference(
+                    place_located, camera, operation_key
+                )
+                _append_log_event("参考输入准备", "succeeded", camera=camera)
+                step = "位姿估计"
+                _append_log_event("位姿估计", "started", frame="reference")
+                reference_pose = await self.subagents.estimate_pose(request, kind, frame)
+                _append_log_event(
+                    "位姿估计", "succeeded", pose=reference_pose.pose, frame="reference"
+                )
+                step = "位姿转换"
+                _append_log_event("位姿转换", "started")
+                pose = transfer_reference_pose(
+                    reference_pose, place_located.rotate_matrix
+                )
+                _append_log_event(
+                    "位姿转换",
+                    "succeeded",
+                    reference_pose=reference_pose.pose,
+                    rotate_matrix=place_located.rotate_matrix,
+                    current_pose=pose.pose,
+                )
+                step = "放置预备位姿"
+                _append_log_event(
+                    "放置预备位姿", "started", level=place_located.level
+                )
+                await self.subagents.prepare_place(place_located.level, operation_key)
+                _append_log_event(
+                    "放置预备位姿", "succeeded", level=place_located.level
+                )
+            else:
+                _append_log_event("定位", "started")
+                located = await self.subagents.locate(request, kind)
+                _append_log_event(
+                    "定位",
+                    "succeeded",
+                    bbox=located.bbox,
+                    has_mask=bool(located.mask),
+                )
+                step = "取图"
+                _append_log_event("取图", "started", camera=camera)
+                frame = await self.frames.capture(
+                    camera,
+                    located.bbox,
+                    operation_key,
+                    located.mask,
+                )
+                _append_log_event("取图", "succeeded", camera=camera)
+                step = "位姿估计"
+                _append_log_event("位姿估计", "started")
+                pose = await self.subagents.estimate_pose(request, kind, frame)
+                _append_log_event("位姿估计", "succeeded", pose=pose.pose)
             step = "抓取/释放执行"
+            execution_pose = pose
             _append_log_event("抓取/释放执行", "started")
             await self.subagents.execute(request, kind, pose, operation_key)
             _append_log_event("抓取/释放执行", "succeeded")
@@ -648,6 +874,15 @@ class PickPlaceOrchestrator:
             LOGGER.info("取放流程完成 kind=%s product=%s key=%s", kind, request.product_name, operation_key)
             return StatusResponse(status="SUCCEEDED")
         except Exception as exc:
+            if (
+                isinstance(exc, ServiceError)
+                and step in {"抓取/释放执行", "释放执行"}
+                and exc.failed_interface
+                in {"manipulation_grasp", "manipulation_release"}
+                and exc.code not in {"ACTION_RESULT_UNKNOWN", "NETWORK_ERROR"}
+                and execution_pose is not None
+            ):
+                exc.pose = list(execution_pose.pose)
             _append_log_event(
                 "operation",
                 "failed",
@@ -828,6 +1063,38 @@ def _normalize_depth_frame(data: bytes, width: int, height: int) -> bytes:
         values = struct.unpack(f"<{width}H", raw_row)
         rows.append(b"\x00" + struct.pack(f">{width}H", *values))
     return _make_png(width, height, b"".join(rows))
+
+
+def _depth_array_to_png(depth: np.ndarray, width: int, height: int) -> bytes:
+    array = np.asarray(depth)
+    if array.shape != (height, width) or not np.issubdtype(array.dtype, np.number):
+        raise ServiceError(
+            "REFERENCE_INPUT_INVALID",
+            f"Task0 depth must be a numeric {height}x{width} array",
+        )
+    values = array.astype(np.float64)
+    if (
+        not np.isfinite(values).all()
+        or np.any(values < 0)
+        or np.any(values > 65535)
+    ):
+        raise ServiceError(
+            "REFERENCE_INPUT_INVALID",
+            "Task0 depth contains values outside uint16 millimetres",
+        )
+    encoded = np.rint(values).astype(">u2", copy=False)
+    rows = [b"\x00" + encoded[row].tobytes() for row in range(height)]
+    return _make_png(width, height, b"".join(rows))
+
+
+def _validate_pixel_bbox(bbox: list[int], width: int, height: int) -> None:
+    if len(bbox) != 4:
+        raise ServiceError("INVALID_BBOX", "bbox must contain four pixel values")
+    x1, y1, x2, y2 = bbox
+    if not (0 <= x1 < x2 <= width and 0 <= y1 < y2 <= height):
+        raise ServiceError(
+            "INVALID_BBOX", "reference bbox does not fit the Task0 image"
+        )
 
 
 def _make_png(width: int, height: int, scanlines: bytes) -> bytes:

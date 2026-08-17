@@ -27,6 +27,8 @@ class PickPlaceRequest(BaseModel):
     hand: Literal["left", "right", "LEFT", "RIGHT"]
     level: Literal["L1", "L2", "L3", "L4", "L5"] | None = None
     product_type: str | int | None = None
+    location_id: str | None = Field(default=None, min_length=1)
+    pose_type: Literal["SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"] | None = None
 
     @field_validator("product_name")
     @classmethod
@@ -66,6 +68,20 @@ class LocateResponse(BaseModel):
     bbox: list[int | float]
     mask: str | None = None
     image_path: str | None = None
+
+
+class PlaceLocateResponse(BaseModel):
+    """Reference-image inputs returned by the shelf place locator."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_name: str
+    bbox: list[int]
+    mask: str = Field(min_length=1)
+    image_path: str = Field(min_length=1)
+    current_image_path: str | None = Field(default=None, min_length=1)
+    rotate_matrix: list[list[float]]
+    level: Literal["L1", "L2", "L3", "L4", "L5"]
 
 
 class PoseResponse(BaseModel):
@@ -185,6 +201,7 @@ class ServiceError(Exception):
         status_code: int = 502,
         failed_interface: str | None = None,
         url: str | None = None,
+        pose: list[float] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -192,6 +209,7 @@ class ServiceError(Exception):
         self.status_code = status_code
         self.failed_interface = failed_interface
         self.url = url
+        self.pose = pose
 
 
 def action_payload(request: PickPlaceRequest, pose: PoseResponse) -> dict[str, Any]:

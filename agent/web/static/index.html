@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1514" />
     <title>机器人任务控制台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260816-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260817-1" />
   </head>
   <body>
     <main class="shell">
@@ -55,7 +55,10 @@
             <strong id="taskTitle">采集准备</strong>
             <span id="taskDescription">采集货架巡检点的头部 RGB-D 基准数据</span>
           </div>
-          <button id="taskSubmitButton" class="submit-button" type="submit"><span class="button-icon">→</span><span>开始 Task 0</span></button>
+          <div class="task-action-row">
+            <button id="taskSubmitButton" class="submit-button" type="submit"><span class="button-icon">→</span><span>开始 Task 0</span></button>
+            <button id="taskTerminateButton" class="danger-button task-terminate-button" type="button" hidden><span class="button-icon" aria-hidden="true">■</span><span>终止任务</span></button>
+          </div>
           <p id="taskErrorMessage" class="error-message" role="alert" hidden></p>
           <div class="task-meta">
             <span>任务键</span><strong id="taskOperationKey">-</strong>
@@ -81,7 +84,7 @@
           <section id="taskVisual" class="operation-visual" hidden>
             <div class="operation-visual-heading"><span>感知结果</span><span id="taskVisualStatus">等待图像</span></div>
             <div class="operation-visual-grid">
-              <div class="image-stage"><canvas id="taskVisualCanvas" width="640" height="480"></canvas><span class="image-caption">RGB · MASK · BBOX</span></div>
+              <div class="image-stage"><canvas id="taskVisualCanvas" width="640" height="480"></canvas><span class="image-caption">RGB · MASK · BBOX · 6D AXES</span></div>
               <div class="pose-summary">
                 <div class="pose-summary-heading"><span>6D 位姿</span><span id="taskPoseStatus">等待位姿估计</span></div>
                 <div id="taskPoseValues" class="pose-values"><span class="pose-empty">位姿估计完成后显示</span></div>
@@ -148,7 +151,7 @@
           <section id="pickVisual" class="operation-visual" hidden>
             <div class="operation-visual-heading"><span>感知结果</span><span id="pickVisualStatus">等待图像</span></div>
             <div class="operation-visual-grid">
-              <div class="image-stage"><canvas id="pickVisualCanvas" width="640" height="480"></canvas><span class="image-caption">RGB · MASK · BBOX</span></div>
+              <div class="image-stage"><canvas id="pickVisualCanvas" width="640" height="480"></canvas><span class="image-caption">RGB · MASK · BBOX · 6D AXES</span></div>
               <div class="pose-summary">
                 <div class="pose-summary-heading"><span>6D 位姿</span><span id="pickPoseStatus">等待位姿估计</span></div>
                 <div id="pickPoseValues" class="pose-values"><span class="pose-empty">位姿估计完成后显示</span></div>
@@ -198,7 +201,7 @@
           <section id="placeVisual" class="operation-visual" hidden>
             <div class="operation-visual-heading"><span>感知结果</span><span id="placeVisualStatus">等待图像</span></div>
             <div class="operation-visual-grid">
-              <div class="image-stage"><canvas id="placeVisualCanvas" width="640" height="480"></canvas><span class="image-caption">RGB · MASK · BBOX</span></div>
+              <div class="image-stage"><canvas id="placeVisualCanvas" width="640" height="480"></canvas><span class="image-caption">RGB · MASK · BBOX · 6D AXES</span></div>
               <div class="pose-summary">
                 <div class="pose-summary-heading"><span>6D 位姿</span><span id="placePoseStatus">等待位姿估计</span></div>
                 <div id="placePoseValues" class="pose-values"><span class="pose-empty">位姿估计完成后显示</span></div>
@@ -331,6 +334,6 @@
       </dialog>
       <footer><span>8108 UNIFIED TASK SERVICE</span><span id="footerUrl">-</span></footer>
     </main>
-    <script src="/static/app.js?v=20260816-1" defer></script>
+    <script src="/static/app.js?v=20260817-1" defer></script>
   </body>
 </html>

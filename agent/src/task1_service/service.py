@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+from asyncio import sleep
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
+from time import monotonic
 from uuid import uuid4
 
 from task1_service.client import Task1Client
@@ -20,9 +22,27 @@ from task1_service.models import (
     Task1ServiceError,
     Task1Settings,
 )
+from manipulation_policy import initial_shelf_nudge_direction
 
 
 LOGGER = logging.getLogger(__name__)
+RECEIPT_EXPOSURE_SETTLE_SECONDS = 0.5
+
+
+def _recovery_direction(error: Task1ServiceError, operation: str) -> str | None:
+    if (
+        operation != "pick"
+        or error.failed_interface != "manipulation_grasp"
+        or error.code in {"ACTION_RESULT_UNKNOWN", "NETWORK_ERROR"}
+        or error.pose is None
+        or len(error.pose) != 6
+    ):
+        return None
+    if error.pose[0] < 0:
+        return "left"
+    if error.pose[0] > 0:
+        return "right"
+    return None
 
 
 def shelf_level(slot_id: str) -> str:
@@ -66,25 +86,105 @@ class Task1Orchestrator:
             await self.client.check_all_health()
             logger.event("健康检查", "succeeded")
 
-            step = "小票点导航"
-            logger.event("小票点导航", "started", target_id=self.settings.receipt_viewpoint)
-            await self._navigate(
-                self.settings.receipt_viewpoint,
-                f"{task_run_id}:task1.receipt.navigate",
-                logger,
-                navigation_state,
-            )
-            logger.event("小票点导航", "succeeded", target_id=self.settings.receipt_viewpoint)
+            step = "头部相机切换1080p"
+            receipt_phase_error: BaseException | None = None
+            switch_completed_at: float | None = None
+            try:
+                logger.event("头部相机切换1080p", "started", resolution=1080)
+                try:
+                    await self.client.set_head_resolution(1080)
+                except Exception as exc:
+                    logger.event(
+                        "头部相机切换1080p",
+                        "failed",
+                        resolution=1080,
+                        error_code=getattr(exc, "code", type(exc).__name__),
+                        message=str(exc),
+                        fallback="continue_with_current_resolution",
+                    )
+                else:
+                    switch_completed_at = monotonic()
+                    logger.event("头部相机切换1080p", "succeeded", resolution=1080)
 
-            step = "小票拍摄位姿"
-            logger.event("小票拍摄位姿", "started", pose_type="RECEIPT_VIEW")
-            await self.client.prepare_pose("RECEIPT_VIEW", f"{task_run_id}:task1.receipt.pose")
-            logger.event("小票拍摄位姿", "succeeded", pose_type="RECEIPT_VIEW")
+                step = "小票点导航"
+                logger.event(
+                    "小票点导航", "started", target_id=self.settings.receipt_viewpoint
+                )
+                await self._navigate(
+                    self.settings.receipt_viewpoint,
+                    f"{task_run_id}:task1.receipt.navigate",
+                    logger,
+                    navigation_state,
+                )
+                logger.event(
+                    "小票点导航", "succeeded", target_id=self.settings.receipt_viewpoint
+                )
 
-            step = "小票识别"
-            logger.event("小票识别", "started")
-            product_names = await self.client.parse_receipt()
-            logger.event("小票识别", "succeeded", product_names=product_names)
+                step = "小票拍摄位姿"
+                logger.event("小票拍摄位姿", "started", pose_type="RECEIPT_VIEW")
+                await self.client.prepare_pose(
+                    "RECEIPT_VIEW", f"{task_run_id}:task1.receipt.pose"
+                )
+                logger.event("小票拍摄位姿", "succeeded", pose_type="RECEIPT_VIEW")
+
+                settle_seconds = 0.0
+                if switch_completed_at is not None:
+                    elapsed = monotonic() - switch_completed_at
+                    settle_seconds = max(
+                        0.0, RECEIPT_EXPOSURE_SETTLE_SECONDS - elapsed
+                    )
+                if settle_seconds > 0:
+                    logger.event(
+                        "小票曝光等待", "started", wait_seconds=settle_seconds
+                    )
+                    await sleep(settle_seconds)
+                logger.event(
+                    "小票曝光等待",
+                    "succeeded",
+                    waited_seconds=settle_seconds,
+                    minimum_seconds=RECEIPT_EXPOSURE_SETTLE_SECONDS,
+                    resolution_switch_succeeded=switch_completed_at is not None,
+                )
+
+                step = "小票识别"
+                logger.event("小票识别", "started")
+                product_names = await self.client.parse_receipt()
+                logger.event("小票识别", "succeeded", product_names=product_names)
+            except BaseException as exc:
+                receipt_phase_error = exc
+                raise
+            finally:
+                receipt_phase_step = step
+                step = "头部相机恢复720p"
+                logger.event("头部相机恢复720p", "started", resolution=720)
+                try:
+                    await self.client.set_head_resolution(720)
+                except Exception as restore_exc:
+                    logger.event(
+                        "头部相机恢复720p",
+                        "failed",
+                        resolution=720,
+                        error_code=getattr(
+                            restore_exc, "code", type(restore_exc).__name__
+                        ),
+                        message=str(restore_exc),
+                        original_step=(
+                            receipt_phase_step if receipt_phase_error is not None else None
+                        ),
+                        original_error_code=(
+                            getattr(
+                                receipt_phase_error,
+                                "code",
+                                type(receipt_phase_error).__name__,
+                            )
+                            if receipt_phase_error is not None
+                            else None
+                        ),
+                        fallback="continue_task1_without_head_camera",
+                    )
+                else:
+                    logger.event("头部相机恢复720p", "succeeded", resolution=720)
+                step = receipt_phase_step
 
             step = "SKU货位转换"
             targets: list[TargetItem] = []
@@ -150,16 +250,26 @@ class Task1Orchestrator:
                     await self._prepare_delivery(
                         task_run_id, logger, navigation_state=navigation_state
                     )
-                    for index, target in enumerate(targets):
+                    if set(held_items) == {Hand.LEFT, Hand.RIGHT}:
                         step = "商品放置"
-                        await self._place_target(
-                            target,
-                            index,
+                        await self._place_both_targets(
+                            targets,
                             task_run_id,
                             logger,
                             held_items,
                             action_failures,
                         )
+                    else:
+                        for index, target in enumerate(targets):
+                            step = "商品放置"
+                            await self._place_target(
+                                target,
+                                index,
+                                task_run_id,
+                                logger,
+                                held_items,
+                                action_failures,
+                            )
                 else:
                     logger.event(
                         "交付台准备",
@@ -210,7 +320,7 @@ class Task1Orchestrator:
                 step = "抓放失败汇总"
                 raise Task1ServiceError(
                     "TASK_ACTIONS_FAILED",
-                    f"{len(action_failures)} pick/place actions failed after nudge recovery",
+                    f"{len(action_failures)} pick/place actions failed",
                 )
 
             step = "任务判定区导航"
@@ -370,6 +480,9 @@ class Task1Orchestrator:
             ),
             logger=logger,
             action_failures=action_failures,
+            initial_nudge_direction=initial_shelf_nudge_direction(
+                target.product_name, target.hand.value
+            ),
         )
         if succeeded:
             target.picked = True
@@ -431,6 +544,56 @@ class Task1Orchestrator:
             held_items.pop(target.hand, None)
         return succeeded
 
+    async def _place_both_targets(
+        self,
+        targets: list[TargetItem],
+        task_run_id: str,
+        logger: _Task1Log,
+        held_items: dict[Hand, str],
+        action_failures: list[dict[str, str]],
+    ) -> bool:
+        left_product = held_items[Hand.LEFT]
+        right_product = held_items[Hand.RIGHT]
+        details = {
+            "left_product_name": left_product,
+            "right_product_name": right_product,
+            "attempt": 1,
+        }
+        logger.event("双手放置", "started", **details)
+        try:
+            await self.client.place_both(
+                left_product,
+                right_product,
+                f"{task_run_id}:task1.place.both",
+            )
+        except Task1ServiceError as exc:
+            logger.event(
+                "双手放置",
+                "failed",
+                **details,
+                error_code=exc.code,
+                message=exc.message,
+                failed_interface=exc.failed_interface,
+                url=exc.url,
+            )
+            action_failures.append(
+                {
+                    "operation": "place_both",
+                    "product_name": f"{left_product}, {right_product}",
+                    "hand": "BOTH",
+                    "error_code": exc.code,
+                    "message": exc.message,
+                }
+            )
+            return False
+
+        logger.event("双手放置", "succeeded", **details)
+        for target in targets:
+            if held_items.get(target.hand) == target.product_name:
+                target.placed = True
+        held_items.clear()
+        return True
+
     async def _run_action_with_recovery(
         self,
         *,
@@ -442,7 +605,53 @@ class Task1Orchestrator:
         action: Callable[[str], Awaitable[None]],
         logger: _Task1Log,
         action_failures: list[dict[str, str]],
+        initial_nudge_direction: str | None = None,
     ) -> bool:
+        if initial_nudge_direction is not None:
+            logger.event(
+                "货架抓放前微调",
+                "started",
+                operation=operation,
+                product_name=product_name,
+                hand=hand.value,
+                direction=initial_nudge_direction,
+            )
+            try:
+                await self.client.nudge(
+                    initial_nudge_direction, f"{action_key}:initial.approach"
+                )
+            except Task1ServiceError as nudge_error:
+                logger.event(
+                    "货架抓放前微调",
+                    "failed",
+                    operation=operation,
+                    product_name=product_name,
+                    hand=hand.value,
+                    direction=initial_nudge_direction,
+                    error_code=nudge_error.code,
+                    message=nudge_error.message,
+                )
+                await self._return_from_nudge(
+                    operation, product_name, hand, action_key, logger
+                )
+                action_failures.append(
+                    {
+                        "operation": operation,
+                        "product_name": product_name,
+                        "hand": hand.value,
+                        "error_code": nudge_error.code,
+                        "message": nudge_error.message,
+                    }
+                )
+                return False
+            logger.event(
+                "货架抓放前微调",
+                "succeeded",
+                operation=operation,
+                product_name=product_name,
+                hand=hand.value,
+                direction=initial_nudge_direction,
+            )
         logger.event(
             event_name,
             "started",
@@ -474,9 +683,29 @@ class Task1Orchestrator:
                 hand=hand.value,
                 attempt=1,
             )
+            if initial_nudge_direction is not None:
+                await self._return_from_nudge(
+                    operation, product_name, hand, action_key, logger
+                )
             return True
 
         assert initial_error is not None
+        direction = _recovery_direction(initial_error, operation)
+        if direction is None:
+            if initial_nudge_direction is not None:
+                await self._return_from_nudge(
+                    operation, product_name, hand, action_key, logger
+                )
+            action_failures.append(
+                {
+                    "operation": operation,
+                    "product_name": product_name,
+                    "hand": hand.value,
+                    "error_code": initial_error.code,
+                    "message": initial_error.message,
+                }
+            )
+            return False
         final_error = initial_error
         retry_succeeded = False
         logger.event(
@@ -485,10 +714,10 @@ class Task1Orchestrator:
             operation=operation,
             product_name=product_name,
             hand=hand.value,
-            direction="back",
+            direction=direction,
         )
         try:
-            await self.client.nudge_back(f"{action_key}:recovery.approach")
+            await self.client.nudge(direction, f"{action_key}:recovery.approach")
         except Task1ServiceError as nudge_error:
             final_error = nudge_error
             logger.event(
@@ -497,7 +726,7 @@ class Task1Orchestrator:
                 operation=operation,
                 product_name=product_name,
                 hand=hand.value,
-                direction="back",
+                direction=direction,
                 error_code=nudge_error.code,
                 message=nudge_error.message,
             )
@@ -508,7 +737,7 @@ class Task1Orchestrator:
                 operation=operation,
                 product_name=product_name,
                 hand=hand.value,
-                direction="back",
+                direction=direction,
             )
             logger.event(
                 event_name,

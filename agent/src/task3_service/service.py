@@ -26,6 +26,7 @@ from task3_service.models import (
     Task3ServiceError,
     Task3Settings,
 )
+from manipulation_policy import initial_shelf_nudge_direction
 
 
 LOGGER = logging.getLogger(__name__)
@@ -35,6 +36,24 @@ POSE_LEVELS = {
 }
 
 
+def _recovery_direction(error: Task3ServiceError, operation: str) -> str | None:
+    expected_interface = (
+        "manipulation_grasp" if operation == "pick" else "manipulation_release"
+    )
+    if (
+        error.failed_interface != expected_interface
+        or error.code in {"ACTION_RESULT_UNKNOWN", "NETWORK_ERROR"}
+        or error.pose is None
+        or len(error.pose) != 6
+    ):
+        return None
+    if error.pose[0] < 0:
+        return "left"
+    if error.pose[0] > 0:
+        return "right"
+    return None
+
+
 def shelf_level(slot_id: str) -> str:
     match = PRODUCT_SLOT_PATTERN.fullmatch(slot_id)
     if match is None:
@@ -42,6 +61,10 @@ def shelf_level(slot_id: str) -> str:
             "INVALID_PRODUCT_SLOT", f"invalid product slot: {slot_id}", status_code=422
         )
     return slot_id.split("_")[2]
+
+
+def shelf_view_pose(level: str) -> InspectionPose:
+    return InspectionPose.UPPER if level in {"L1", "L2"} else InspectionPose.LOWER
 
 
 class Task3Orchestrator:
@@ -112,7 +135,7 @@ class Task3Orchestrator:
                 step = "抓放失败汇总"
                 raise Task3ServiceError(
                     "TASK_ACTIONS_FAILED",
-                    f"{len(action_failures)} pick/place actions failed after nudge recovery",
+                    f"{len(action_failures)} pick/place actions failed",
                 )
 
             step = "任务判定区导航"
@@ -261,7 +284,7 @@ class Task3Orchestrator:
                     "乱放识别",
                     "started",
                     target_id=point.target_id,
-                    location_id=point.location_id,
+                    location_id=point.target_id,
                     pose_type=pose.value,
                     baseline_path=str(self._baseline_path(point, pose)),
                 )
@@ -491,6 +514,9 @@ class Task3Orchestrator:
             logger=logger,
             action_failures=action_failures,
             event_details={"source_slot_id": item.source_slot_id},
+            initial_nudge_direction=initial_shelf_nudge_direction(
+                item.product_name, item.hand.value
+            ),
         )
         if succeeded:
             item.picked = True
@@ -534,10 +560,11 @@ class Task3Orchestrator:
             product_name=item.product_name,
             target_id=item.destination_target_id,
         )
+        destination_level = shelf_level(item.destination_slot_id)
+        destination_view_pose = shelf_view_pose(destination_level)
         await self.client.prepare_pose(
-            "SHELF_PLACE_READY",
+            destination_view_pose.value,
             f"{task_run_id}:task3.place.{index}.pose",
-            shelf_level=shelf_level(item.destination_slot_id),
         )
         succeeded = await self._run_action_with_recovery(
             operation="place",
@@ -545,10 +572,17 @@ class Task3Orchestrator:
             product_name=item.product_name,
             hand=item.hand,
             action_key=f"{task_run_id}:task3.place.{index}.place",
-            action=lambda key: self.client.place(item.product_name, item.hand, key),
+            action=lambda key: self.client.place(
+                item.product_name,
+                item.hand,
+                item.destination_target_id,
+                destination_view_pose.value,
+                key,
+            ),
             logger=logger,
             action_failures=action_failures,
             event_details={"destination_slot_id": item.destination_slot_id},
+            recover_after_failure=False,
         )
         if succeeded:
             item.placed = True
@@ -567,8 +601,58 @@ class Task3Orchestrator:
         logger: "_Task3Log",
         action_failures: list[dict[str, str]],
         event_details: dict[str, str] | None = None,
+        initial_nudge_direction: str | None = None,
+        recover_after_failure: bool = True,
     ) -> bool:
         details = event_details or {}
+        if initial_nudge_direction is not None:
+            logger.event(
+                "货架抓放前微调",
+                "started",
+                operation=operation,
+                product_name=product_name,
+                hand=hand.value,
+                direction=initial_nudge_direction,
+                **details,
+            )
+            try:
+                await self.client.nudge(
+                    initial_nudge_direction, f"{action_key}:initial.approach"
+                )
+            except Task3ServiceError as nudge_error:
+                logger.event(
+                    "货架抓放前微调",
+                    "failed",
+                    operation=operation,
+                    product_name=product_name,
+                    hand=hand.value,
+                    direction=initial_nudge_direction,
+                    error_code=nudge_error.code,
+                    message=nudge_error.message,
+                    **details,
+                )
+                await self._return_from_nudge(
+                    operation, product_name, hand, action_key, logger
+                )
+                action_failures.append(
+                    {
+                        "operation": operation,
+                        "product_name": product_name,
+                        "hand": hand.value,
+                        "error_code": nudge_error.code,
+                        "message": nudge_error.message,
+                    }
+                )
+                return False
+            logger.event(
+                "货架抓放前微调",
+                "succeeded",
+                operation=operation,
+                product_name=product_name,
+                hand=hand.value,
+                direction=initial_nudge_direction,
+                **details,
+            )
         logger.event(
             event_name,
             "started",
@@ -601,9 +685,33 @@ class Task3Orchestrator:
                 attempt=1,
                 **details,
             )
+            if initial_nudge_direction is not None:
+                await self._return_from_nudge(
+                    operation, product_name, hand, action_key, logger
+                )
             return True
 
         assert initial_error is not None
+        direction = (
+            _recovery_direction(initial_error, operation)
+            if recover_after_failure
+            else None
+        )
+        if direction is None:
+            if initial_nudge_direction is not None:
+                await self._return_from_nudge(
+                    operation, product_name, hand, action_key, logger
+                )
+            action_failures.append(
+                {
+                    "operation": operation,
+                    "product_name": product_name,
+                    "hand": hand.value,
+                    "error_code": initial_error.code,
+                    "message": initial_error.message,
+                }
+            )
+            return False
         final_error = initial_error
         retry_succeeded = False
         logger.event(
@@ -612,10 +720,10 @@ class Task3Orchestrator:
             operation=operation,
             product_name=product_name,
             hand=hand.value,
-            direction="back",
+            direction=direction,
         )
         try:
-            await self.client.nudge_back(f"{action_key}:recovery.approach")
+            await self.client.nudge(direction, f"{action_key}:recovery.approach")
         except Task3ServiceError as nudge_error:
             final_error = nudge_error
             logger.event(
@@ -624,7 +732,7 @@ class Task3Orchestrator:
                 operation=operation,
                 product_name=product_name,
                 hand=hand.value,
-                direction="back",
+                direction=direction,
                 error_code=nudge_error.code,
                 message=nudge_error.message,
             )
@@ -635,7 +743,7 @@ class Task3Orchestrator:
                 operation=operation,
                 product_name=product_name,
                 hand=hand.value,
-                direction="back",
+                direction=direction,
             )
             logger.event(
                 event_name,

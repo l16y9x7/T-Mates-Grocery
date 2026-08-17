@@ -8,7 +8,41 @@ export RUNTIME_CONFIG_FILE="${RUNTIME_CONFIG_FILE:-$PROJECT_ROOT/config/runtime.
 RUN_DIR="$PROJECT_ROOT/run"
 LOG_DIR="$PROJECT_ROOT/log/process"
 PID_FILE="$RUN_DIR/pick-place.pid"
+PICK_PLACE_PORT="${PICK_PLACE_PORT:-8086}"
 usage() { echo "用法: $0 {start|stop|restart}"; }
+
+port_pids() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -t -nP -iTCP:"$PICK_PLACE_PORT" -sTCP:LISTEN 2>/dev/null || true
+  elif command -v fuser >/dev/null 2>&1; then
+    fuser -n tcp "$PICK_PLACE_PORT" 2>/dev/null | tr ' ' '\n' || true
+  fi
+}
+
+stop_port_listeners() {
+  local pids pid
+  pids="$(port_pids)"
+  [[ -z "$pids" ]] && return 0
+  echo "正在清理端口 $PICK_PLACE_PORT 的监听进程：$pids"
+  for pid in $pids; do
+    [[ "$pid" == "$$" ]] && continue
+    kill "$pid" 2>/dev/null || true
+  done
+  for _ in {1..20}; do
+    [[ -z "$(port_pids)" ]] && return 0
+    sleep 0.5
+  done
+  for pid in $(port_pids); do
+    [[ "$pid" == "$$" ]] && continue
+    kill -KILL "$pid" 2>/dev/null || true
+  done
+  for _ in {1..10}; do
+    [[ -z "$(port_pids)" ]] && return 0
+    sleep 0.2
+  done
+  echo "无法释放端口 $PICK_PLACE_PORT" >&2
+  return 1
+}
 
 start() {
   mkdir -p "$RUN_DIR" "$LOG_DIR"
@@ -16,6 +50,9 @@ start() {
     local pid; pid="$(<"$PID_FILE")"
     if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then echo "pick-place 服务已经在运行，PID=$pid"; return 0; fi
     rm -f "$PID_FILE"
+  fi
+  if [[ -n "$(port_pids)" ]]; then
+    stop_port_listeners
   fi
   command -v uv >/dev/null 2>&1 || { echo "错误：未找到 uv，请先运行 scripts/setup.sh。" >&2; return 1; }
   local timestamp log_file pid
@@ -28,15 +65,30 @@ start() {
 }
 
 stop() {
-  if [[ ! -f "$PID_FILE" ]]; then echo "pick-place 服务未运行"; return 0; fi
-  local pid; pid="$(<"$PID_FILE")"
-  if [[ ! "$pid" =~ ^[0-9]+$ ]] || ! kill -0 "$pid" 2>/dev/null; then rm -f "$PID_FILE"; echo "pick-place 服务未运行，已清理 PID 文件"; return 0; fi
-  echo "正在停止 pick-place 服务，PID=$pid"; kill "$pid" 2>/dev/null || true
-  for _ in {1..20}; do
-    if ! kill -0 "$pid" 2>/dev/null; then rm -f "$PID_FILE"; echo "pick-place 服务已停止"; return 0; fi
-    sleep 0.5
-  done
-  kill -KILL "$pid" 2>/dev/null || true; rm -f "$PID_FILE"; echo "pick-place 服务已强制停止"
+  local pid=""
+  if [[ -f "$PID_FILE" ]]; then
+    pid="$(<"$PID_FILE")"
+  fi
+  if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+    echo "正在停止 pick-place 服务，PID=$pid"
+    kill "$pid" 2>/dev/null || true
+    for _ in {1..20}; do
+      if ! kill -0 "$pid" 2>/dev/null; then
+        break
+      fi
+      sleep 0.5
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || true
+      echo "pick-place 服务已强制停止"
+    else
+      echo "pick-place 服务已停止"
+    fi
+  else
+    [[ -f "$PID_FILE" ]] && echo "pick-place 服务未运行，已清理 PID 文件"
+  fi
+  rm -f "$PID_FILE"
+  stop_port_listeners
 }
 
 case "${1:-}" in

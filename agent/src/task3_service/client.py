@@ -35,6 +35,19 @@ HEALTH_PATHS = {
 }
 
 
+def _execution_pose(value: object) -> list[float] | None:
+    if (
+        not isinstance(value, list)
+        or len(value) != 6
+        or any(
+            not isinstance(item, (int, float)) or isinstance(item, bool)
+            for item in value
+        )
+    ):
+        return None
+    return [float(item) for item in value]
+
+
 class Task3Client:
     def __init__(
         self,
@@ -87,11 +100,11 @@ class Task3Client:
             self.settings.timeouts.navigation_seconds,
         )
 
-    async def nudge_back(self, idempotency_key: str) -> None:
+    async def nudge(self, direction: str, idempotency_key: str) -> None:
         await self._physical_action(
             "navigation",
             "/navigation/nudge",
-            {"action": "approach", "direction": "back"},
+            {"action": "approach", "direction": direction},
             idempotency_key,
             self.settings.timeouts.navigation_seconds,
         )
@@ -134,7 +147,7 @@ class Task3Client:
             "/perception/inspect",
             json={
                 "task_type": TaskType.MISPLACED.value,
-                "location_id": point.location_id,
+                "location_id": point.target_id,
                 "pose_type": pose.value,
             },
             timeout_seconds=self.settings.timeouts.inspection_seconds,
@@ -176,13 +189,22 @@ class Task3Client:
             level=level,
         )
 
-    async def place(self, product_name: str, hand: Hand, idempotency_key: str) -> None:
+    async def place(
+        self,
+        product_name: str,
+        hand: Hand,
+        location_id: str,
+        pose_type: str,
+        idempotency_key: str,
+    ) -> None:
         await self._pick_place_action(
             "/place",
             product_name,
             hand,
             idempotency_key,
             self.settings.timeouts.place_seconds,
+            location_id=location_id,
+            pose_type=pose_type,
         )
 
     async def _pick_place_action(
@@ -194,6 +216,8 @@ class Task3Client:
         timeout_seconds: float,
         *,
         level: str | None = None,
+        location_id: str | None = None,
+        pose_type: str | None = None,
     ) -> None:
         payload = {
             "task_type": TaskType.MISPLACED.value,
@@ -202,6 +226,10 @@ class Task3Client:
         }
         if level is not None:
             payload["level"] = level
+        if location_id is not None:
+            payload["location_id"] = location_id
+        if pose_type is not None:
+            payload["pose_type"] = pose_type
         await self._physical_action(
             "pick_place",
             path,
@@ -329,6 +357,9 @@ class Task3Client:
                     pass
                 code = payload.get("error_code", "EXECUTION_FAILED")
                 detail = payload.get("message") or payload.get("detail")
+                failed_interface = payload.get("failed_interface")
+                failed_url = payload.get("url")
+                failed_pose = _execution_pose(payload.get("pose"))
                 message = f"{service} returned HTTP {response.status_code}"
                 if detail:
                     message = f"{message}: {detail}"
@@ -344,7 +375,13 @@ class Task3Client:
                     attempt=attempt + 1,
                 )
                 raise Task3ServiceError(
-                    code if isinstance(code, str) else "EXECUTION_FAILED", message
+                    code if isinstance(code, str) else "EXECUTION_FAILED",
+                    message,
+                    failed_interface=(
+                        failed_interface if isinstance(failed_interface, str) else None
+                    ),
+                    url=failed_url if isinstance(failed_url, str) else None,
+                    pose=failed_pose,
                 )
             self._trace(
                 service=service,

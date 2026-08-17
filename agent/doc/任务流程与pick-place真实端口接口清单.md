@@ -22,10 +22,12 @@ pick-place 编排服务默认绑定 `0.0.0.0:8086`，本机可通过 `127.0.0.1:
 | `<robot_ip>:8084` | `GET /manipulation/health` | 机器人抓放服务健康检查 |
 | `<robot_ip>:8084` | `POST /manipulation/grasp` | 执行抓取 |
 | `<robot_ip>:8084` | `POST /manipulation/release` | 执行释放；SORTING 放置直接调用 |
+| `<robot_ip>:8084` | `POST /manipulation/release/both` | Task1 左右手均持物时同时释放两件商品 |
 | `<robot_ip>:8085` | `GET /camera/health` | 相机网关健康检查 |
 | `<robot_ip>:8085` | `GET /camera/list` | 相机列表可用性检查 |
 | `<robot_ip>:8085` | `GET /camera/snapshot` | 获取相机彩色图 |
 | `<robot_ip>:8085` | `GET /camera/stream` | 获取相机 depth 流的第一帧 |
+| `<robot_ip>:8085` | `POST /camera/head/resolution` | 在 720p 与 1080p 头部 RGB profile 之间切换 |
 
 ## 2. Task0 实际调用的接口
 
@@ -45,7 +47,7 @@ Task0 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runt
 
 ## 3. Task1 实际调用的接口
 
-Task1 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runtime.production.yaml`。聚合 `GET /health` 会检查 Task1 的五个依赖；当前 `POST /tasks/1/run` 不执行运行前健康检查，任务会直接进入小票点导航。
+Task1 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runtime.production.yaml`。聚合 `GET /health` 和任务运行前检查会验证 Task1 的五个健康依赖；检查通过后会立即尝试把头部相机切换到 1080p，再进入小票点导航。
 
 | 主机:端口 | 接口 | Task1 用途 |
 |---|---|---|
@@ -53,14 +55,16 @@ Task1 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runt
 | `127.0.0.1:8108` | `POST /tasks/1/run` | 启动一次 SORTING 任务，请求体为空对象 |
 | `<robot_ip>:8081` | `GET /navigation/health` | Task1 `GET /health` 依赖检查 |
 | `<robot_ip>:8081` | `POST /navigation/navigate` | 前往小票点、商品货位、交付台、任务判定区 |
-| `<robot_ip>:8081` | `POST /navigation/nudge` | 抓取或放置失败后后退 3 cm，重试完成后回到微调前位置 |
+| `<robot_ip>:8081` | `POST /navigation/nudge` | 最终抓取失败时按位姿首值向左或向右微调 3 cm，重试完成后回到微调前位置；Task1 放置不微调 |
 | `127.0.0.1:8083` | `GET /perception/health` | Task1 `GET /health` 依赖检查 |
 | `127.0.0.1:8083` | `POST /perception/parse` | 从小票识别两个商品名 |
+| `<robot_ip>:8085` | `POST /camera/head/resolution` | 小票阶段开始时尝试切换 1080p，识别完成后恢复 720p |
 | `<robot_ip>:8084` | `GET /pose/health` | Task1 `GET /health` 依赖检查 |
 | `<robot_ip>:8084` | `POST /pose/prepare` | 准备起始、看小票、货架抓取、交付台放置姿态 |
+| `<robot_ip>:8084` | `POST /manipulation/release/both` | 左右手均持物时同时放置两件商品 |
 | `127.0.0.1:8086` | `GET /health` | Task1 `GET /health` 依赖检查 |
 | `127.0.0.1:8086` | `POST /pick` | 委托 pick-place 抓取商品 |
-| `127.0.0.1:8086` | `POST /place` | 委托 pick-place 放置商品 |
+| `127.0.0.1:8086` | `POST /place` | 同手串行或仅一手持物时放置单件商品 |
 | `127.0.0.1:25540` | `GET /sku/health` | Task1 `GET /health` 依赖检查 |
 | `127.0.0.1:25540` | `GET /sku/search_by_name` | 将商品名解析为唯一货位 |
 
@@ -74,7 +78,7 @@ Task2 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runt
 | `127.0.0.1:8108` | `POST /tasks/2/run` | 启动一次 `SHORTAGE` 补货任务，请求体为空对象 |
 | `<robot_ip>:8081` | `GET /navigation/health` | 任务启动健康检查 |
 | `<robot_ip>:8081` | `POST /navigation/navigate` | 前往巡检点、补货台和任务判定区 |
-| `<robot_ip>:8081` | `POST /navigation/nudge` | 抓取或放置失败后后退 3 cm，重试完成后回到微调前位置 |
+| `<robot_ip>:8081` | `POST /navigation/nudge` | 最终抓取失败时按位姿首值向左或向右微调 3 cm，重试完成后回到微调前位置；货架放置不微调 |
 | `127.0.0.1:8083` | `GET /perception/health` | 任务启动健康检查 |
 | `127.0.0.1:8083` | `POST /perception/inspect` | 在当前巡检点的上/下观察姿态识别缺货商品；感知服务自行取图 |
 | `<robot_ip>:8084` | `GET /pose/health` | 任务启动健康检查 |
@@ -84,7 +88,7 @@ Task2 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runt
 | `127.0.0.1:8086` | `POST /pick` | 使用 `SHORTAGE` 类型从补货台抓取商品 |
 | `127.0.0.1:8086` | `POST /place` | 使用 `SHORTAGE` 类型向货架放置商品 |
 
-Task2 Agent 不直接调用 SKU 服务，也不再上传巡检图片；商品手臂能力以及巡检导航点到代表货位 `location_id` 的映射来自 `config/product-hand-options.yaml`。感知服务会在 `/perception/inspect` 内部自行获取基准图和当前图，并调用 SKU 服务获取候选商品。
+Task2 Agent 不直接调用 SKU 服务，也不再上传巡检图片；商品手臂能力以及商品货位到巡检导航点的映射来自 `config/product-hand-options.yaml`。调用 `/perception/inspect` 时，`location_id` 直接传当前巡检导航点。感知服务会自行获取基准图和当前图，并调用 SKU 服务获取候选商品。
 
 ## 5. Task3 实际调用的接口
 
@@ -96,7 +100,7 @@ Task3 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runt
 | `127.0.0.1:8108` | `POST /tasks/3/run` | 启动一次 `MISPLACED` 交换任务，请求体为空对象 |
 | `<robot_ip>:8081` | `GET /navigation/health` | 任务启动健康检查 |
 | `<robot_ip>:8081` | `POST /navigation/navigate` | 前往巡检点、两个商品货位对应导航点和任务判定区 |
-| `<robot_ip>:8081` | `POST /navigation/nudge` | 抓取或放置失败后后退 3 cm，重试完成后回到微调前位置 |
+| `<robot_ip>:8081` | `POST /navigation/nudge` | 特殊商品抓取前固定微调，或最终抓取失败时按位姿首值微调 3 cm；货架放置不微调 |
 | `<robot_ip>:8084` | `GET /pose/health` | 任务启动健康检查 |
 | `<robot_ip>:8084` | `POST /pose/prepare` | 准备复位、观察、货架抓取和货架放置姿态 |
 | `<robot_ip>:8085` | `GET /camera/health`、`GET /camera/list` | 检查头部彩色流 |
@@ -145,29 +149,32 @@ Task1 (SORTING) / Task2 (SHORTAGE) / Task3 (MISPLACED) -> POST 127.0.0.1:8086/pi
 
 ### 6.2 SORTING `/place`
 
-Task1 已先调用 `<robot_ip>:8084/pose/prepare` 准备 `DELIVERY_TABLE_PLACE_READY`，因此 `8086` 不再定位、取图或估算放置位姿：
+Task1 已先调用 `<robot_ip>:8084/pose/prepare` 准备 `DELIVERY_TABLE_PLACE_READY`。左右手均持物时，Task1 绕过 `8086`，直接同时释放两件商品：
 
 ```text
-Task1 -> POST 127.0.0.1:8086/place
-  -> POST <robot_ip>:8084/manipulation/release
+Task1 -> POST <robot_ip>:8084/manipulation/release/both
   <- {"status":"SUCCEEDED"}
 ```
+
+同手串行或抓取后仅一手持物时，仍调用 `127.0.0.1:8086/place`，由其直接调用单手 `/manipulation/release`。
 
 ### 6.3 SHORTAGE 与 MISPLACED `/place`
 
-Task2 使用 `task_type=SHORTAGE` 调用 `/place`。该分支不使用 Task2 恢复的观察姿态作为最终放置位姿，而是继续完成放置定位、头部 RGB-D 取图、放置位姿估计和释放。`MISPLACED /place` 执行相同链路：
+Task2 使用 `task_type=SHORTAGE` 调用 `/place`。Task2/Task3 先恢复目标货架的观察姿态；8083 根据观察点和观察姿态自行获取当前 RGB-D，并返回 Task0 参考数据、参考相机到当前相机的 SE(3) 变换和目标层号。8086 使用 Task0 参考 RGB-D 调用原格式的放置位姿接口，再将参考位姿转换到当前相机坐标系。`MISPLACED /place` 执行相同链路：
 
 ```text
 Task2 (SHORTAGE) / Task3 (MISPLACED) -> POST 127.0.0.1:8086/place
-  -> POST 127.0.0.1:8083/perception/place/locate
-  -> GET <robot_ip>:8085/camera/snapshot?camera=head&type=color
-  -> GET <robot_ip>:8085/camera/stream?camera=head&type=depth
-  -> POST 127.0.0.1:8084/manipulation/place_pose (multipart/form-data)
+  -> POST 127.0.0.1:8083/perception/place/locate {task_type, product_name, location_id, pose_type}
+       8083 自行获取当前 RGB-D，返回 Task0 image_path/mask、bbox、rotate_matrix 和 level
+  -> 读取 image_path 同目录的 Task0 rgb.jpg 与 depth_mm.npy
+  -> POST 127.0.0.1:8084/manipulation/place_pose (Task0 RGB-D，multipart/form-data)
+  -> T_current_object = rotate_matrix @ T_reference_object
+  -> POST <robot_ip>:8084/pose/prepare {"pose_type":"SHELF_PLACE_READY","shelf_level":"<level>"}
   -> POST <robot_ip>:8084/manipulation/release
   <- {"status":"SUCCEEDED"}
 ```
 
-`release` 成功后直接返回；结果视觉校验代码已注释，不调用 `/perception/place/check`。
+`/manipulation/place_pose` 的响应格式没有变化，仍为 `[x,y,z,rx,ry,rz]`、`camera`、`mm_rad`、`zyx`。8086 按 `R = Rz(rz) @ Ry(ry) @ Rx(rx)` 将六维位姿转为齐次矩阵，完成 SE(3) 左乘后再转回相同六维格式供 `release` 使用。`release` 成功后直接返回；结果视觉校验代码已注释，不调用 `/perception/place/check`。
 
 ### 6.4 `8086 /health`
 
@@ -199,14 +206,17 @@ POST 127.0.0.1:8108/tasks/0/run {}
 
 ## 8. Task1 调用顺序
 
-`POST /tasks/1/run` 当前不执行运行前健康检查。商品手臂分配由配置决定；以下为两件商品使用不同手臂时的主顺序。
+商品手臂分配由配置决定；以下为两件商品使用不同手臂时的主顺序。
 
 ```text
 POST 127.0.0.1:8108/tasks/1/run {}
+  -> GET Task1 五个依赖的健康接口
+  -> POST <robot_ip>:8085/camera/head/resolution {"resolution":1080}
   -> POST <robot_ip>:8084/pose/prepare {"pose_type":"START_POSITION"}
   -> POST <robot_ip>:8081/navigation/navigate {"target_id":"receipt_viewpoint"}
   -> POST <robot_ip>:8084/pose/prepare {"pose_type":"RECEIPT_VIEW"}
   -> POST 127.0.0.1:8083/perception/parse
+  -> POST <robot_ip>:8085/camera/head/resolution {"resolution":720}
   -> 对两个商品分别：
        GET 127.0.0.1:25540/sku/search_by_name?name=<商品名>
   -> 对每件商品分别：
@@ -217,28 +227,33 @@ POST 127.0.0.1:8108/tasks/1/run {}
   -> POST <robot_ip>:8084/pose/prepare {"pose_type":"START_POSITION"}
   -> POST <robot_ip>:8081/navigation/navigate {"target_id":"delivery_place"}
   -> POST <robot_ip>:8084/pose/prepare {"pose_type":"DELIVERY_TABLE_PLACE_READY"}
-  -> 对每件商品分别：POST 127.0.0.1:8086/place {"task_type":"SORTING", ...}
+  -> POST <robot_ip>:8084/manipulation/release/both
+       {"task_type":"SORTING","left":{"product_name":"..."},"right":{"product_name":"..."}}
   -> POST <robot_ip>:8084/pose/prepare {"pose_type":"START_POSITION"}
   -> POST <robot_ip>:8081/navigation/navigate {"target_id":"task_boundary"}
   <- Task1 SUCCEEDED
 ```
 
+1080p 切换使用 60 秒超时，但属于非阻断图像质量优化：切换失败时记录接口错误，并继续使用相机当前 profile 执行小票识别。切换成功后，小票取图距离 HTTP 200 至少 0.5 秒；导航和位姿准备通常已经覆盖这段时间。无论小票点导航、位姿准备或识别是否成功，Task1 都会请求恢复 720p。恢复 720p 失败时记录接口错误并继续后续 SKU 和抓放流程，因为 Task1 后续不再使用头部相机。1080p 期间头部 Depth/RGB-D 返回 HTTP 409 属于预期行为，左右腕相机不受影响。
+
 如果两件商品只能使用同一只手，Task1 会对每件商品执行“抓取 -> 前往交付台 -> 准备放置姿态 -> 放置”，再处理下一件；重复导航到当前已在的目标点时会跳过重复的复位和导航请求。
 
-Task1 的 `/pick` 或 `/place` 明确报错或结果未知时，会先调用 `/navigation/nudge` 向 `back` 后退 3 cm，再使用新的动作键重试一次相同的 8086 请求，最后无论重试成功或失败都调用 `return`。抓取最终失败的商品跳过放置；放置最终失败时保留持物状态。其他手的独立动作继续执行，单手仍被占用时跳过下一件商品。全部抓放成功时仍前往 `task_boundary`；存在最终失败时跳过判定区、返回 `start` 后统一报错。
+Task1 仅在 `/pick` 的最终 `grasp` 明确执行失败且错误响应带有非零六维 `pose` 时微调：首值为负向左 3 cm，首值为正向右 3 cm，然后使用新的动作键重试一次相同的 8086 请求并调用 `return`。Task1 的单手 `/place` 和双手 `/manipulation/release/both` 均不微调、不执行动作级重试；单个 HTTP 请求在网络异常时仍使用相同幂等键重试一次。抓取最终失败的商品跳过放置；放置失败时保留持物状态。其他手的独立动作继续执行，单手仍被占用时跳过下一件商品。全部抓放成功时仍前往 `task_boundary`；存在最终失败时跳过判定区、返回 `start` 后统一报错。
+
+商品“外星人电解质水白桃口味0糖”（配置货位 `H2_F_L3_C03`、`H2_F_L5_C05`）执行货架抓取时，在第一次 8086 动作前先微调：左手操作向右 3 cm，右手操作向左 3 cm。该规则用于 Task1 和 Task3 的货架抓取；Task1 交付台放置、Task2 补货台抓取以及 Task2/3 货架放置均不使用。抓取完成或放弃后调用 `return`。
 
 ## 9. Task2 调用顺序
 
 Task2 的巡检点按以下顺序配置：
 
 ```text
-H1_F_L_INSPECT -> H1_F_R_INSPECT -> H1_B_L_INSPECT -> H1_B_R_INSPECT
--> H2_F_L_INSPECT -> H2_F_R_INSPECT -> H2_B_L_INSPECT -> H2_B_R_INSPECT
+H2_F_L_INSPECT -> H2_F_R_INSPECT -> H1_F_L_INSPECT -> H1_F_R_INSPECT
+-> H1_B_L_INSPECT -> H1_B_R_INSPECT -> H2_B_L_INSPECT -> H2_B_R_INSPECT
 ```
 
-`POST /tasks/2/run` 先并发检查五个直接服务依赖、头部彩色流和 Task0 基准图，然后严格串行巡检。每个巡检点先恢复 `START_POSITION` 并导航，再分别以 `SHELF_VIEW_UPPER` 和 `SHELF_VIEW_LOWER` 调用缺货识别；基准图和当前图由感知服务自行获取。找到两件后立即停止；一轮不足两件时沿原路反向巡检，并持续往返直到累计两个唯一发现。
+`POST /tasks/2/run` 先并发检查五个直接服务依赖、头部彩色流和 Task0 基准图，然后按货架2正面、货架1正面、货架1背面、货架2背面执行单轮巡检。每个货架面先完成左右巡检点的 `SHELF_VIEW_UPPER`、`SHELF_VIEW_LOWER` 识别，再按感知响应原始顺序逐条尝试补货；finding 不去重、不限制数量。
 
-两件商品可使用不同手时，主顺序如下：
+主顺序如下：
 
 ```text
 POST 127.0.0.1:8108/tasks/2/run {}
@@ -250,37 +265,31 @@ POST 127.0.0.1:8108/tasks/2/run {}
        GET <robot_ip>:8085/camera/list
        GET 127.0.0.1:8086/health
        检查 output/task0 下 16 张基准 rgb.jpg
-  -> 对每个巡检点，直到找到两件缺货商品：
-       POST <robot_ip>:8084/pose/prepare {"pose_type":"START_POSITION"}
-       POST <robot_ip>:8081/navigation/navigate {"target_id":"<巡检点>"}
-       POST <robot_ip>:8084/pose/prepare {"pose_type":"SHELF_VIEW_UPPER"}
-       POST 127.0.0.1:8083/perception/inspect {"task_type":"SHORTAGE", "location_id":"<代表货位>", "pose_type":"SHELF_VIEW_UPPER"}
-       POST <robot_ip>:8084/pose/prepare {"pose_type":"SHELF_VIEW_LOWER"}
-       POST 127.0.0.1:8083/perception/inspect {"task_type":"SHORTAGE", "location_id":"<代表货位>", "pose_type":"SHELF_VIEW_LOWER"}
-  -> 根据商品名、发现时巡检点和上/下观察姿态分配抓取手
-  -> POST <robot_ip>:8084/pose/prepare {"pose_type":"START_POSITION"}
-  -> POST <robot_ip>:8081/navigation/navigate {"target_id":"replenishment_pickup"}
-  -> POST <robot_ip>:8084/pose/prepare {"pose_type":"REPLENISHMENT_TABLE_PICK_READY"}
-  -> 对两件商品分别：POST 127.0.0.1:8086/pick {"task_type":"SHORTAGE", ...}
-  -> 对每件商品分别：
-       POST <robot_ip>:8084/pose/prepare {"pose_type":"START_POSITION"}
-       POST <robot_ip>:8081/navigation/navigate {"target_id":"<发现时巡检点>"}
-       POST <robot_ip>:8084/pose/prepare {"pose_type":"<SHELF_VIEW_UPPER|SHELF_VIEW_LOWER>"}
-       POST 127.0.0.1:8086/place {"task_type":"SHORTAGE", ...}
+  -> 对每个货架面：
+       先对左右巡检点分别执行 UPPER、LOWER 位姿和 perception/inspect
+       再对该面返回的每条 finding：
+         根据商品名、巡检点和观察姿态选择第一只安全手；无法匹配时记录并跳过
+         前往 replenishment_pickup 并准备 REPLENISHMENT_TABLE_PICK_READY
+         如果手上残留上次放置失败的商品：
+           POST <robot_ip>:8084/manipulation/gripper/open {"hand":"<LEFT|RIGHT>"}
+         POST 127.0.0.1:8086/pick {"task_type":"SHORTAGE", ...}
+         抓取成功后返回发现时巡检点并恢复发现时观察姿态
+         POST 127.0.0.1:8086/place
+           {"task_type":"SHORTAGE","product_name":"...","hand":"...",
+            "location_id":"<发现时巡检点>","pose_type":"<观察姿态>"}
+         抓取和放置均成功的累计数量达到 2 时立即停止巡检
   -> POST <robot_ip>:8084/pose/prepare {"pose_type":"START_POSITION"}
   -> POST <robot_ip>:8081/navigation/navigate {"target_id":"task_boundary"}
   <- Task2 SUCCEEDED
 ```
 
-Task2 会把商品与发现时的“巡检点 + 上/下观察姿态”绑定，放置前恢复该上下文。Task2 不调用 `SHELF_PLACE_READY`，也不介入 8086 内部的放置定位和位姿估计。
+Task2 会把商品与发现时的“巡检点 + 上/下观察姿态”绑定，放置前恢复该上下文。Task2 Agent 不直接调用 `SHELF_PLACE_READY`；8086 完成参考位姿估计和 SE(3) 转换后，使用 8083 返回的 `level` 调用该放置预备姿态。
 
-如果两件商品只能使用同一只手，Task2 按“前往补货台 -> 抓取一件 -> 前往对应巡检点 -> 放置一件”处理完当前商品后，再处理下一件。已在目标点时同样会跳过重复复位和导航。
-
-Task2 对 `/pick` 和 `/place` 使用与 Task1 相同的后退、重试和回原点策略。抓取最终失败时不再前往对应货架放置；放置最终失败时该手继续记录为持物状态，另一只手的商品仍继续处理。单手分支中如果上一件放置失败，下一轮会在前往补货台前因手被占用而跳过。存在最终抓放失败时直接返回 `start` 并统一报错，不前往 `task_boundary`。
+Task2 仅对 `/pick` 使用按失败位姿微调、重试和回原点策略；货架 `/place` 只执行一次，不在动作前或失败后微调。确定的抓取或放置失败视为候选失败并继续，不再导致最终失败汇总；动作结果未知仍立即终止。放置失败时该手保持持物状态，下一候选到达补货台后先调用 `/manipulation/gripper/open` 丢回取货台。四个货架面处理完仍不足两次成功放置时返回 `start` 并报错；成功两次则前往 `task_boundary`。
 
 ## 10. Task3 调用顺序
 
-Task3 与 Task2 使用相同的八点往返巡检路线和 8083 缺货/乱放识别契约；区别是 Task3 请求 `MISPLACED` 并在发现一组乱放结果后立即停止巡检。感知服务自行获取基准图和当前图，任务编排不再上传图片。
+Task3 继续使用共享配置中的原八点往返巡检路线和 8083 乱放识别契约；Task2 的新分面顺序仅在 `tasks.task2` 中覆盖，不影响 Task3。Task3 请求 `MISPLACED` 并在发现一组乱放结果后立即停止巡检。
 
 ```text
 POST 127.0.0.1:8108/tasks/3/run {}
@@ -296,15 +305,17 @@ POST 127.0.0.1:8108/tasks/3/run {}
   -> 按 product-hand-options 为两项交换作业分配不同且对来源/目标均安全的手
   -> 到 P1，准备 SHELF_PICK_READY + P1 层号，以 level=P1 层号抓取 misplaced_product_name
   -> 到 P2，准备 SHELF_PICK_READY + P2 层号，以 level=P2 层号抓取 gt_product_name
-  -> 保持在 P2，准备 SHELF_PLACE_READY + P2 层号，放置第一件商品
-  -> 返回 P1，准备 SHELF_PLACE_READY + P1 层号，放置第二件商品
+  -> 保持在 P2，准备 P2 对应 SHELF_VIEW_UPPER/LOWER，调用 8086 放置第一件商品
+       8086 完成参考位姿转换后准备 SHELF_PLACE_READY + 8083 返回层号并释放
+  -> 返回 P1，准备 P1 对应 SHELF_VIEW_UPPER/LOWER，调用 8086 放置第二件商品
+       8086 完成参考位姿转换后准备 SHELF_PLACE_READY + 8083 返回层号并释放
   -> 返回 task_boundary
   <- Task3 SUCCEEDED
 ```
 
 Task3 要求感知只返回一组不同的非空商品名。P1 会使用发现时的巡检点和上下观察层级消歧；P2 必须是唯一配置货位。无法确定货位或无法为两件商品分配不同的安全手时，在任何抓放动作前以 HTTP `422` 失败。
 
-Task3 的两件交换商品使用不同手，因此一件商品在后退微调后仍抓取或放置失败时，只跳过依赖该结果的动作，另一只手继续完成仍可执行的交换步骤。交换不完整时不进入 `task_boundary`，而是导航回 `start` 后统一报错。
+Task3 的两件交换商品使用不同手。抓取明确执行失败时可按位姿微调并重试一次；货架放置只执行一次，失败后不微调、不重试。单件商品抓取或放置最终失败时，只跳过依赖该结果的动作，另一只手继续完成仍可执行的交换步骤。交换不完整时不进入 `task_boundary`，而是导航回 `start` 后统一报错。
 
 ## 11. 接口规范
 
@@ -388,8 +399,16 @@ Task3 的两件交换商品使用不同手，因此一件商品在后退微调�
   "task_type":"SHORTAGE",
   "status":"SUCCEEDED",
   "inspection_pass":1,
-  "product_names":["商品1","商品2"],
+  "product_names":["误报商品","商品1","商品2"],
   "target_items":[
+    {
+      "product_name":"误报商品",
+      "inspection_target_id":"H2_F_L_INSPECT",
+      "inspection_pose_type":"SHELF_VIEW_UPPER",
+      "hand":"LEFT",
+      "picked":false,
+      "placed":false
+    },
     {
       "product_name":"商品1",
       "inspection_target_id":"H1_F_L_INSPECT",
@@ -411,7 +430,7 @@ Task3 的两件交换商品使用不同手，因此一件商品在后退微调�
 }
 ```
 
-同一进程已有任务运行时返回 HTTP `409` `TASK_IN_PROGRESS`。
+`product_names` 和 `target_items` 可包含成功前尝试过的误报候选，因此数组长度不固定；任务成功仍要求其中恰有累计两项 `placed=true`。同一进程已有任务运行时返回 HTTP `409` `TASK_IN_PROGRESS`。
 
 #### `GET /health`
 
@@ -538,20 +557,24 @@ POST /navigation/nudge {"action":"return"}  Idempotency-Key: <动作键-3>
   <- {"status":"SUCCEEDED","station_id":"<站点>","nudge_count":0}
 ```
 
-Task1、Task2、Task3 目前在每次 8086 `/pick` 或 `/place` 返回服务错误后自动使用一次微调额度，固定顺序为：
+Task1-3 仅在 8086 抓取错误明确来自最终 `manipulation_grasp`、并携带非零首值的六维 `pose` 时使用一次失败恢复微调额度。所有放置动作均不微调、不执行动作级重试。`pose[0] < 0` 使用 `left`，`pose[0] > 0` 使用 `right`；首值为零、结果未知、网络错误和其他处理步骤失败均直接放弃当前抓取并继续后续任务。抓取失败恢复顺序为：
 
 ```text
-POST 8086/<pick|place>  Idempotency-Key: <动作键>
-  <- 失败
-POST 8081/navigation/nudge {"action":"approach","direction":"back"}
+POST 8086/pick  Idempotency-Key: <动作键>
+  <- {"error_code":"EXECUTION_FAILED","failed_interface":"manipulation_grasp","pose":[x,y,z,rx,ry,rz],...}
+POST 8081/navigation/nudge {"action":"approach","direction":"<left|right>"}
   Idempotency-Key: <动作键>:recovery.approach
-POST 8086/<pick|place>  Idempotency-Key: <动作键>:recovery.retry
+POST 8086/pick  Idempotency-Key: <动作键>:recovery.retry
   <- 成功或失败
 POST 8081/navigation/nudge {"action":"return"}
   Idempotency-Key: <动作键>:recovery.return.1
 ```
 
 第一次 `return` 失败时使用 `<动作键>:recovery.return.2` 再调用一次；两次都失败则停止后续物理动作。单个 HTTP 请求自己的网络重试仍复用该请求原有的键。任务没有最终失败时按原流程前往 `task_boundary`；Task1-3 任意整体失败都会先准备 `START_POSITION` 并导航到 `start`。如果失败回 `start` 也失败，对外返回 `FAILURE_RECOVERY_FAILED`，原始失败和回程失败同时记录在任务日志中。
+
+8086 在机器人明确返回最终抓取或释放失败时，会在原有 `error_code`、`message`、`failed_interface` 和 `url` 外附加本次执行使用的六维 `pose`。超时或网络中断不会附加可用于微调重试的位姿。
+
+上述特殊商品在第一次货架抓取前使用一次 `approach` 时，若最终 grasp 明确失败，仍可按六维位姿首值使用第二次 `approach` 后重试；两次微调完成后只调用一次 `return` 回到首次微调前的位置。特殊商品的货架放置不使用该动作前微调。
 
 ### 11.6 姿态接口：`<robot_ip>:8084`
 
@@ -596,12 +619,12 @@ Task2 另外发送：
 
 #### `POST /perception/inspect`
 
-Task2 和 Task3 在每个巡检点的上/下观察姿态各调用一次。感知服务自行获取 Task0 基准图和当前头部彩色图，任务编排只发送识别上下文。Task2 的 `location_id` 是从 `product-hand-options.yaml` 中按当前导航点反查并排序后得到的第一个合法货位：
+Task2 和 Task3 在每个巡检点的上/下观察姿态各调用一次。感知服务自行获取 Task0 基准图和当前头部彩色图，任务编排只发送识别上下文。两项任务的 `location_id` 都直接使用当前巡检导航点：
 
 ```json
 {
   "task_type":"SHORTAGE",
-  "location_id":"H1_F_L1_C01",
+  "location_id":"H1_F_L_INSPECT",
   "pose_type":"SHELF_VIEW_UPPER"
 }
 ```
@@ -612,14 +635,14 @@ Task2 和 Task3 在每个巡检点的上/下观察姿态各调用一次。感知
 {"findings":[{"shortage_product_name":"缺货商品名"}]}
 ```
 
-感知接口还接受可选的正数 `reference_item_area`，Task2 和 Task3 当前都不发送。Task2 Agent 单次最多接受两个非空商品名，并以“商品名 + 当前巡检点 + 当前观察姿态”去重，累计两个唯一发现后停止巡检。
+感知接口还接受可选的正数 `reference_item_area`，Task2 和 Task3 当前都不发送。Task2 保留每条结构化、非空 finding，不做去重或数量限制；同一货架面的所有识别完成后才逐条尝试抓放。没有匹配安全手配置的候选记录后跳过，成功抓取并放置两件后立即终止后续处理。
 
-Task3 使用相同字段，将任务类型改为：
+Task3 使用相同的巡检导航点，将任务类型改为：
 
 ```json
 {
   "task_type":"MISPLACED",
-  "location_id":"H1_F_L1_C01",
+  "location_id":"H1_F_L_INSPECT",
   "pose_type":"SHELF_VIEW_UPPER"
 }
 ```
@@ -669,11 +692,36 @@ Task3 只接受一组不同的非空商品名。
 
 #### `POST /perception/place/locate`
 
-`SHORTAGE` 和 `MISPLACED` 的 `/place` 使用此接口。请求与定位响应结构和 `/perception/pick/locate` 相同，但路径中的操作类型为 `place`：
+`SHORTAGE` 和 `MISPLACED` 的 `/place` 使用此接口。8086 只发送以下四个字段，不发送 `hand`、`level`、RGB 或 depth：
 
 ```json
-{"task_type":"SHORTAGE","product_name":"商品名","hand":"left"}
+{
+  "task_type":"SHORTAGE",
+  "product_name":"商品名",
+  "location_id":"H1_F_L_INSPECT",
+  "pose_type":"SHELF_VIEW_UPPER"
+}
 ```
+
+8083 根据 `location_id` 和 `pose_type` 自行获取当前 RGB-D。成功响应保留原放置定位字段并增加 `level`：
+
+```json
+{
+  "product_name":"商品名",
+  "bbox":[853,404,983,797],
+  "mask":"<Task0 原图尺寸的 base64 PNG>",
+  "image_path":"/absolute/path/to/task0/rgb.jpg",
+  "rotate_matrix":[
+    [1,0,0,25],
+    [0,1,0,-28],
+    [0,0,1,5],
+    [0,0,0,1]
+  ],
+  "level":"L1"
+}
+```
+
+`image_path` 指向 Task0 的 `rgb.jpg`，同目录必须存在 `depth_mm.npy`。8083 不返回本次定位使用的当前 RGB 路径，因此 8086 使用 `image_path` 作为 Web 当前视图的回退来源，并在操作日志中标记 `image_path_fallback`；该回退只影响可视化，不参与位姿转换。`rotate_matrix` 是从 Task0 参考相机坐标系到当前相机坐标系的 4x4 SE(3) 变换，平移单位与位姿一致为毫米；8086 会校验末行、旋转正交性和行列式。
 
 #### `POST /perception/{pick|place}/check`
 
@@ -722,13 +770,15 @@ Task1 要求 `name` 与查询值一致、`locations` 恰好一个。Task3 同样
   "product_name":"商品名",
   "hand":"LEFT",
   "level":"L2",
-  "product_type":"<可选字符串或整数>"
+  "product_type":"<可选字符串或整数>",
+  "location_id":"<非 SORTING /place 使用的观察点>",
+  "pose_type":"<SHELF_VIEW_UPPER|SHELF_VIEW_LOWER>"
 }
 ```
 
 `hand` 接受 `left`、`right`、`LEFT`、`RIGHT`，服务内部规范化为小写。
 
-`task_type` 接受 `SORTING`、`SHORTAGE` 和 `MISPLACED`。Task1 只发送 `SORTING`，Task2 只发送 `SHORTAGE`。`level` 可选且只在 `/pick` 定位时使用，接受 `L1` 至 `L5`；Task1 和 Task3 传入该字段，Task2 省略。兼容字段 `product_type` 不会传给机器人；调用 `grasp/release` 时统一传递 `product_name`。
+`task_type` 接受 `SORTING`、`SHORTAGE` 和 `MISPLACED`。Task1 只发送 `SORTING`，Task2 只发送 `SHORTAGE`。`level` 可选且只在 `/pick` 定位时使用，接受 `L1` 至 `L5`；Task1 和 Task3 传入该字段，Task2 省略。`SHORTAGE /place` 和 `MISPLACED /place` 必须传 `location_id` 与 `pose_type`，8086 将这两项和 `task_type`、`product_name` 组成四字段请求发给 8083。兼容字段 `product_type` 不会传给机器人；调用 `grasp/release` 时统一传递 `product_name`。
 
 成功响应：
 
@@ -751,10 +801,10 @@ Task1 要求 `name` 与查询值一致、`locations` 恰好一个。Task3 同样
 | 字段 | 类型 | 内容 |
 |---|---|---|
 | `product_name` | 表单字段 | 当前商品名 |
-| `rgb` | 文件 | 当前选中相机的 RGB 图 |
-| `depth` | 文件 | depth 首帧；尺寸匹配的裸 little-endian `uint16` 数据会转换为 16 位 PNG，其他编码原样上传 |
+| `rgb` | 文件 | `/pick` 为当前选中相机的 RGB；非 `SORTING /place` 为 8083 返回的 Task0 `image_path` |
+| `depth` | 文件 | `/pick` 为当前 depth 首帧；非 `SORTING /place` 为 Task0 `depth_mm.npy` 转换的 16 位 PNG |
 | `camera` | 文件 | `SHORTAGE /pick` 和非 `SORTING /place` 使用 `head.json`；其他 `/pick` 使用左/右腕标定 |
-| `mask` | 文件 | 定位 mask；无 mask 时由 bbox 生成 |
+| `mask` | 文件 | 定位 mask；放置流程必须使用 8083 返回的 Task0 原图尺寸 PNG mask |
 
 成功响应必须包含六维 `pose`：
 
@@ -767,7 +817,7 @@ Task1 要求 `name` 与查询值一致、`locations` 恰好一个。Task3 同样
 }
 ```
 
-可选的 `corners_mm` 也会被 8086 接受。缺少 `frame`、`pose_unit`、`rotation_order` 时，8086 默认分别使用 `camera`、`mm_rad`、`zyx`。
+可选的 `corners_mm` 也会被 8086 接受。缺少 `frame`、`pose_unit`、`rotation_order` 时，8086 默认分别使用 `camera`、`mm_rad`、`zyx`。`/manipulation/place_pose` 的响应仍使用这一旧格式；新增变换不改变该接口。
 
 ### 11.11 机器人抓放接口：`<robot_ip>:8084`
 
@@ -817,11 +867,25 @@ Task1 要求 `name` 与查询值一致、`locations` 恰好一个。Task3 同样
 
 成功响应至少包含 `{"status":"SUCCEEDED"}`。
 
-`SHORTAGE` 和 `MISPLACED` 放置使用 `place_pose` 返回的六维位姿，`hand` 为小写；释放成功后直接返回，不执行结果视觉校验。
+`SHORTAGE` 和 `MISPLACED` 放置使用 `rotate_matrix @ T_reference_object` 转换后的六维位姿，`hand` 为小写；释放前 8086 已使用返回的层号完成 `SHELF_PLACE_READY`，释放成功后直接返回，不执行结果视觉校验。
+
+#### `POST /manipulation/release/both`
+
+Task1 左右手均持物时直接调用。请求头为 `Idempotency-Key: <任务运行键>:task1.place.both`，请求体为：
+
+```json
+{
+  "task_type":"SORTING",
+  "left":{"product_name":"左手商品名"},
+  "right":{"product_name":"右手商品名"}
+}
+```
+
+成功响应至少包含 `{"status":"SUCCEEDED"}`。
 
 ### 11.12 相机接口：`<robot_ip>:8085`
 
-Task0 和 pick-place 直接调用相机网关。Task2 和 Task3 只在启动时检查头部彩色流是否在线，巡检取图改由感知服务完成。pick-place 在需要视觉位姿的 `/pick` 和非 `SORTING /place` 中先取彩色快照，再从 depth 流读取第一帧。`SHORTAGE /pick` 无论使用哪只手都使用头部相机；`SORTING /pick` 和 `MISPLACED /pick` 使用与抓取手对应的腕部相机：
+Task0 和 pick-place 的抓取分支直接调用相机网关。Task2 和 Task3 只在启动时检查头部彩色流是否在线，巡检和放置定位的当前图均改由感知服务获取。pick-place 的 `/pick` 先取彩色快照，再从 depth 流读取第一帧；非 `SORTING /place` 不再从相机网关取图，而是读取 8083 指定的 Task0 参考 RGB-D。`SHORTAGE /pick` 无论使用哪只手都使用头部相机；`SORTING /pick` 和 `MISPLACED /pick` 使用与抓取手对应的腕部相机：
 
 | 场景 | 相机 | 实际请求 |
 |---|---|---|
@@ -831,8 +895,8 @@ Task0 和 pick-place 直接调用相机网关。Task2 和 Task3 只在启动时�
 | `SORTING /pick`，`hand=right` | `right_wrist` | `GET /camera/snapshot?camera=right_wrist&type=color`，然后 `GET /camera/stream?camera=right_wrist&type=depth` |
 | `SHORTAGE /pick`，`hand=left` 或 `hand=right` | `head` | `GET /camera/snapshot?camera=head&type=color`，然后 `GET /camera/stream?camera=head&type=depth` |
 | `MISPLACED /pick` | `left_wrist` 或 `right_wrist` | 根据 `hand` 选择对应腕部相机的 color 和 depth 接口 |
-| `SORTING /place` | 不使用相机 | Task1 已准备固定放置姿态，8086 直接调用 `release` |
-| `SHORTAGE /place` 或 `MISPLACED /place` | `head` | `GET /camera/snapshot?camera=head&type=color`，然后 `GET /camera/stream?camera=head&type=depth` |
+| `SORTING /place` | 不使用相机 | 双手持物时 Task1 直接调用 `release/both`；单手放置由 8086 调用 `release` |
+| `SHORTAGE /place` 或 `MISPLACED /place` | 不直接取当前图 | 8083 自行取当前 RGB-D；8086 读取 Task0 `rgb.jpg` 和 `depth_mm.npy` |
 | `GET 8086 /health` | 不取图 | 只调用 `GET /camera/health` 和 `GET /camera/list` |
 
 #### `GET /camera/health`、`GET /camera/list`

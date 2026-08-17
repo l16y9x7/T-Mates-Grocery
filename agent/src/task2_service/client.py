@@ -30,6 +30,19 @@ HEALTH_PATHS = {
 }
 
 
+def _execution_pose(value: object) -> list[float] | None:
+    if (
+        not isinstance(value, list)
+        or len(value) != 6
+        or any(
+            not isinstance(item, (int, float)) or isinstance(item, bool)
+            for item in value
+        )
+    ):
+        return None
+    return [float(item) for item in value]
+
+
 class Task2Client:
     def __init__(
         self,
@@ -82,11 +95,11 @@ class Task2Client:
             self.settings.timeouts.navigation_seconds,
         )
 
-    async def nudge_back(self, idempotency_key: str) -> None:
+    async def nudge(self, direction: str, idempotency_key: str) -> None:
         await self._physical_action(
             "navigation",
             "/navigation/nudge",
-            {"action": "approach", "direction": "back"},
+            {"action": "approach", "direction": direction},
             idempotency_key,
             self.settings.timeouts.navigation_seconds,
         )
@@ -105,6 +118,16 @@ class Task2Client:
             "pose",
             "/pose/prepare",
             {"pose_type": pose_type},
+            idempotency_key,
+            self.settings.timeouts.pose_seconds,
+        )
+
+    async def open_gripper(self, hand: Hand, idempotency_key: str) -> None:
+        """Release a held item at the replenishment table."""
+        await self._physical_action(
+            "pose",
+            "/manipulation/gripper/open",
+            {"hand": hand.value},
             idempotency_key,
             self.settings.timeouts.pose_seconds,
         )
@@ -141,12 +164,6 @@ class Task2Client:
                     status_code=422,
                 )
             names.append(name)
-        if len(names) > 2:
-            raise Task2ServiceError(
-                "INVALID_FINDINGS",
-                "inspection response contains more than two products",
-                status_code=422,
-            )
         return names
 
     async def pick(self, product_name: str, hand: Hand, idempotency_key: str) -> None:
@@ -162,7 +179,14 @@ class Task2Client:
             self.settings.timeouts.pick_seconds,
         )
 
-    async def place(self, product_name: str, hand: Hand, idempotency_key: str) -> None:
+    async def place(
+        self,
+        product_name: str,
+        hand: Hand,
+        location_id: str,
+        pose_type: str,
+        idempotency_key: str,
+    ) -> None:
         await self._physical_action(
             "pick_place",
             "/place",
@@ -170,6 +194,8 @@ class Task2Client:
                 "task_type": TaskType.SHORTAGE.value,
                 "product_name": product_name,
                 "hand": hand.value,
+                "location_id": location_id,
+                "pose_type": pose_type,
             },
             idempotency_key,
             self.settings.timeouts.place_seconds,
@@ -290,6 +316,9 @@ class Task2Client:
                     pass
                 code = payload.get("error_code", "EXECUTION_FAILED")
                 detail = payload.get("message") or payload.get("detail")
+                failed_interface = payload.get("failed_interface")
+                failed_url = payload.get("url")
+                failed_pose = _execution_pose(payload.get("pose"))
                 message = f"{service} returned HTTP {response.status_code}"
                 if detail:
                     message = f"{message}: {detail}"
@@ -305,7 +334,13 @@ class Task2Client:
                     attempt=attempt + 1,
                 )
                 raise Task2ServiceError(
-                    code if isinstance(code, str) else "EXECUTION_FAILED", message
+                    code if isinstance(code, str) else "EXECUTION_FAILED",
+                    message,
+                    failed_interface=(
+                        failed_interface if isinstance(failed_interface, str) else None
+                    ),
+                    url=failed_url if isinstance(failed_url, str) else None,
+                    pose=failed_pose,
                 )
             self._trace(
                 service=service,

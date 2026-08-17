@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import httpx
 from pydantic import ValidationError
@@ -123,11 +123,11 @@ class Task1Client:
             self.settings.timeouts.navigation_seconds,
         )
 
-    async def nudge_back(self, idempotency_key: str) -> None:
+    async def nudge(self, direction: str, idempotency_key: str) -> None:
         await self._physical_action(
             "navigation",
             "/navigation/nudge",
-            {"action": "approach", "direction": "back"},
+            {"action": "approach", "direction": direction},
             idempotency_key,
             self.settings.timeouts.navigation_seconds,
         )
@@ -179,6 +179,16 @@ class Task1Client:
                 status_code=422,
             )
         return names
+
+    async def set_head_resolution(self, resolution: Literal[720, 1080]) -> None:
+        await self._request(
+            "camera",
+            "POST",
+            "/camera/head/resolution",
+            json={"resolution": resolution},
+            timeout_seconds=self.settings.timeouts.resolution_seconds,
+            result_unknown_on_exhaustion=True,
+        )
 
     async def search_by_name(self, name: str) -> SkuResponse:
         response = await self._request(
@@ -242,6 +252,24 @@ class Task1Client:
             "pick_place",
             "/place",
             {"task_type": TaskType.SORTING.value, "product_name": product_name, "hand": hand.value},
+            idempotency_key,
+            self.settings.timeouts.place_seconds,
+        )
+
+    async def place_both(
+        self,
+        left_product_name: str,
+        right_product_name: str,
+        idempotency_key: str,
+    ) -> None:
+        await self._physical_action(
+            "pose",
+            "/manipulation/release/both",
+            {
+                "task_type": TaskType.SORTING.value,
+                "left": {"product_name": left_product_name},
+                "right": {"product_name": right_product_name},
+            },
             idempotency_key,
             self.settings.timeouts.place_seconds,
         )
@@ -339,6 +367,7 @@ class Task1Client:
                 detail = payload.get("message") or payload.get("detail")
                 failed_interface = payload.get("failed_interface")
                 failed_url = payload.get("url")
+                failed_pose = _execution_pose(payload.get("pose"))
                 message = f"{service} returned HTTP {response.status_code}"
                 if detail:
                     message = f"{message}: {detail}"
@@ -360,6 +389,7 @@ class Task1Client:
                         failed_interface if isinstance(failed_interface, str) else None
                     ),
                     url=failed_url if isinstance(failed_url, str) else None,
+                    pose=failed_pose,
                 )
             self._trace(
                 service=service,
@@ -374,3 +404,16 @@ class Task1Client:
             )
             return response
         raise AssertionError("unreachable retry state")
+
+
+def _execution_pose(value: object) -> list[float] | None:
+    if (
+        not isinstance(value, list)
+        or len(value) != 6
+        or any(
+            not isinstance(item, (int, float)) or isinstance(item, bool)
+            for item in value
+        )
+    ):
+        return None
+    return [float(item) for item in value]
