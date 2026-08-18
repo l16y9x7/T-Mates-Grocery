@@ -948,6 +948,47 @@ class Task2Orchestrator:
             return False
         final_error = initial_error
         retry_succeeded = False
+        if operation == "pick":
+            # A failed replenishment grasp can leave the arm away from its
+            # observation pose. Restore that pose before applying the lateral
+            # recovery nudge and retrying the grasp.
+            logger.event(
+                "补货台观察位恢复",
+                "started",
+                product_name=product_name,
+                hand=hand.value,
+            )
+            try:
+                await self.client.prepare_pose(
+                    "REPLENISHMENT_TABLE_PICK_READY",
+                    f"{action_key}:recovery.pose",
+                )
+            except Task2ServiceError as pose_error:
+                final_error = pose_error
+                logger.event(
+                    "补货台观察位恢复",
+                    "failed",
+                    product_name=product_name,
+                    hand=hand.value,
+                    error_code=pose_error.code,
+                    message=pose_error.message,
+                )
+                if pose_error.code in {
+                    "ACTION_RESULT_UNKNOWN",
+                    "NETWORK_ERROR",
+                    "INVALID_RESPONSE",
+                }:
+                    uncertain_hands.add(hand)
+                action_failures.append(
+                    self._failure(operation, product_name, hand, final_error)
+                )
+                return False
+            logger.event(
+                "补货台观察位恢复",
+                "succeeded",
+                product_name=product_name,
+                hand=hand.value,
+            )
         logger.event(
             "抓放失败微调",
             "started",

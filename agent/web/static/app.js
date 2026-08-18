@@ -402,29 +402,35 @@ function drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, im
   if (imageCache.image?.complete) {
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.drawImage(imageCache.image, 0, 0, canvas.width, canvas.height);
-    if (
-      visual.mask_data
-      && (visual.mask_data !== imageCache.maskData || revisionChanged)
-    ) {
-      imageCache.maskData = visual.mask_data;
-      const mask = new Image();
-      imageCache.mask = mask;
-      mask.onload = () => {
-        if (imageCache.revision === revision && imageCache.mask === mask) {
-          drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, imageCache);
-        }
-      };
-      mask.src = visual.mask_data;
-    } else if (!visual.mask_data) {
-      imageCache.maskData = null;
-      imageCache.mask = null;
+    const maskDataList = Array.isArray(visual.mask_data_list) && visual.mask_data_list.length
+      ? visual.mask_data_list
+      : (visual.mask_data ? [visual.mask_data] : []);
+    const maskKey = JSON.stringify(maskDataList);
+    if (maskKey !== imageCache.maskKey || revisionChanged) {
+      imageCache.maskKey = maskKey;
+      imageCache.masks = maskDataList.map((maskData) => {
+        const mask = new Image();
+        mask.onload = () => {
+          if (imageCache.revision === revision && imageCache.masks?.includes(mask)) {
+            drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, imageCache);
+          }
+        };
+        mask.src = maskData;
+        return mask;
+      });
     }
-    if (imageCache.mask?.complete) {
-      context.save();
-      drawMaskOverlay(context, imageCache.mask, canvas.width, canvas.height);
-      context.restore();
-    }
-    if (Array.isArray(visual.bbox) && visual.bbox.length === 4) {
+    (imageCache.masks || []).forEach((mask) => {
+      if (mask.complete && mask.naturalWidth > 0) {
+        context.save();
+        drawMaskOverlay(context, mask, canvas.width, canvas.height);
+        context.restore();
+      }
+    });
+    const bboxes = Array.isArray(visual.bboxes) && visual.bboxes.length
+      ? visual.bboxes
+      : (Array.isArray(visual.bbox) ? [visual.bbox] : []);
+    bboxes.forEach((bbox, index) => {
+      if (!Array.isArray(bbox) || bbox.length !== 4) return;
       const coordinateWidth = Number(visual.bbox_coordinate_width)
         || imageCache.image.naturalWidth
         || canvas.width;
@@ -433,20 +439,22 @@ function drawVisual(visual, canvas, status, poseStatus, poseValues, poseMeta, im
         || canvas.height;
       const scaleX = canvas.width / coordinateWidth;
       const scaleY = canvas.height / coordinateHeight;
-      const [x1, y1, x2, y2] = visual.bbox.map(Number);
+      const [x1, y1, x2, y2] = bbox.map(Number);
+      if (![x1, y1, x2, y2].every(Number.isFinite)) return;
       context.save();
       context.strokeStyle = "#d9f26b";
       context.lineWidth = 3;
       context.strokeRect(x1 * scaleX, y1 * scaleY, (x2 - x1) * scaleX, (y2 - y1) * scaleY);
       context.fillStyle = "#d9f26b";
       context.font = "600 13px ui-monospace, monospace";
-      context.fillText("BBOX", x1 * scaleX + 6, Math.max(18, y1 * scaleY - 7));
+      const label = bboxes.length > 1 ? `BBOX ${index + 1}` : "BBOX";
+      context.fillText(label, x1 * scaleX + 6, Math.max(18, y1 * scaleY - 7));
       context.restore();
-    }
+    });
     drawPoseAxes(context, visual.pose_axes, canvas, imageCache.image);
     const layers = ["RGB"];
-    if (visual.mask_data) layers.push("MASK");
-    if (Array.isArray(visual.bbox)) layers.push("BBOX");
+    if (maskDataList.length) layers.push(maskDataList.length > 1 ? `${maskDataList.length} MASKS` : "MASK");
+    if (bboxes.length) layers.push(bboxes.length > 1 ? `${bboxes.length} BBOXES` : "BBOX");
     if (visual.pose_axes) layers.push("6D AXES");
     status.textContent = layers.join(" + ");
   }

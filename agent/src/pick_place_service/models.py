@@ -71,16 +71,16 @@ class LocateResponse(BaseModel):
 
 
 class PlaceLocateResponse(BaseModel):
-    """Reference-image inputs returned by the shelf place locator."""
+    """Current-image reference objects returned by the shelf place locator."""
 
     model_config = ConfigDict(extra="forbid")
 
-    product_name: str
-    bbox: list[int]
-    mask: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    bbox: list[list[int]]
+    mask: list[str]
+    direction: Literal["left", "right", "both", "up"]
     image_path: str = Field(min_length=1)
-    current_image_path: str | None = Field(default=None, min_length=1)
-    rotate_matrix: list[list[float]]
+    current_image_path: str = Field(min_length=1)
     level: Literal["L1", "L2", "L3", "L4", "L5"]
 
 

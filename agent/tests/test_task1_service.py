@@ -761,6 +761,46 @@ async def test_task1_special_product_left_pick_nudges_right_before_first_attempt
 
 
 @pytest.mark.asyncio
+async def test_task1_h2_b_l1_c01_nudges_left_before_pick_and_returns() -> None:
+    mock = Task1Mock()
+    special_product = "舒肤佳香皂纯白清香型"
+    mock.names = {
+        special_product: "H2_B_L1_C01",
+        "百事可乐瓶装": "H2_F_L1_C04",
+    }
+    task_settings = settings().model_copy(
+        update={
+            "product_hand_options": {
+                "H2_B_L1_C01": ["LEFT"],
+                "H2_F_L1_C04": ["RIGHT"],
+            }
+        }
+    )
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
+
+    assert result.status == "SUCCEEDED"
+    nudge_requests = [
+        request for request in mock.requests if request.url.path == "/navigation/nudge"
+    ]
+    assert [payload(request) for request in nudge_requests] == [
+        {"action": "approach", "direction": "left"},
+        {"action": "return"},
+    ]
+    special_pick = next(
+        request
+        for request in mock.requests
+        if request.url.path == "/pick"
+        and payload(request)["product_name"] == special_product
+    )
+    assert payload(special_pick)["hand"] == "LEFT"
+    assert mock.requests.index(nudge_requests[0]) < mock.requests.index(special_pick)
+    assert mock.requests.index(special_pick) < mock.requests.index(nudge_requests[1])
+
+
+@pytest.mark.asyncio
 async def test_task1_recovers_grasp_after_left_nudge_and_second_return() -> None:
     mock = Task1Mock()
     mock.pick_failure = {

@@ -35,7 +35,7 @@ from pick_place_service.models import (
     action_payload,
     normalize_product_name,
 )
-from pick_place_service.pose_transform import transfer_reference_pose
+from pick_place_service.place_pose import synthesize_place_pose
 
 LOGGER = logging.getLogger(__name__)
 _ACTIVE_LOG_DIR: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
@@ -52,12 +52,12 @@ class FrameProvider(Protocol):
         mask_base64: str | None = None,
     ) -> FrameBundle: ...
 
-    async def prepare_reference(
+    async def prepare_place_references(
         self,
         located: PlaceLocateResponse,
         camera: str,
         operation: str,
-    ) -> FrameBundle: ...
+    ) -> list[FrameBundle]: ...
 
 
 class CameraFrameProvider:
@@ -157,13 +157,13 @@ class CameraFrameProvider:
             _remove_directory(directory)
             raise
 
-    async def prepare_reference(
+    async def prepare_place_references(
         self,
         located: PlaceLocateResponse,
         camera: str,
         operation: str,
-    ) -> FrameBundle:
-        """Prepare Task0 RGB-D and the reference mask for place pose estimation."""
+    ) -> list[FrameBundle]:
+        """Prepare current RGB-D and one pose-estimator input per reference mask."""
 
         root = Path(self.settings.temp_dir)
         root.mkdir(parents=True, exist_ok=True)
@@ -175,90 +175,69 @@ class CameraFrameProvider:
                 raise ServiceError(
                     "CALIBRATION_UNAVAILABLE", str(exc), status_code=502
                 ) from exc
-            source_rgb = Path(located.image_path)
-            source_depth = source_rgb.with_name("depth_mm.npy")
+            source_rgb = Path(located.current_image_path)
+            source_depth = source_rgb.with_name("current_depth_mm.npy")
             if not source_rgb.is_file() or not source_depth.is_file():
                 raise ServiceError(
-                    "REFERENCE_INPUT_UNAVAILABLE",
-                    f"Task0 reference RGB-D is unavailable beside {source_rgb}",
-                )
-            current_rgb = Path(located.current_image_path or located.image_path)
-            current_image_source = (
-                "current_image_path"
-                if located.current_image_path is not None
-                else "image_path_fallback"
-            )
-            if not current_rgb.is_file():
-                raise ServiceError(
                     "CURRENT_INPUT_UNAVAILABLE",
-                    f"Current RGB used for place localization is unavailable: {current_rgb}",
+                    f"current RGB-D is unavailable beside {source_rgb}",
                 )
             color = source_rgb.read_bytes()
-            current_color = current_rgb.read_bytes()
             width, height = _image_size(color)
-            current_width, current_height = _image_size(current_color)
             try:
                 depth_array = np.load(source_depth, allow_pickle=False)
             except (OSError, ValueError, TypeError) as exc:
                 raise ServiceError(
-                    "REFERENCE_INPUT_INVALID", f"invalid Task0 depth array: {exc}"
+                    "CURRENT_INPUT_INVALID", f"invalid current depth array: {exc}"
                 ) from exc
             depth = _depth_array_to_png(depth_array, width, height)
-            _validate_pixel_bbox(located.bbox, width, height)
+            for bbox in located.bbox:
+                _validate_pixel_bbox(bbox, width, height)
 
             rgb_path = directory / f"rgb{_image_suffix(color, '.jpg')}"
             depth_path = directory / "depth.png"
-            mask_path = directory / "mask.png"
             rgb_path.write_bytes(color)
             depth_path.write_bytes(depth)
-            _write_locate_mask(mask_path, located.mask, width, height)
+            mask_paths: list[Path] = []
+            for index, encoded_mask in enumerate(located.mask, start=1):
+                mask_path = directory / f"mask_{index:02d}.png"
+                _write_locate_mask(mask_path, encoded_mask, width, height)
+                mask_paths.append(mask_path)
 
-            _save_log_file("reference/rgb" + rgb_path.suffix, color)
-            _save_log_file("reference/depth.png", depth)
-            _save_log_file("reference/mask.png", mask_path.read_bytes())
+            _save_log_file("current/rgb" + rgb_path.suffix, color)
+            _save_log_file("current/depth.png", depth)
+            for mask_path in mask_paths:
+                _save_log_file("current/" + mask_path.name, mask_path.read_bytes())
             calibration_path = Path(calibration_file)
             if calibration_path.is_file():
-                _save_log_file(
-                    "reference/" + calibration_path.name,
-                    calibration_path.read_bytes(),
-                )
                 _save_log_file(
                     "current/" + calibration_path.name,
                     calibration_path.read_bytes(),
                 )
-            _save_log_file(
-                "current/rgb"
-                + _image_suffix(current_color, current_rgb.suffix or ".jpg"),
-                current_color,
-            )
             _save_log_json(
                 "current/input.json",
                 {
-                    "source_rgb": str(current_rgb),
-                    "source": current_image_source,
-                    "image_size": [current_width, current_height],
-                    "camera": camera,
-                    "calibration": calibration_file,
-                },
-            )
-            _save_log_json(
-                "reference/input.json",
-                {
                     "source_rgb": str(source_rgb),
                     "source_depth": str(source_depth),
+                    "baseline_rgb": located.image_path,
                     "image_size": [width, height],
-                    "bbox": located.bbox,
+                    "bboxes": located.bbox,
+                    "masks": [path.name for path in mask_paths],
+                    "direction": located.direction,
                     "camera": camera,
                     "calibration": calibration_file,
                 },
             )
-            return FrameBundle(
-                rgb=str(rgb_path),
-                depth=str(depth_path),
-                camera=calibration_file,
-                mask=str(mask_path),
-                cleanup_path=str(directory),
-            )
+            return [
+                FrameBundle(
+                    rgb=str(rgb_path),
+                    depth=str(depth_path),
+                    camera=calibration_file,
+                    mask=str(mask_path),
+                    cleanup_path=str(directory) if index == 0 else None,
+                )
+                for index, mask_path in enumerate(mask_paths)
+            ]
         except Exception:
             _remove_directory(directory)
             raise
@@ -464,12 +443,19 @@ class SubagentClient:
         )
         try:
             located = PlaceLocateResponse.model_validate(response.json())
-            if normalize_product_name(located.product_name) != normalize_product_name(
+            if normalize_product_name(located.name) != normalize_product_name(
                 request.product_name
             ):
-                raise ValueError("locate response product_name does not match request")
-            if len(located.bbox) != 4:
-                raise ValueError("bbox must contain four values")
+                raise ValueError("locate response name does not match request")
+            expected_count = 1 if located.direction == "up" else 2
+            if len(located.bbox) != expected_count or len(located.mask) != expected_count:
+                raise ValueError(
+                    f"direction {located.direction} requires {expected_count} bbox/mask entries"
+                )
+            if any(len(bbox) != 4 for bbox in located.bbox):
+                raise ValueError("each bbox must contain four values")
+            if any(not mask.strip() for mask in located.mask):
+                raise ValueError("each mask must be non-empty")
             return located
         except Exception as exc:
             LOGGER.exception(
@@ -490,7 +476,12 @@ class SubagentClient:
         self._validate_status(response, "shelf place pose preparation")
 
     async def estimate_pose(
-        self, request: PickPlaceRequest, kind: str, frame: FrameBundle
+        self,
+        request: PickPlaceRequest,
+        kind: str,
+        frame: FrameBundle,
+        *,
+        log_suffix: str | None = None,
     ) -> PoseResponse:
         pose_estimation_url = self.settings.pose_estimation_url or self.settings.manipulation_url
         LOGGER.info(
@@ -532,6 +523,8 @@ class SubagentClient:
                     timeout=self.settings.timeouts.pose_seconds,
                 )
                 pose_log_dir = "interfaces/manipulation_%s_pose" % kind
+                if log_suffix:
+                    pose_log_dir += "_" + re.sub(r"[^A-Za-z0-9_.-]+", "_", log_suffix)
                 _save_log_json(
                     f"{pose_log_dir}/request.json",
                     {
@@ -791,42 +784,63 @@ class PickPlaceOrchestrator:
                 _append_log_event(
                     "定位",
                     "succeeded",
-                    bbox=place_located.bbox,
-                    has_mask=True,
+                    bboxes=place_located.bbox,
+                    mask_count=len(place_located.mask),
+                    direction=place_located.direction,
                     image_path=place_located.image_path,
-                    current_image_path=(
-                        place_located.current_image_path or place_located.image_path
-                    ),
-                    current_image_source=(
-                        "current_image_path"
-                        if place_located.current_image_path is not None
-                        else "image_path_fallback"
-                    ),
+                    current_image_path=place_located.current_image_path,
                     level=place_located.level,
-                    rotate_matrix=place_located.rotate_matrix,
                 )
-                step = "参考输入准备"
-                _append_log_event("参考输入准备", "started", camera=camera)
-                frame = await self.frames.prepare_reference(
+                step = "当前参照输入准备"
+                _append_log_event("当前参照输入准备", "started", camera=camera)
+                frames = await self.frames.prepare_place_references(
                     place_located, camera, operation_key
                 )
-                _append_log_event("参考输入准备", "succeeded", camera=camera)
-                step = "位姿估计"
-                _append_log_event("位姿估计", "started", frame="reference")
-                reference_pose = await self.subagents.estimate_pose(request, kind, frame)
                 _append_log_event(
-                    "位姿估计", "succeeded", pose=reference_pose.pose, frame="reference"
-                )
-                step = "位姿转换"
-                _append_log_event("位姿转换", "started")
-                pose = transfer_reference_pose(
-                    reference_pose, place_located.rotate_matrix
-                )
-                _append_log_event(
-                    "位姿转换",
+                    "当前参照输入准备",
                     "succeeded",
-                    reference_pose=reference_pose.pose,
-                    rotate_matrix=place_located.rotate_matrix,
+                    camera=camera,
+                    reference_count=len(frames),
+                )
+                step = "参照物位姿估计"
+                reference_poses: list[PoseResponse] = []
+                for index, frame in enumerate(frames, start=1):
+                    _append_log_event(
+                        "参照物位姿估计",
+                        "started",
+                        reference_index=index,
+                        reference_count=len(frames),
+                    )
+                    reference_pose = await self.subagents.estimate_pose(
+                        request,
+                        kind,
+                        frame,
+                        log_suffix=f"reference_{index:02d}",
+                    )
+                    reference_poses.append(reference_pose)
+                    _append_log_event(
+                        "参照物位姿估计",
+                        "succeeded",
+                        reference_index=index,
+                        reference_count=len(frames),
+                        pose=reference_pose.pose,
+                    )
+                step = "放置位姿合成"
+                _append_log_event(
+                    "放置位姿合成",
+                    "started",
+                    direction=place_located.direction,
+                    reference_poses=[item.pose for item in reference_poses],
+                )
+                pose = synthesize_place_pose(
+                    reference_poses,
+                    place_located.direction,
+                )
+                _append_log_event(
+                    "放置位姿合成",
+                    "succeeded",
+                    direction=place_located.direction,
+                    reference_poses=[item.pose for item in reference_poses],
                     current_pose=pose.pose,
                 )
                 step = "放置预备位姿"
@@ -901,7 +915,14 @@ class PickPlaceOrchestrator:
             )
             raise
         finally:
-            if "frame" in locals() and frame.cleanup_path:
+            if "frames" in locals() and frames:
+                cleanup_path = next(
+                    (item.cleanup_path for item in frames if item.cleanup_path),
+                    None,
+                )
+                if cleanup_path:
+                    _remove_directory(Path(cleanup_path))
+            elif "frame" in locals() and frame.cleanup_path:
                 _remove_directory(Path(frame.cleanup_path))
             _ACTIVE_LOG_DIR.reset(log_token)
 

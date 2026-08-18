@@ -46,9 +46,11 @@ async def test_place_start_uses_place_service_and_exposes_stream(monkeypatch, tm
     web_app.TASKS.pop(task_id, None)
 
 
-def test_place_visual_uses_current_image_and_transformed_pose(tmp_path: Path) -> None:
+def test_place_visual_uses_current_image_multiple_references_and_synthesized_pose(
+    tmp_path: Path,
+) -> None:
     locate_dir = tmp_path / "interfaces" / "perception_place_locate"
-    pose_dir = tmp_path / "interfaces" / "manipulation_place_pose"
+    pose_dir = tmp_path / "interfaces" / "manipulation_place_pose_reference_01"
     current_dir = tmp_path / "current"
     locate_dir.mkdir(parents=True)
     pose_dir.mkdir(parents=True)
@@ -63,9 +65,11 @@ def test_place_visual_uses_current_image_and_transformed_pose(tmp_path: Path) ->
             {
                 "status_code": 200,
                 "body": {
-                    "product_name": "可口可乐罐装",
-                    "bbox": [100, 200, 300, 400],
-                    "mask": "cGxhY2UtbWFzaw==",
+                    "name": "可口可乐罐装",
+                    "bbox": [[100, 200, 300, 400], [400, 200, 600, 400]],
+                    "mask": ["cGxhY2UtbWFzay0x", "cGxhY2UtbWFzay0y"],
+                    "direction": "both",
+                    "current_image_path": "/place/run/current_rgb.jpg",
                 },
             }
         ),
@@ -88,9 +92,9 @@ def test_place_visual_uses_current_image_and_transformed_pose(tmp_path: Path) ->
     (tmp_path / "events.jsonl").write_text(
         json.dumps(
             {
-                "event": "位姿转换",
+                "event": "放置位姿合成",
                 "status": "succeeded",
-                "reference_pose": [1, 2, 3, 4, 5, 6],
+                "reference_poses": [[1, 2, 3, 4, 5, 6], [2, 3, 4, 5, 6, 7]],
                 "current_pose": [0, 0, 1000, 0, 0, 0],
             },
             ensure_ascii=False,
@@ -102,8 +106,13 @@ def test_place_visual_uses_current_image_and_transformed_pose(tmp_path: Path) ->
     visual = web_app._operation_visual(tmp_path)
 
     assert visual["available"] is True
-    assert visual["bbox"] is None
-    assert visual["mask_data"] is None
+    assert visual["bbox"] == [100, 200, 300, 400]
+    assert visual["bboxes"] == [[100, 200, 300, 400], [400, 200, 600, 400]]
+    assert visual["mask_data"] == "data:image/png;base64,cGxhY2UtbWFzay0x"
+    assert visual["mask_data_list"] == [
+        "data:image/png;base64,cGxhY2UtbWFzay0x",
+        "data:image/png;base64,cGxhY2UtbWFzay0y",
+    ]
     assert visual["pose"] == [0, 0, 1000, 0, 0, 0]
     assert visual["frame"] == "camera"
     assert visual["image_data"] == "data:image/jpeg;base64,Y3VycmVudC1yZ2I="

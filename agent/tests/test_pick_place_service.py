@@ -32,7 +32,7 @@ from pick_place_service.service import (
     PickPlaceOrchestrator,
     SubagentClient,
 )
-from pick_place_service.pose_transform import transfer_reference_pose
+from pick_place_service.place_pose import synthesize_place_pose
 
 
 PICK_CAMERAS = {"left": "left_wrist", "right": "right_wrist"}
@@ -44,12 +44,9 @@ class FakeSubagents:
         self.fail_execute = False
         self.executed_poses: list[list[float]] = []
         self.estimated_pose = [1, 2, 3, 4, 5, 6]
-        self.place_matrix = [
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1],
-        ]
+        self.estimated_poses: list[list[float]] = []
+        self.place_direction = "up"
+        self.pose_log_suffixes: list[str | None] = []
 
     async def locate(self, request: PickPlaceRequest, kind: str) -> LocateResponse:
         self.calls.append((kind, "locate"))
@@ -57,22 +54,30 @@ class FakeSubagents:
 
     async def locate_place(self, request: PickPlaceRequest) -> PlaceLocateResponse:
         self.calls.append(("place", "locate"))
+        reference_count = 1 if self.place_direction == "up" else 2
         return PlaceLocateResponse(
-            product_name=request.product_name,
-            bbox=[0, 0, 2, 2],
-            mask="bWFzaw==",
+            name=request.product_name,
+            bbox=[[index * 2, 0, index * 2 + 2, 2] for index in range(reference_count)],
+            mask=["bWFzaw=="] * reference_count,
+            direction=self.place_direction,
             image_path="/task0/rgb.jpg",
             current_image_path="/current/rgb.jpg",
-            rotate_matrix=self.place_matrix,
             level="L2",
         )
 
     async def estimate_pose(
-        self, request: PickPlaceRequest, kind: str, frame: FrameBundle
+        self,
+        request: PickPlaceRequest,
+        kind: str,
+        frame: FrameBundle,
+        *,
+        log_suffix: str | None = None,
     ) -> PoseResponse:
         self.calls.append((kind, "pose"))
+        self.pose_log_suffixes.append(log_suffix)
         assert frame.mask == "mask.pgm"
-        return PoseResponse(pose=self.estimated_pose)
+        pose = self.estimated_poses.pop(0) if self.estimated_poses else self.estimated_pose
+        return PoseResponse(pose=pose)
 
     async def execute(
         self,
@@ -108,14 +113,17 @@ class FakeFrames:
         self.cameras.append(camera)
         return FrameBundle(rgb="rgb", depth="depth", camera="camera", mask="mask.pgm")
 
-    async def prepare_reference(
+    async def prepare_place_references(
         self,
         located: PlaceLocateResponse,
         camera: str,
         operation: str,
-    ) -> FrameBundle:
+    ) -> list[FrameBundle]:
         self.cameras.append(camera)
-        return FrameBundle(rgb="rgb", depth="depth", camera="camera", mask="mask.pgm")
+        return [
+            FrameBundle(rgb="rgb", depth="depth", camera="camera", mask="mask.pgm")
+            for _ in located.mask
+        ]
 
 
 def make_app(fake: FakeSubagents):
@@ -461,15 +469,9 @@ async def test_place_maps_internal_sequence_and_rejects_key_conflict() -> None:
 
 
 @pytest.mark.asyncio
-async def test_place_transforms_reference_pose_before_prepare_and_release() -> None:
+async def test_place_uses_up_reference_pose_before_prepare_and_release() -> None:
     fake = FakeSubagents()
     fake.estimated_pose = [10, 20, 30, 0, 0, 0]
-    fake.place_matrix = [
-        [1, 0, 0, 25],
-        [0, 1, 0, -28],
-        [0, 0, 1, 5],
-        [0, 0, 0, 1],
-    ]
     settings = PickPlaceSettings(
         perception_url="http://perception",
         manipulation_url="http://manipulation",
@@ -496,7 +498,47 @@ async def test_place_transforms_reference_pose_before_prepare_and_release() -> N
         ("place", "prepare"),
         ("place", "execute"),
     ]
-    assert fake.executed_poses == [[35.0, -8.0, 35.0, 0.0, 0.0, 0.0]]
+    assert fake.executed_poses == [[10.0, 20.0, 30.0, 0.0, 0.0, 0.0]]
+    assert fake.pose_log_suffixes == ["reference_01"]
+
+
+@pytest.mark.asyncio
+async def test_place_estimates_both_references_before_synthesizing_and_releasing() -> None:
+    fake = FakeSubagents()
+    fake.place_direction = "both"
+    fake.estimated_poses = [
+        [10, 20, 30, 0, 0, 0],
+        [30, 40, 50, 0, 0, math.pi / 2],
+    ]
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://manipulation",
+        camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
+        calibration_file="camera.json",
+    )
+    request = PickPlaceRequest(
+        task_type="MISPLACED",
+        product_name="矿泉水",
+        hand="left",
+        location_id="H1_F_L_INSPECT",
+        pose_type="SHELF_VIEW_UPPER",
+    )
+
+    result = await PickPlaceOrchestrator(settings, fake, FakeFrames()).run(
+        request, "place", "both-place"
+    )
+
+    assert result.status == "SUCCEEDED"
+    assert fake.calls == [
+        ("place", "locate"),
+        ("place", "pose"),
+        ("place", "pose"),
+        ("place", "prepare"),
+        ("place", "execute"),
+    ]
+    assert fake.pose_log_suffixes == ["reference_01", "reference_02"]
+    assert fake.executed_poses == [pytest.approx([20, 30, 40, 0, 0, math.pi / 4])]
 
 
 @pytest.mark.asyncio
@@ -765,13 +807,13 @@ async def test_camera_provider_extracts_raw_uint16_depth_multipart(tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_camera_provider_prepares_reference_and_falls_back_to_image_path(
+async def test_camera_provider_prepares_current_rgbd_and_multiple_reference_masks(
     tmp_path: Path,
 ) -> None:
-    source_dir = tmp_path / "task0" / "H1_F_L_INSPECT_UPPER"
-    source_dir.mkdir(parents=True)
-    source_rgb = source_dir / "rgb.jpg"
-    source_rgb.write_bytes(
+    current_dir = tmp_path / "place" / "run"
+    current_dir.mkdir(parents=True)
+    current_rgb = current_dir / "current_rgb.jpg"
+    current_rgb.write_bytes(
         b"\xff\xd8\xff\xc0\x00\x11\x08\x00\x02\x00\x03\x03\x01\x11\x00\xff\xd9"
     )
     calibration = tmp_path / "head.json"
@@ -779,19 +821,21 @@ async def test_camera_provider_prepares_reference_and_falls_back_to_image_path(
         json.dumps({"cam_K": [100, 0, 1, 0, 100, 1, 0, 0, 1]}),
         encoding="utf-8",
     )
-    np.save(source_dir / "depth_mm.npy", np.asarray([[1, 2, 3], [4, 5, 6]], dtype=np.uint16))
-    mask = service_module._make_png(3, 2, b"\x00\xff\xff\xff" * 2)
+    np.save(
+        current_dir / "current_depth_mm.npy",
+        np.asarray([[1, 2, 3], [4, 5, 6]], dtype=np.uint16),
+    )
+    masks = [
+        service_module._make_png(3, 2, pixels)
+        for pixels in (b"\x00\xff\xff\xff" * 2, b"\xff\x00\xff\xff" * 2)
+    ]
     located = PlaceLocateResponse(
-        product_name="矿泉水",
-        bbox=[0, 0, 3, 2],
-        mask=base64.b64encode(mask).decode("ascii"),
-        image_path=str(source_rgb),
-        rotate_matrix=[
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1],
-        ],
+        name="矿泉水",
+        bbox=[[0, 0, 2, 2], [1, 0, 3, 2]],
+        mask=[base64.b64encode(mask).decode("ascii") for mask in masks],
+        direction="both",
+        image_path="/task0/rgb.jpg",
+        current_image_path=str(current_rgb),
         level="L1",
     )
     settings = PickPlaceSettings(
@@ -807,25 +851,32 @@ async def test_camera_provider_prepares_reference_and_falls_back_to_image_path(
     log_token = service_module._ACTIVE_LOG_DIR.set(operation_log)
     try:
         async with httpx.AsyncClient() as client:
-            frame = await CameraFrameProvider(settings, client).prepare_reference(
+            frames = await CameraFrameProvider(settings, client).prepare_place_references(
                 located, "head", "reference"
             )
     finally:
         service_module._ACTIVE_LOG_DIR.reset(log_token)
 
-    assert Path(frame.rgb).read_bytes() == source_rgb.read_bytes()
-    depth = Path(frame.depth).read_bytes()
+    assert len(frames) == 2
+    assert all(Path(frame.rgb).read_bytes() == current_rgb.read_bytes() for frame in frames)
+    depth = Path(frames[0].depth).read_bytes()
     assert depth.startswith(b"\x89PNG")
     assert int.from_bytes(depth[16:20], "big") == 3
     assert int.from_bytes(depth[20:24], "big") == 2
     assert depth[24:26] == bytes([16, 0])
-    assert Path(frame.mask).read_bytes() == mask
-    assert (operation_log / "current" / "rgb.jpg").read_bytes() == source_rgb.read_bytes()
+    assert [Path(frame.mask).read_bytes() for frame in frames] == masks
+    assert frames[0].cleanup_path is not None
+    assert frames[1].cleanup_path is None
+    assert (operation_log / "current" / "rgb.jpg").read_bytes() == current_rgb.read_bytes()
+    assert (operation_log / "current" / "mask_01.png").read_bytes() == masks[0]
+    assert (operation_log / "current" / "mask_02.png").read_bytes() == masks[1]
     current_input = json.loads((operation_log / "current" / "input.json").read_text())
     assert current_input["image_size"] == [3, 2]
-    assert current_input["source"] == "image_path_fallback"
+    assert current_input["source_rgb"] == str(current_rgb)
+    assert current_input["source_depth"] == str(current_dir / "current_depth_mm.npy")
+    assert current_input["direction"] == "both"
     assert (operation_log / "current" / "head.json").is_file()
-    cleanup = Path(frame.cleanup_path or "")
+    cleanup = Path(frames[0].cleanup_path or "")
     for child in cleanup.iterdir():
         child.unlink()
     cleanup.rmdir()
@@ -1082,13 +1133,6 @@ async def test_subagent_place_locate_sends_exact_context_and_parses_new_fields()
         location_id="H1_F_L_INSPECT",
         pose_type="SHELF_VIEW_UPPER",
     )
-    rotate_matrix = [
-        [1, 0, 0, 25],
-        [0, 1, 0, -28],
-        [0, 0, 1, 5],
-        [0, 0, 0, 1],
-    ]
-
     async def handler(http_request: httpx.Request) -> httpx.Response:
         assert http_request.url.path == "/perception/place/locate"
         assert json.loads(http_request.content) == {
@@ -1100,11 +1144,12 @@ async def test_subagent_place_locate_sends_exact_context_and_parses_new_fields()
         return httpx.Response(
             200,
             json={
-                "product_name": "商品名",
-                "bbox": [10, 20, 30, 40],
-                "mask": "cG5n",
+                "name": "商品名",
+                "bbox": [[10, 20, 30, 40], [50, 20, 70, 40]],
+                "mask": ["cG5nLTE=", "cG5nLTI="],
+                "direction": "both",
                 "image_path": "/output/task0/reference/rgb.jpg",
-                "rotate_matrix": rotate_matrix,
+                "current_image_path": "/output/place/run/current_rgb.jpg",
                 "level": "L3",
             },
         )
@@ -1112,8 +1157,11 @@ async def test_subagent_place_locate_sends_exact_context_and_parses_new_fields()
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         result = await SubagentClient(_locate_settings(), client).locate_place(request)
 
-    assert result.rotate_matrix == rotate_matrix
-    assert result.current_image_path is None
+    assert result.name == "商品名"
+    assert result.direction == "both"
+    assert result.bbox == [[10, 20, 30, 40], [50, 20, 70, 40]]
+    assert result.mask == ["cG5nLTE=", "cG5nLTI="]
+    assert result.current_image_path == "/output/place/run/current_rgb.jpg"
     assert result.level == "L3"
 
 
@@ -1210,46 +1258,62 @@ async def test_subagent_locate_rejects_different_product_name() -> None:
             await SubagentClient(_locate_settings(), client).locate(request, "pick")
 
 
-def test_transfer_reference_pose_supports_identity_translation_and_rotation() -> None:
-    pose = PoseResponse(
-        pose=[10, 20, 30, 0, 0, 0],
-        frame="camera",
-        pose_unit="mm_rad",
-        rotation_order="zyx",
-    )
-    identity = [
-        [1, 0, 0, 0],
-        [0, 1, 0, 0],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1],
-    ]
-    translated = [row[:] for row in identity]
-    translated[0][3], translated[1][3], translated[2][3] = 25, -28, 5
-    rotated = [
-        [0, -1, 0, 0],
-        [1, 0, 0, 0],
-        [0, 0, 1, 0],
-        [0, 0, 0, 1],
+@pytest.mark.parametrize(
+    ("direction", "expected"),
+    [
+        ("both", [20, 30, 40]),
+        ("left", [50, 60, 70]),
+        ("right", [-10, 0, 10]),
+    ],
+)
+def test_synthesize_place_pose_uses_horizontal_reference_geometry(
+    direction: str, expected: list[float]
+) -> None:
+    references = [
+        PoseResponse(pose=[10, 20, 30, 0, 0, 0]),
+        PoseResponse(pose=[30, 40, 50, 0, 0, 0]),
     ]
 
-    assert transfer_reference_pose(pose, identity).pose == pytest.approx(pose.pose)
-    assert transfer_reference_pose(pose, translated).pose == pytest.approx(
-        [35, -8, 35, 0, 0, 0]
+    result = synthesize_place_pose(references, direction)  # type: ignore[arg-type]
+
+    assert result.pose == pytest.approx([*expected, 0, 0, 0])
+    assert (result.frame, result.pose_unit, result.rotation_order) == (
+        "camera",
+        "mm_rad",
+        "zyx",
     )
-    assert transfer_reference_pose(pose, rotated).pose == pytest.approx(
-        [-20, 10, 30, 0, 0, math.pi / 2]
+
+
+def test_synthesize_place_pose_uses_up_reference_directly() -> None:
+    pose = PoseResponse(pose=[10, 20, 30, 0.1, -0.2, 0.3])
+
+    assert synthesize_place_pose([pose], "up").pose == pytest.approx(pose.pose)
+
+
+def test_synthesize_place_pose_averages_reference_rotations() -> None:
+    references = [
+        PoseResponse(pose=[0, 0, 0, 0, 0, 0]),
+        PoseResponse(pose=[20, 0, 0, 0, 0, math.pi / 2]),
+    ]
+
+    assert synthesize_place_pose(references, "both").pose == pytest.approx(
+        [10, 0, 0, 0, 0, math.pi / 4]
     )
 
 
 @pytest.mark.parametrize(
-    "matrix",
+    ("poses", "direction", "message"),
     [
-        [[1, 0], [0, 1]],
-        [[1, 0, 0, 0], [0, 2, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
-        [[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
-        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 2]],
+        ([PoseResponse(pose=[0, 0, 0, 0, 0, 0])], "both", "requires 2"),
+        ([PoseResponse(pose=[0, 0, 0, 0, 0])], "up", "six finite"),
+        ([PoseResponse(pose=[0, 0, 0, 0, 0, float("nan")])], "up", "six finite"),
+        ([PoseResponse(pose=[0, 0, 0, 0, 0, 0], frame="base")], "up", "frame"),
+        ([PoseResponse(pose=[0, 0, 0, 0, 0, 0], pose_unit="m_rad")], "up", "unit"),
+        ([PoseResponse(pose=[0, 0, 0, 0, 0, 0], rotation_order="xyz")], "up", "order"),
     ],
 )
-def test_transfer_reference_pose_rejects_invalid_se3(matrix: list[list[float]]) -> None:
-    with pytest.raises(ServiceError, match="rotate_matrix"):
-        transfer_reference_pose(PoseResponse(pose=[0, 0, 0, 0, 0, 0]), matrix)
+def test_synthesize_place_pose_rejects_invalid_references(
+    poses: list[PoseResponse], direction: str, message: str
+) -> None:
+    with pytest.raises(ServiceError, match=message):
+        synthesize_place_pose(poses, direction)  # type: ignore[arg-type]
