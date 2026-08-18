@@ -195,9 +195,9 @@ class PlaceLocateRequest(BaseModel):
     location_id: str = Field(min_length=1)
     pose_type: PoseType
     reference_item_area: float | None = Field(default=None, gt=0)
-    name: str = Field(min_length=1)
+    product_name: str = Field(min_length=1)
 
-    @field_validator("name", "location_id")
+    @field_validator("product_name", "location_id")
     @classmethod
     def normalize_nonempty_text(cls, value: str) -> str:
         normalized = value.strip()
@@ -576,11 +576,7 @@ def create_place_locate_artifact_directory(
     root = Path(artifact_root) if artifact_root is not None else DEFAULT_ARTIFACT_ROOT
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S_%fZ")
     safe_location = re.sub(r"[^A-Za-z0-9_.-]+", "_", request.location_id.strip())
-    product_name = (
-        request.product_name
-        if isinstance(request, PlaceLocateDebugRequest)
-        else request.name
-    )
+    product_name = request.product_name
     safe_product = re.sub(r"[^A-Za-z0-9_.-]+", "_", product_name.strip())
     directory = root / (
         f"{timestamp}_{safe_location}_{request.task_type}_{safe_product}_"
@@ -1540,9 +1536,9 @@ def locate_shortage_place_from_rgbd(
             baseline_depth_mm=initial_scan.depth_mm,
             current_rgb=current_rgb,
             current_depth_mm=current_depth_mm,
-            product_name_filter=request.name,
+            product_name_filter=request.product_name,
         )
-        selection = select_place_references(analysis, request.name)
+        selection = select_place_references(analysis, request.product_name)
     except SamShortageError as error:
         message = str(error)
         status_code = 502 if message.startswith("SAM3 ") else 422
@@ -1573,7 +1569,7 @@ def locate_shortage_place_from_rgbd(
     )
     current_image_path = (artifact_directory / "current_rgb.jpg").resolve()
     response = PlaceLocateResponse(
-        name=request.name,
+        name=request.product_name,
         bbox=bboxes,
         mask=[encode_png_base64(mask) for mask in full_masks],
         direction=selection.direction,
@@ -1618,7 +1614,7 @@ def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
                 )
             debug_request = PlaceLocateDebugRequest(
                 task_type=request.task_type,
-                product_name=request.name,
+                product_name=request.product_name,
                 location_id=request.location_id,
                 pose_type=request.pose_type,
                 current_image_name=current.rgb_path.name,

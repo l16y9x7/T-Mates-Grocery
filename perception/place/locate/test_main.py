@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import sys
 import tempfile
 import unittest
 from contextlib import nullcontext
@@ -352,7 +353,7 @@ class PlaceLocateApiTest(unittest.TestCase):
             captured = SimpleNamespace(rgb_path=rgb_path, depth_path=depth_path)
             public_request = api.PlaceLocateRequest(
                 task_type="SHORTAGE",
-                name="测试商品",
+                product_name="测试商品",
                 location_id="H1_F_L_INSPECT",
                 pose_type="SHELF_VIEW_UPPER",
             )
@@ -427,11 +428,52 @@ class PlaceLocateApiTest(unittest.TestCase):
         self.assertEqual(direction, "up")
         self.assertEqual(selected, [below])
 
+    def test_same_name_missing_slots_prefer_largest_bbox(self) -> None:
+        pipeline = sys.modules[api.select_place_references.__module__]
+        small_slot = SimpleNamespace(
+            slot_index=1,
+            product_name="测试商品",
+            target_bbox_current_crop_xyxy=[30, 20, 50, 40],
+        )
+        large_slot = SimpleNamespace(
+            slot_index=2,
+            product_name="测试商品",
+            target_bbox_current_crop_xyxy=[80, 10, 150, 60],
+        )
+        comparison = SimpleNamespace(
+            level="L1",
+            group_index=1,
+            missing_slots=[small_slot, large_slot],
+            current=SimpleNamespace(row=SimpleNamespace()),
+        )
+        candidates = [
+            SimpleNamespace(front_selected=True, bbox_crop_xyxy=[0, 0, 20, 60]),
+            SimpleNamespace(front_selected=True, bbox_crop_xyxy=[160, 0, 180, 60]),
+        ]
+        analysis = SimpleNamespace(comparisons=[comparison])
+
+        with (
+            patch.object(
+                pipeline,
+                "_level_reference_candidates",
+                return_value=candidates,
+            ),
+            patch.object(
+                pipeline,
+                "uses_upper_confidence_pick",
+                return_value=False,
+            ),
+        ):
+            selection = api.select_place_references(analysis, " 测试商品 ")
+
+        self.assertIs(selection.target_slot, large_slot)
+        self.assertEqual(selection.direction, "both")
+
     def test_public_request_matches_inspect_and_captures_current_rgbd(self) -> None:
         required = set(api.PlaceLocateRequest.model_json_schema()["required"])
         self.assertEqual(
             required,
-            {"task_type", "location_id", "pose_type", "name"},
+            {"task_type", "location_id", "pose_type", "product_name"},
         )
         properties = api.PlaceLocateRequest.model_json_schema()["properties"]
         self.assertIn("reference_item_area", properties)
@@ -478,7 +520,7 @@ class PlaceLocateApiTest(unittest.TestCase):
     def test_request_rejects_unknown_fields(self) -> None:
         payload = api.PlaceLocateRequest(
             task_type="SHORTAGE",
-            name="测试商品",
+            product_name="测试商品",
             location_id="H1_F_L_INSPECT",
             pose_type="SHELF_VIEW_UPPER",
         ).model_dump()

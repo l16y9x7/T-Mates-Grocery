@@ -911,60 +911,79 @@ def select_place_references(
 ) -> PlaceReferenceSelection:
     normalized_name = product_name.strip()
     failures: list[str] = []
-    for comparison in analysis.comparisons:
-        for slot in comparison.missing_slots:
-            if slot.product_name != normalized_name:
-                continue
-            target = slot.target_bbox_current_crop_xyxy
-            reference_candidates = _level_reference_candidates(
-                analysis,
-                comparison,
-                slot,
+    matching_slots = [
+        (comparison, slot)
+        for comparison in analysis.comparisons
+        for slot in comparison.missing_slots
+        if isinstance(slot.product_name, str)
+        and slot.product_name.strip() == normalized_name
+    ]
+    matching_slots.sort(
+        key=lambda item: (
+            max(
+                0.0,
+                float(item[1].target_bbox_current_crop_xyxy[2])
+                - float(item[1].target_bbox_current_crop_xyxy[0]),
             )
-            if uses_upper_confidence_pick(normalized_name, "SORTING"):
-                below = _select_below(
-                    (
-                        instance
-                        for instance in reference_candidates
-                        if instance.duplicate_of is None and instance.depth_reliable
-                    ),
-                    target,
-                )
-                if below is not None:
-                    return PlaceReferenceSelection(
-                        normalized_name,
-                        comparison.level,
-                        "up",
-                        slot,
-                        [below],
-                        comparison.current.row,
-                    )
-            horizontal = _select_horizontal(
-                sorted(
-                    (
-                        instance
-                        for instance in reference_candidates
-                        if instance.front_selected
-                    ),
-                    key=lambda instance: _bbox_center(
-                        instance.bbox_crop_xyxy
-                    )[0],
+            * max(
+                0.0,
+                float(item[1].target_bbox_current_crop_xyxy[3])
+                - float(item[1].target_bbox_current_crop_xyxy[1]),
+            )
+        ),
+        reverse=True,
+    )
+    for comparison, slot in matching_slots:
+        target = slot.target_bbox_current_crop_xyxy
+        reference_candidates = _level_reference_candidates(
+            analysis,
+            comparison,
+            slot,
+        )
+        if uses_upper_confidence_pick(normalized_name, "SORTING"):
+            below = _select_below(
+                (
+                    instance
+                    for instance in reference_candidates
+                    if instance.duplicate_of is None and instance.depth_reliable
                 ),
                 target,
             )
-            if horizontal is not None:
-                references, direction = horizontal
+            if below is not None:
                 return PlaceReferenceSelection(
                     normalized_name,
                     comparison.level,
-                    direction,
+                    "up",
                     slot,
-                    references,
+                    [below],
                     comparison.current.row,
                 )
-            failures.append(
-                f"{comparison.level}/group_{comparison.group_index}/slot_{slot.slot_index}"
+        horizontal = _select_horizontal(
+            sorted(
+                (
+                    instance
+                    for instance in reference_candidates
+                    if instance.front_selected
+                ),
+                key=lambda instance: _bbox_center(
+                    instance.bbox_crop_xyxy
+                )[0],
+            ),
+            target,
+        )
+        if horizontal is not None:
+            references, direction = horizontal
+            return PlaceReferenceSelection(
+                normalized_name,
+                comparison.level,
+                direction,
+                slot,
+                references,
+                comparison.current.row,
             )
+        failures.append(
+            f"{comparison.level}/group_{comparison.group_index}/slot_{slot.slot_index}"
+        )
     if failures:
         raise SamShortageError(
             "缺失槽位周围没有足够参照物: " + ", ".join(failures)

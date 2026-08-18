@@ -3581,6 +3581,7 @@ def call_sam3_image_path(
     prompt: str,
     *,
     threshold: float = 0.5,
+    mask_threshold: float = 0.5,
 ) -> dict:
     media_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
     try:
@@ -3591,7 +3592,7 @@ def call_sam3_image_path(
                 data={
                     "prompt": prompt,
                     "threshold": threshold,
-                    "mask_threshold": 0.5,
+                    "mask_threshold": mask_threshold,
                 },
                 timeout=120,
             )

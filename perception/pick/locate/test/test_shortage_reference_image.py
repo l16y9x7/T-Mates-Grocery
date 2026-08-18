@@ -8,6 +8,18 @@ from pick.locate import main as locate_main
 
 
 class ShortageReferenceImageTest(unittest.TestCase):
+    def test_non_shortage_qwen_request_keeps_original_single_image_shape(self) -> None:
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {
+            "choices": [{"message": {"content": '{"name":"商品","bbox":[1,2,3,4]}'}}]
+        }
+        with patch.object(locate_main.requests, "post", return_value=response) as post:
+            locate_main.call_qwen3("定位商品", b"shelf-image")
+
+        content = post.call_args.kwargs["json"]["messages"][0]["content"]
+        self.assertEqual([item["type"] for item in content], ["text", "image_url"])
+
     def test_qwen_request_labels_reference_and_scene_images(self) -> None:
         response = Mock()
         response.raise_for_status.return_value = None

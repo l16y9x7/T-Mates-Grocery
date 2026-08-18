@@ -9,14 +9,14 @@ baseline/current SAM3 前排槽位对比，不再使用旧版 RGB-D 配准结果
 
 `/perception/inspect` 负责判断异常货架与商品名称；本接口固定从
 `agent/output/task0` 读取正常场景 RGB-D，并像 `/perception/inspect` 一样从头部相机
-获取当前场景 RGB-D。Task0 用于确定目标槽位；输入 `name` 只执行目标所在货架层，
+获取当前场景 RGB-D。Task0 用于确定目标槽位；输入 `product_name` 只执行目标所在货架层，
 但该层全部 SAM3 配置组都会参与邻居选择。最终返回的参照物 bbox/mask 均位于当前
 头部相机图像坐标系。
 
 ```json
 {
   "task_type": "SHORTAGE",
-  "name": "可口可乐罐装",
+  "product_name": "可口可乐罐装",
   "location_id": "H1_F_L_INSPECT",
   "pose_type": "SHELF_VIEW_UPPER"
 }
@@ -164,7 +164,8 @@ agent/output/task0/<inspection_target_id>_<UPPER|LOWER>/
 2. 两张图分别执行 row detection，并按 `shortage_mapping_config.json` 裁出目标层。
 3. 对目标层的所有配置组分别运行 SAM3、稳健深度前排筛选和预期列数约束。
 4. baseline/current 按从左到右的单调顺序比较槽位，使用 40 mm 深度阈值确认缺失。
-5. 根据输入 `name` 定位缺失槽位；水平商品选左右邻居或同侧两个，上下商品优先选
+5. 根据输入 `product_name` 定位缺失槽位；存在多个同名缺失槽位时优先选择 bbox
+   面积最大的槽位；水平商品选左右邻居或同侧两个，上下商品优先选
    正下方支撑物。
 6. 返回当前图 bbox/mask、方向、层号及持久化当前 RGB 路径。
 
