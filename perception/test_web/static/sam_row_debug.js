@@ -333,6 +333,24 @@ function renderSelection() {
   setImage("#rowDetectionImage", record.row_detection_url);
   setImage("#rowRgbImage", row.rgb_url);
   setImage("#rowDepthImage", row.depth_preview_url);
+  const baselineShelf = row.shelf_inputs.baseline;
+  const currentShelf = row.shelf_inputs.current;
+  setImage("#baselineShelfFiltered", baselineShelf.shelf_filtered_url);
+  setImage("#currentShelfFiltered", currentShelf.shelf_filtered_url);
+  setImage("#baselineShelfMask", baselineShelf.shelf_mask_url);
+  setImage("#currentShelfMask", currentShelf.shelf_mask_url);
+  setImage("#baselineRetainedMask", baselineShelf.retained_mask_url);
+  setImage("#currentRetainedMask", currentShelf.retained_mask_url);
+  const baselineWidth = baselineShelf.selected_component?.width_ratio;
+  const currentWidth = currentShelf.selected_component?.width_ratio;
+  const shelfSummary = (item, width) => item.fallback_to_full_image
+    ? "完整图回退"
+    : `覆盖 ${(100 * width).toFixed(1)}%`;
+  setStatus(
+    "#shelfInputStatus",
+    `Baseline ${shelfSummary(baselineShelf, baselineWidth)} · Current ${shelfSummary(currentShelf, currentWidth)}`,
+    (baselineShelf.fallback_to_full_image || currentShelf.fallback_to_full_image) ? "error" : "success",
+  );
   document.querySelector("#rowRgbTitle").textContent = `ROW ${row.row_index} · ${row.level || "UNKNOWN"}`;
   document.querySelector("#rowBBox").textContent = `原图 bbox [${(row.crop_bbox_xywh || []).join(", ")}]`;
   document.querySelector("#rowDepthSummary").textContent =

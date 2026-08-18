@@ -3,7 +3,8 @@
 The same function is used for baseline and current row crops.  Narrow
 components at (or close to) the horizontal image edges are removed first,
 the remaining components are merged, and the result is accepted when a
-connected component spans more than 60 percent of the row width.  Pixels
+connected component spans more than 60 percent of the row width and the
+derived retained ROI covers at least 60 percent of the row image.  Pixels
 outside the retained main-shelf region are set to pure black.
 """
 
@@ -31,6 +32,7 @@ DEFAULT_MAX_EDGE_BOTTOM_WIDTH_RATIO = 0.30
 DEFAULT_EDGE_TOUCH_TOLERANCE_RATIO = 0.02
 DEFAULT_EDGE_TOUCH_MIN_TOLERANCE_PX = 10
 DEFAULT_MIN_SPANNING_WIDTH_RATIO = 0.60
+DEFAULT_MIN_RETAINED_AREA_RATIO = 0.60
 DEFAULT_RETAINED_EXPANSION_PX = 10
 
 ShelfSam3Caller = Callable[[np.ndarray, str, float, float], dict[str, Any]]
@@ -190,11 +192,18 @@ def component_candidates(
                 continue
             component = labels == component_index
             right = x + component_width
-            bottom_y = int(np.flatnonzero(np.any(component, axis=1)).max())
-            bottom_x = np.flatnonzero(component[bottom_y, :])
+            # The mask's lower edge is the per-column bottom envelope, not the
+            # single globally lowest scanline.  A wide shelf mask can contain
+            # one or two narrow downward protrusions; measuring only their last
+            # row incorrectly classifies the whole shelf as an edge sliver.
+            bottom_x = np.flatnonzero(np.any(component, axis=0))
+            bottom_y_by_x = np.asarray(
+                [int(np.flatnonzero(component[:, column]).max()) for column in bottom_x],
+                dtype=np.int32,
+            )
             bottom_left = int(bottom_x.min())
             bottom_right = int(bottom_x.max()) + 1
-            bottom_width = bottom_right - bottom_left
+            bottom_width = int(bottom_x.size)
             bottom_width_ratio = float(bottom_width) / max(1.0, float(width))
             left_gap = max(0, x)
             right_gap = max(0, width - right)
@@ -216,7 +225,14 @@ def component_candidates(
                     "area_px": area,
                     "bbox_xywh": [x, y, component_width, component_height],
                     "width_ratio": round(component_width / float(width), 6),
-                    "bottom_edge_y": bottom_y,
+                    "bottom_edge_y_range": [
+                        int(bottom_y_by_x.min()),
+                        int(bottom_y_by_x.max()),
+                    ],
+                    "bottom_edge_y_median": round(
+                        float(np.median(bottom_y_by_x)),
+                        3,
+                    ),
                     "bottom_edge_x_range": [bottom_left, bottom_right],
                     "bottom_edge_width_px": bottom_width,
                     "bottom_edge_width_ratio": round(bottom_width_ratio, 6),
@@ -279,6 +295,7 @@ def apply_shelf_mask(
     min_spanning_component_width_ratio: float = (
         DEFAULT_MIN_SPANNING_WIDTH_RATIO
     ),
+    min_retained_area_ratio: float = DEFAULT_MIN_RETAINED_AREA_RATIO,
     expansion_px: int = DEFAULT_RETAINED_EXPANSION_PX,
     sam3_caller: ShelfSam3Caller = call_sam3_shelf,
 ) -> ShelfMaskResult:
@@ -309,6 +326,14 @@ def apply_shelf_mask(
                 merged,
                 min_width_ratio=min_spanning_component_width_ratio,
             )
+            candidate_retained = build_retained_roi_mask(
+                merged,
+                expansion_px=expansion_px,
+            )
+            retained_area_ratio = float(np.count_nonzero(candidate_retained)) / max(
+                1.0,
+                float(candidate_retained.size),
+            )
             attempts.append(
                 {
                     "threshold": float(threshold),
@@ -317,11 +342,18 @@ def apply_shelf_mask(
                     "removed_edge_sliver_count": len(candidates) - len(kept),
                     "kept_component_count": len(kept),
                     "spanning_component_count": len(spanning),
+                    "retained_area_ratio": round(retained_area_ratio, 6),
+                    "retained_area_sufficient": (
+                        retained_area_ratio >= min_retained_area_ratio
+                    ),
                 }
             )
             final_candidates = candidates
-            if spanning:
-                selected = spanning[0]
+            if spanning and retained_area_ratio >= min_retained_area_ratio:
+                selected = {
+                    **spanning[0],
+                    "retained_area_ratio": round(retained_area_ratio, 6),
+                }
                 final_kept = kept
                 final_mask = merged
                 break
@@ -368,6 +400,7 @@ def apply_shelf_mask(
             "min_spanning_width_ratio_exclusive": (
                 min_spanning_component_width_ratio
             ),
+            "min_retained_area_ratio_inclusive": min_retained_area_ratio,
             "retained_expansion_px": expansion_px,
         },
     )

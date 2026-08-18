@@ -89,6 +89,7 @@ SHORTAGE_BATCH_SUMMARY_PATH = (
 )
 REAL_SHORTAGE_BATCH_ROOT = DATA_ROOT / "real_shortage_regression"
 REAL_SHORTAGE_SAM_ROWS_ROOT = DATA_ROOT / "real_shortage_sam_rows"
+REAL_SHORTAGE_SHELF_ROWS_ROOT = DATA_ROOT / "real_shortage_shelf_rows"
 REAL_SHORTAGE_FRONT_COMPARE_ROOT = DATA_ROOT / "real_shortage_front_compare"
 SAM_ROW_EXPORTER_PATH = INSPECT_ROOT / "export_sam_rows.py"
 SHORTAGE_MAPPING_CONFIG_PATH = INSPECT_ROOT / "shortage_mapping_config.json"
@@ -508,6 +509,85 @@ def sam_row_artifact_url(relative_path: str, version: int) -> str:
     )
 
 
+def shelf_row_artifact_url(relative_path: str, version: int) -> str:
+    normalized = relative_path.replace("\\", "/")
+    return (
+        f"/api/sam-row-debug/shelf-file/{quote(normalized, safe='/')}?v={version}"
+    )
+
+
+def resolve_shelf_row_result(
+    group: str,
+    record: str,
+    source: str,
+    row_index: int,
+    level: str,
+) -> tuple[Path, dict[str, Any]]:
+    resolve_sam_row_record(group, record)
+    normalized_source = source.strip().lower()
+    if normalized_source not in {"baseline", "current"}:
+        raise HTTPException(status_code=400, detail="source 必须是 baseline/current")
+    normalized_level = level.strip().upper()
+    if re.fullmatch(r"L[1-5]", normalized_level) is None:
+        raise HTTPException(status_code=400, detail="shelf row level 必须是 L1-L5")
+    directory = resolve_descendant(
+        REAL_SHORTAGE_SHELF_ROWS_ROOT,
+        (
+            f"{group}/{record}/{normalized_source}/"
+            f"row_{row_index:02d}_{normalized_level}"
+        ),
+    )
+    result_path = directory / "result.json"
+    if not result_path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "缺少 shelf 置黑输入；请先重新运行 "
+                "python inspect/batch_shelf_row_mask.py --overwrite"
+            ),
+        )
+    result = load_json_file(result_path, "shelf row mask result")
+    return directory, result
+
+
+def shelf_row_artifact_urls(
+    group: str,
+    record: str,
+    source: str,
+    row_index: int,
+    level: str,
+) -> dict[str, object]:
+    directory, result = resolve_shelf_row_result(
+        group,
+        record,
+        source,
+        row_index,
+        level,
+    )
+    artifacts = result.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise HTTPException(status_code=500, detail="shelf result 缺少 artifacts")
+    urls: dict[str, str] = {}
+    for name in ("shelf_mask", "retained_mask", "shelf_filtered"):
+        filename = artifacts.get(name)
+        if not isinstance(filename, str):
+            raise HTTPException(status_code=500, detail=f"shelf result 缺少 {name}")
+        artifact = resolve_descendant(directory, filename)
+        if not artifact.is_file():
+            raise HTTPException(status_code=404, detail=f"shelf artifact 不存在: {name}")
+        relative = artifact.relative_to(REAL_SHORTAGE_SHELF_ROWS_ROOT)
+        urls[f"{name}_url"] = shelf_row_artifact_url(
+            relative.as_posix(),
+            artifact.stat().st_mtime_ns,
+        )
+    return {
+        **urls,
+        "fallback_to_full_image": bool(result.get("fallback_to_full_image")),
+        "selected_component": result.get("selected_component"),
+        "selection_rule": result.get("selection_rule"),
+    }
+
+
 def load_shortage_mapping_config() -> dict[str, dict[str, list[dict[str, object]]]]:
     try:
         payload = json.loads(SHORTAGE_MAPPING_CONFIG_PATH.read_text(encoding="utf-8"))
@@ -657,6 +737,11 @@ def list_sam_row_debug_records() -> dict:
                     group_directory.name,
                     record_directory.name,
                 )
+                baseline_output_directory, baseline_metadata = ensure_sam_row_export(
+                    group_directory.name,
+                    record_directory.name,
+                    "baseline",
+                )
             except HTTPException as error:
                 errors.append(
                     {
@@ -667,6 +752,11 @@ def list_sam_row_debug_records() -> dict:
                 )
                 continue
             version = (output_directory / "rows.json").stat().st_mtime_ns
+            baseline_rows_by_level = {
+                str(item.get("level", "")).upper(): item
+                for item in baseline_metadata.get("rows", [])
+                if isinstance(item, dict) and isinstance(item.get("level"), str)
+            }
             rows = []
             for row in metadata.get("rows", []):
                 if not isinstance(row, dict):
@@ -681,6 +771,45 @@ def list_sam_row_debug_records() -> dict:
                     group_directory.name,
                     row.get("level"),
                 )
+                level = str(row.get("level", "")).upper()
+                baseline_row = baseline_rows_by_level.get(level)
+                if baseline_row is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"baseline 缺少对应货架层: {level}",
+                    )
+                baseline_row_index = int(baseline_row["row_index"])
+                row_copy["shelf_inputs"] = {
+                    "baseline": shelf_row_artifact_urls(
+                        group_directory.name,
+                        record_directory.name,
+                        "baseline",
+                        baseline_row_index,
+                        level,
+                    ),
+                    "current": shelf_row_artifact_urls(
+                        group_directory.name,
+                        record_directory.name,
+                        "current",
+                        row_index,
+                        level,
+                    ),
+                }
+                baseline_rgb_relative = baseline_row.get("rgb")
+                if isinstance(baseline_rgb_relative, str):
+                    baseline_row_rgb = (
+                        baseline_output_directory / baseline_rgb_relative
+                    )
+                    row_copy["shelf_inputs"]["baseline"]["original_url"] = (
+                        sam_row_artifact_url(
+                            (
+                                f"{group_directory.name}/"
+                                f"{record_directory.name}/baseline/"
+                                f"{baseline_rgb_relative}"
+                            ),
+                            baseline_row_rgb.stat().st_mtime_ns,
+                        )
+                    )
                 for key in ("rgb", "valid_depth_mask", "depth_preview"):
                     relative = row.get(key)
                     if isinstance(relative, str):
@@ -689,6 +818,9 @@ def list_sam_row_debug_records() -> dict:
                             f"{group_directory.name}/{record_directory.name}/{relative}",
                             artifact.stat().st_mtime_ns if artifact.is_file() else version,
                         )
+                row_copy["shelf_inputs"]["current"]["original_url"] = row_copy[
+                    "rgb_url"
+                ]
                 rows.append(row_copy)
             source_prefix = (
                 f"/api/sam-row-debug/source/"
@@ -749,6 +881,15 @@ def get_sam_row_file(relative_path: str) -> FileResponse:
     path = resolve_descendant(REAL_SHORTAGE_SAM_ROWS_ROOT, relative_path)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="SAM 行调试文件不存在")
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    return FileResponse(path, media_type=media_type)
+
+
+@app.get("/api/sam-row-debug/shelf-file/{relative_path:path}")
+def get_shelf_row_file(relative_path: str) -> FileResponse:
+    path = resolve_descendant(REAL_SHORTAGE_SHELF_ROWS_ROOT, relative_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="shelf row artifact 不存在")
     media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     return FileResponse(path, media_type=media_type)
 
@@ -3731,8 +3872,27 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
     depth_relative = row.get("depth_mm")
     if not isinstance(rgb_relative, str) or not isinstance(depth_relative, str):
         raise HTTPException(status_code=500, detail="SAM 行 metadata 缺少 RGB-D 文件")
-    rgb_path = resolve_descendant(output_directory, rgb_relative)
+    source_rgb_path = resolve_descendant(output_directory, rgb_relative)
     depth_path = resolve_descendant(output_directory, depth_relative)
+    level = row.get("level")
+    if not isinstance(level, str):
+        raise HTTPException(status_code=500, detail="SAM 行 metadata 缺少 level")
+    shelf_directory, shelf_result = resolve_shelf_row_result(
+        request.group,
+        request.record,
+        normalized_source,
+        request.row_index,
+        level,
+    )
+    shelf_artifacts = shelf_result.get("artifacts")
+    if not isinstance(shelf_artifacts, dict) or not isinstance(
+        shelf_artifacts.get("shelf_filtered"), str
+    ):
+        raise HTTPException(status_code=500, detail="shelf result 缺少置黑输入")
+    rgb_path = resolve_descendant(
+        shelf_directory,
+        str(shelf_artifacts["shelf_filtered"]),
+    )
     try:
         rgb = cv2.imdecode(
             np.frombuffer(rgb_path.read_bytes(), dtype=np.uint8),
@@ -4015,6 +4175,8 @@ def run_sam_row_debug(request: SamRowRunRequest) -> dict:
         "sam3_detection_status": "detected" if decoded else "empty_after_retry",
         "sam3_attempts": sam3_attempts,
         "crop_bbox_xywh": crop_bbox,
+        "source_row_rgb": str(source_rgb_path),
+        "sam3_input_rgb": str(rgb_path),
         "overlay_data_url": encode_web_image(overlay),
         "front_mask_data_url": encode_web_image(front_mask),
         "front_overlay_data_url": encode_web_image(front_overlay),

@@ -34,6 +34,11 @@ button:disabled { cursor: wait; opacity: .55; }
 .compare-grid, .row-grid { display: grid; gap: 12px; margin-top: 12px; }
 .compare-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .row-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.shelf-input-panel { margin-top: 12px; padding: 14px; }
+.shelf-input-panel > header { align-items: center; margin: 0 0 12px; }
+.shelf-input-panel h2 { margin: 3px 0 0; font-size: 21px; }
+.shelf-input-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.shelf-input-grid img { height: 290px; background: #000; }
 .flow-compare-panel { margin-top: 12px; padding: 14px; }
 .flow-compare-panel > header { align-items: center; margin: 0 0 12px; }
 .flow-compare-panel h2 { margin: 3px 0 0; font-size: 21px; }
@@ -83,7 +88,7 @@ figure.unavailable img { visibility: hidden; }
 .empty { padding: 24px; color: var(--muted); text-align: center; border: 1px dashed #475569; border-radius: 10px; }
 @media (max-width: 900px) {
   header { align-items: start; flex-direction: column; }
-  .controls, .prompt-panel, .compare-grid, .row-grid, .result-gallery, .flow-compare-images { grid-template-columns: 1fr; }
+  .controls, .prompt-panel, .compare-grid, .row-grid, .shelf-input-grid, .result-gallery, .flow-compare-images { grid-template-columns: 1fr; }
   .prompt-field { grid-row: auto; }
   figure img { height: auto; min-height: 220px; }
 }

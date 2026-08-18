@@ -10,8 +10,8 @@ connected components.  The only components removed are narrow side fragments:
 they must touch or lie within 2% (at least 10 px) of the left or right image
 edge and their bottom-edge span must cover less than 30% of the image width.
 The cleaned union is accepted only when one connected component spans more
-than 60% of the image width; otherwise the output falls back to the
-complete row image.
+than 60% of the image width and the final retained ROI covers at least 60%
+of the row image; otherwise the output falls back to the complete row image.
 
 The selected binary mask and the RGB image with all other pixels set to black
 are written under ``test_data/real_shortage_shelf_rows``.  For every image
@@ -46,7 +46,7 @@ import shelf_mask as shelf_mask_core  # noqa: E402
 
 DEFAULT_DATA_ROOT = PERCEPTION_ROOT / "test_data" / "real_shortage_regression"
 DEFAULT_OUTPUT_ROOT = PERCEPTION_ROOT / "test_data" / "real_shortage_shelf_rows"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 PRINT_LOCK = threading.Lock()
 
 
@@ -186,11 +186,14 @@ def component_candidates(
             component = labels == component_index
             right = x + component_width
             width_ratio = float(component_width) / float(width)
-            bottom_y = int(np.flatnonzero(np.any(component, axis=1)).max())
-            bottom_x = np.flatnonzero(component[bottom_y, :])
+            bottom_x = np.flatnonzero(np.any(component, axis=0))
+            bottom_y_by_x = np.asarray(
+                [int(np.flatnonzero(component[:, column]).max()) for column in bottom_x],
+                dtype=np.int32,
+            )
             bottom_edge_left = int(bottom_x.min())
             bottom_edge_right = int(bottom_x.max()) + 1
-            bottom_edge_width = bottom_edge_right - bottom_edge_left
+            bottom_edge_width = int(bottom_x.size)
             bottom_edge_width_ratio = float(bottom_edge_width) / float(width)
             left_edge_gap_px = max(0, x)
             right_edge_gap_px = max(0, width - right)
@@ -212,7 +215,14 @@ def component_candidates(
                     "area_px": area,
                     "bbox_xywh": [x, y, component_width, component_height],
                     "width_ratio": round(width_ratio, 6),
-                    "bottom_edge_y": bottom_y,
+                    "bottom_edge_y_range": [
+                        int(bottom_y_by_x.min()),
+                        int(bottom_y_by_x.max()),
+                    ],
+                    "bottom_edge_y_median": round(
+                        float(np.median(bottom_y_by_x)),
+                        3,
+                    ),
                     "bottom_edge_x_range": [bottom_edge_left, bottom_edge_right],
                     "bottom_edge_width_px": bottom_edge_width,
                     "bottom_edge_width_ratio": round(bottom_edge_width_ratio, 6),
@@ -357,7 +367,7 @@ def process_row(
                 "must_touch_or_be_near_left_or_right_edge": True,
                 "edge_touch_tolerance_ratio": edge_touch_tolerance_ratio,
                 "edge_touch_min_tolerance_px": edge_touch_min_tolerance_px,
-                "width_measurement": "bottommost_mask_row_horizontal_span",
+                "width_measurement": "per_column_bottom_envelope_horizontal_support",
                 "max_bottom_edge_width_ratio_exclusive": (
                     max_edge_component_width_ratio
                 ),
@@ -365,7 +375,10 @@ def process_row(
             "acceptance": {
                 "connected_component_min_width_ratio_exclusive": (
                     min_spanning_component_width_ratio
-                )
+                ),
+                "retained_area_min_ratio_inclusive": (
+                    shelf_mask_core.DEFAULT_MIN_RETAINED_AREA_RATIO
+                ),
             },
             "fallback": "full_image",
             "retained_region": "above_per_column_max_y",

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SAM3 行内深度调试</title>
-    <link rel="stylesheet" href="/static/sam_row_debug.css?v=4" />
+    <link rel="stylesheet" href="/static/sam_row_debug.css?v=5" />
   </head>
   <body>
     <main>
@@ -53,6 +53,42 @@
         </figure>
       </section>
 
+      <section class="card shelf-input-panel">
+        <header>
+          <div>
+            <p class="eyebrow">ACTUAL SAM3 INPUT · SHELF MASK</p>
+            <h2>商品 SAM3 的实际输入</h2>
+          </div>
+          <span id="shelfInputStatus" class="status">等待选择货架层</span>
+        </header>
+        <div class="shelf-input-grid">
+          <figure>
+            <figcaption><strong>Baseline 置黑输入</strong><small>实际送入商品 SAM3</small></figcaption>
+            <img id="baselineShelfFiltered" alt="Baseline filtered SAM3 input" />
+          </figure>
+          <figure>
+            <figcaption><strong>Current 置黑输入</strong><small>实际送入商品 SAM3</small></figcaption>
+            <img id="currentShelfFiltered" alt="Current filtered SAM3 input" />
+          </figure>
+          <figure>
+            <figcaption><strong>Baseline shelf mask</strong><small>边缘干扰清理后的合并 mask</small></figcaption>
+            <img id="baselineShelfMask" alt="Baseline shelf mask" />
+          </figure>
+          <figure>
+            <figcaption><strong>Current shelf mask</strong><small>边缘干扰清理后的合并 mask</small></figcaption>
+            <img id="currentShelfMask" alt="Current shelf mask" />
+          </figure>
+          <figure>
+            <figcaption><strong>Baseline retained mask</strong><small>按 mask 下沿向上保留并扩展 10 px</small></figcaption>
+            <img id="baselineRetainedMask" alt="Baseline retained mask" />
+          </figure>
+          <figure>
+            <figcaption><strong>Current retained mask</strong><small>按 mask 下沿向上保留并扩展 10 px</small></figcaption>
+            <img id="currentRetainedMask" alt="Current retained mask" />
+          </figure>
+        </div>
+      </section>
+
       <section class="card flow-compare-panel">
         <header>
           <div>
@@ -77,6 +113,6 @@
 
       <section id="results" class="results"></section>
     </main>
-    <script src="/static/sam_row_debug.js?v=8"></script>
+    <script src="/static/sam_row_debug.js?v=9"></script>
   </body>
 </html>

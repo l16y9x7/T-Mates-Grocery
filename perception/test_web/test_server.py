@@ -23,6 +23,8 @@ class PromptMappingTest(unittest.TestCase):
         self.assertIn('id="rowSelect"', html)
         self.assertIn('id="promptInput"', html)
         self.assertIn('id="runAll"', html)
+        self.assertIn('id="baselineShelfFiltered"', html)
+        self.assertIn('id="currentShelfFiltered"', html)
         self.assertIn("/api/sam-row-debug/records", js)
         self.assertIn("/api/sam-row-debug/run", js)
         self.assertIn('href="/sam-row-debug"', review_html)
@@ -75,6 +77,14 @@ class PromptMappingTest(unittest.TestCase):
                             }
                         ]
                     },
+                ),
+                patch.object(
+                    server,
+                    "resolve_shelf_row_result",
+                    return_value=(
+                        root,
+                        {"artifacts": {"shelf_filtered": "row_01_L1/rgb.jpg"}},
+                    ),
                 ),
             ):
                 result = server.run_sam_row_debug(
@@ -155,12 +165,26 @@ class PromptMappingTest(unittest.TestCase):
                         }
                     },
                 ),
+                patch.object(
+                    server,
+                    "shelf_row_artifact_urls",
+                    return_value={
+                        "shelf_mask_url": "/shelf-mask.png",
+                        "retained_mask_url": "/retained-mask.png",
+                        "shelf_filtered_url": "/filtered.jpg",
+                        "selected_component": {"width_ratio": 0.72},
+                    },
+                ),
             ):
                 payload = server.list_sam_row_debug_records()
 
         self.assertEqual(len(payload["records"]), 1)
         row = payload["records"][0]["rows"][0]
         self.assertEqual(row["candidate_skus"], ["NFC桔汁"])
+        self.assertEqual(
+            row["shelf_inputs"]["current"]["shelf_filtered_url"],
+            "/filtered.jpg",
+        )
         self.assertEqual(
             payload["prompt_mapping"],
             [{"sku_name": "NFC桔汁", "prompt": "frontmost carton"}],
