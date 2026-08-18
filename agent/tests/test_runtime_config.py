@@ -53,6 +53,23 @@ def test_one_robot_ip_drives_every_robot_service_url(tmp_path: Path) -> None:
     assert pick_place.pose_estimation_url == "http://127.0.0.1:8084"
 
 
+def test_robot_ip_environment_override_does_not_rewrite_config(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config_path = _runtime_copy(tmp_path, "192.168.3.226")
+    original = config_path.read_text(encoding="utf-8")
+    monkeypatch.setenv("ROBOT_IP", "10.21.32.43")
+
+    tasks = TaskServiceSettings.load(config_path)
+    pick_place = PickPlaceSettings.load(config_path)
+
+    assert str(tasks.robot.ip) == "10.21.32.43"
+    assert tasks.tasks.task0.services.navigation == "http://10.21.32.43:8081"
+    assert pick_place.manipulation_url == "http://10.21.32.43:8084"
+    assert pick_place.camera_url == "http://10.21.32.43:8085"
+    assert config_path.read_text(encoding="utf-8") == original
+
+
 def test_production_runtime_uses_one_yaml_and_external_product_map() -> None:
     settings = TaskServiceSettings.load(RUNTIME_CONFIG)
     pick_place = PickPlaceSettings.load(RUNTIME_CONFIG)

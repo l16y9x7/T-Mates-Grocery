@@ -9,7 +9,14 @@ RUN_DIR="$PROJECT_ROOT/run"
 LOG_DIR="$PROJECT_ROOT/log/process"
 PID_FILE="$RUN_DIR/pick-place.pid"
 PICK_PLACE_PORT="${PICK_PLACE_PORT:-8086}"
-usage() { echo "用法: $0 {start|stop|restart}"; }
+ROBOT_IP_OVERRIDE="${ROBOT_IP:-}"
+usage() {
+  cat <<EOF
+用法: $0 {start|stop|restart} [--robot-ip ADDRESS]
+
+--robot-ip ADDRESS  仅对本次启动/重启覆盖配置中的机器人 IPv4 地址
+EOF
+}
 
 port_pids() {
   if command -v lsof >/dev/null 2>&1; then
@@ -45,6 +52,11 @@ stop_port_listeners() {
 }
 
 start() {
+  if [[ -n "$ROBOT_IP_OVERRIDE" ]] && ! python3 -c \
+    'import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])' "$ROBOT_IP_OVERRIDE" 2>/dev/null; then
+    echo "错误：机器人地址必须是有效的 IPv4 地址：$ROBOT_IP_OVERRIDE" >&2
+    return 1
+  fi
   mkdir -p "$RUN_DIR" "$LOG_DIR"
   if [[ -f "$PID_FILE" ]]; then
     local pid; pid="$(<"$PID_FILE")"
@@ -58,6 +70,7 @@ start() {
   local timestamp log_file pid
   timestamp="$(date +%Y%m%d-%H%M%S)"; log_file="$LOG_DIR/pick-place-$timestamp.log"
   cd "$PROJECT_ROOT"
+  if [[ -n "$ROBOT_IP_OVERRIDE" ]]; then export ROBOT_IP="$ROBOT_IP_OVERRIDE"; else unset ROBOT_IP; fi
   nohup uv run --project "$PROJECT_ROOT" --frozen python -m pick_place_service --config "$RUNTIME_CONFIG_FILE" >"$log_file" 2>&1 < /dev/null &
   pid=$!; printf '%s\n' "$pid" > "$PID_FILE"; sleep 1
   if ! kill -0 "$pid" 2>/dev/null; then echo "pick-place 服务启动失败，日志：$log_file" >&2; rm -f "$PID_FILE"; tail -n 40 "$log_file" >&2 || true; return 1; fi
@@ -91,10 +104,28 @@ stop() {
   stop_port_listeners
 }
 
-case "${1:-}" in
+ACTION=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    start|stop|restart)
+      [[ -z "$ACTION" ]] || { usage >&2; exit 2; }
+      ACTION="$1"
+      ;;
+    --robot-ip)
+      [[ $# -ge 2 ]] || { echo "错误：--robot-ip 需要地址。" >&2; usage >&2; exit 2; }
+      ROBOT_IP_OVERRIDE="$2"
+      shift
+      ;;
+    --robot-ip=*) ROBOT_IP_OVERRIDE="${1#*=}" ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+[[ -n "$ACTION" ]] || { usage >&2; exit 2; }
+case "$ACTION" in
   start) start ;;
   stop) stop ;;
   restart) stop; start ;;
-  -h|--help) usage ;;
-  *) usage >&2; exit 2 ;;
 esac

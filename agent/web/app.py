@@ -506,7 +506,9 @@ def _operation_visual(log_dir: Path | None) -> dict[str, object]:
         "visual_revision": None,
         "image_data": None,
         "mask_data": None,
+        "mask_data_list": [],
         "bbox": None,
+        "bboxes": [],
         "bbox_coordinate_width": None,
         "bbox_coordinate_height": None,
         "pose": None,
@@ -524,8 +526,21 @@ def _operation_visual(log_dir: Path | None) -> dict[str, object]:
     locate_body = locate[1] if locate else {}
     locate_response_path = locate[2] if locate else None
     is_place = locate_kind == "place"
-    if isinstance(locate_body.get("bbox"), list) and len(locate_body["bbox"]) == 4:
-        result["bbox"] = locate_body["bbox"]
+    locate_bboxes = locate_body.get("bbox")
+    if isinstance(locate_bboxes, list):
+        if len(locate_bboxes) == 4 and all(
+            isinstance(value, (int, float)) for value in locate_bboxes
+        ):
+            result["bbox"] = locate_bboxes
+            result["bboxes"] = [locate_bboxes]
+        elif all(
+            isinstance(bbox, list)
+            and len(bbox) == 4
+            and all(isinstance(value, (int, float)) for value in bbox)
+            for bbox in locate_bboxes
+        ):
+            result["bboxes"] = locate_bboxes
+            result["bbox"] = locate_bboxes[0] if locate_bboxes else None
     if locate_kind == "pick":
         result["bbox_coordinate_width"] = 1000
         result["bbox_coordinate_height"] = 1000
@@ -552,8 +567,20 @@ def _operation_visual(log_dir: Path | None) -> dict[str, object]:
             and len(event["bbox"]) == 4
         ):
             result["bbox"] = event["bbox"]
+            result["bboxes"] = [event["bbox"]]
+        if (
+            not result["bboxes"]
+            and isinstance(event.get("bboxes"), list)
+            and all(
+                isinstance(bbox, list) and len(bbox) == 4
+                for bbox in event["bboxes"]
+            )
+        ):
+            result["bboxes"] = event["bboxes"]
+            result["bbox"] = event["bboxes"][0] if event["bboxes"] else None
         if (
             is_place
+            and event.get("event") == "放置位姿合成"
             and isinstance(event.get("current_pose"), list)
             and len(event["current_pose"]) == 6
         ):
@@ -562,8 +589,17 @@ def _operation_visual(log_dir: Path | None) -> dict[str, object]:
             result["pose"] = event["pose"]
 
     response_path = log_dir / "interfaces" / "manipulation_pick_pose" / "response.json"
-    if not response_path.is_file():
-        response_path = log_dir / "interfaces" / "manipulation_place_pose" / "response.json"
+    if is_place:
+        place_responses = sorted(
+            (log_dir / "interfaces").glob(
+                "manipulation_place_pose_reference_*/response.json"
+            )
+        )
+        response_path = (
+            place_responses[0]
+            if place_responses
+            else log_dir / "interfaces" / "manipulation_place_pose" / "response.json"
+        )
     try:
         response = json.loads(response_path.read_text(encoding="utf-8")) if response_path.is_file() else {}
     except (OSError, json.JSONDecodeError):
@@ -586,7 +622,7 @@ def _operation_visual(log_dir: Path | None) -> dict[str, object]:
     mask_names = ("mask.png", "mask.jpg", "mask.jpeg", "mask.pgm")
     image_data = None
     image_path: Path | None = None
-    mask_data = None
+    mask_data_list: list[str] = []
     calibration_dir: str | None = None
     pose_is_aligned = False
 
@@ -596,23 +632,42 @@ def _operation_visual(log_dir: Path | None) -> dict[str, object]:
         if image_data is not None:
             calibration_dir = visual_dir
             pose_is_aligned = True
-            if is_place:
-                result["bbox"] = None
-            else:
+            if not is_place:
                 mask_data, _ = _first_log_file(log_dir, "camera", mask_names)
+                if mask_data is not None:
+                    mask_data_list = [mask_data]
 
     if image_data is None:
-        locate_image_path = locate_body.get("image_path")
+        locate_image_path = (
+            locate_body.get("current_image_path")
+            if is_place
+            else locate_body.get("image_path")
+        )
         if isinstance(locate_image_path, str):
             image_data = _local_image_data(locate_image_path)
-        fallback_dir = "reference" if is_place else "camera"
+        fallback_dir = "current" if is_place else "camera"
         if image_data is None:
             image_data, image_path = _first_log_file(log_dir, fallback_dir, image_names)
-        locate_mask = locate_body.get("mask")
-        if isinstance(locate_mask, str) and locate_mask:
-            mask_data = locate_mask if locate_mask.startswith("data:") else f"data:image/png;base64,{locate_mask}"
-        if mask_data is None:
-            mask_data, _ = _first_log_file(log_dir, fallback_dir, mask_names)
+
+    locate_masks = locate_body.get("mask")
+    if isinstance(locate_masks, str) and locate_masks:
+        locate_masks = [locate_masks]
+    if isinstance(locate_masks, list):
+        mask_data_list = [
+            mask if mask.startswith("data:") else f"data:image/png;base64,{mask}"
+            for mask in locate_masks
+            if isinstance(mask, str) and mask
+        ]
+    if not mask_data_list:
+        mask_directory = log_dir / ("current" if is_place else "camera")
+        if mask_directory.is_dir():
+            for mask_path in sorted(mask_directory.glob("mask*")):
+                mask_uri = _log_file_data(
+                    log_dir, str(mask_path.relative_to(log_dir))
+                )
+                if mask_uri:
+                    mask_data_list.append(mask_uri)
+    mask_data = mask_data_list[0] if mask_data_list else None
 
     if pose_is_aligned and calibration_dir is not None:
         cam_k = _calibration_matrix(log_dir, calibration_dir)
@@ -620,6 +675,7 @@ def _operation_visual(log_dir: Path | None) -> dict[str, object]:
 
     result["image_data"] = image_data
     result["mask_data"] = mask_data
+    result["mask_data_list"] = mask_data_list
     result["available"] = any(
         value is not None
         for value in (image_data, mask_data, result["bbox"], result["pose"])

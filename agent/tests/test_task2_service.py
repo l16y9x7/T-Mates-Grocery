@@ -242,6 +242,34 @@ async def test_task2_retries_place_before_moving_to_the_next_finding(tmp_path: P
 
 
 @pytest.mark.asyncio
+async def test_task2_restores_replenishment_pose_before_failed_pick_nudge(
+    tmp_path: Path,
+) -> None:
+    mock = Task2Mock([shortage("商品一"), [], [], []])
+    mock.pick_failure_limit = 1
+    task_settings = ready_settings(tmp_path)
+
+    async with Task2Client(task_settings, transport=mock.transport) as client:
+        result = await Task2Orchestrator(task_settings, client).run(
+            Task2Request(), "task2-pick-recovery"
+        )
+
+    assert result.status == "SUCCEEDED"
+    recovery_pose = next(
+        request
+        for request in requests_for(mock, "/pose/prepare")
+        if request.headers["Idempotency-Key"].endswith(":recovery.pose")
+    )
+    assert payload(recovery_pose) == {
+        "pose_type": "REPLENISHMENT_TABLE_PICK_READY"
+    }
+    nudge_requests = requests_for(mock, "/navigation/nudge")
+    retry_pick = requests_for(mock, "/pick")[1]
+    assert mock.requests.index(recovery_pose) < mock.requests.index(nudge_requests[0])
+    assert mock.requests.index(nudge_requests[0]) < mock.requests.index(retry_pick)
+
+
+@pytest.mark.asyncio
 async def test_task2_stops_inspection_after_two_successful_places(tmp_path: Path) -> None:
     mock = Task2Mock([shortage("商品一", "商品二", "商品三"), [], [], []])
     task_settings = ready_settings(tmp_path)

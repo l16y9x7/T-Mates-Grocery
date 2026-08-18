@@ -13,6 +13,8 @@ Task0、Task1、Task2、Task3 由同一个 FastAPI 进程提供，旧的主 Agen
 | `scripts/setup.sh` | `scripts/setup.sh` | 按锁文件安装 Python 依赖 |
 | `scripts/pick-place.sh` | `scripts/pick-place.sh {start\|stop\|restart}` | 启动/停止 8086 取放编排服务 |
 | `scripts/tasks.sh` | `scripts/tasks.sh {start\|stop\|restart}` | 启动/停止 8108 统一任务服务（含 Web） |
+| `scripts/services.sh` | `scripts/services.sh {start\|stop\|restart} [机器人IP]` | 使用指定机器人地址统一控制两个服务 |
+| `scripts/health-check.sh` | `scripts/health-check.sh [机器人IP]` | 检查本地服务、机器人及依赖健康状态 |
 | `scripts/run-task.sh` | `scripts/run-task.sh [--ensure-services] {0\|1\|2\|3\|health}` | 终端启动 Task0-3，或查询健康状态；加 `--ensure-services` 时若服务未就绪会先拉起 pick-place 和统一任务服务 |
 | `scripts/restart-runtime.sh` | `scripts/restart-runtime.sh` | 依次重启 pick-place 和统一任务服务（Web「应用并重启」也调用它） |
 | `scripts/run-tests.sh` | `scripts/run-tests.sh [pytest 参数…]` | 跑进程内 HTTP Mock 测试，不驱动真实机器人 |
@@ -56,6 +58,19 @@ scripts/setup.sh
 scripts/pick-place.sh start
 scripts/tasks.sh start
 ```
+
+也可以用一个地址统一启动、停止或重启两个服务；地址只对本次启动的进程生效，不会改写生产配置：
+
+```bash
+scripts/services.sh start 192.168.3.226
+scripts/health-check.sh 192.168.3.226
+scripts/services.sh restart 192.168.3.226
+scripts/services.sh stop
+```
+
+`services.sh` 省略地址时使用配置文件中的 `robot.ip`。健康检查脚本会检查
+8108、8086、感知、SKU，以及机器人 8081/8084/8085 的健康接口；任一检查失败时以
+非零状态退出。
 
 浏览器打开 `http://127.0.0.1:8108/`。停止或重启时把 `start` 替换为 `stop` 或
 `restart`。统一任务服务的 PID 保存在 `run/tasks.pid`，进程输出保存在

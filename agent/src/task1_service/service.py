@@ -72,6 +72,19 @@ def default_inspection_target_id(slot_id: str) -> str:
     return f"{shelf_face}_{side}_INSPECT"
 
 
+def _initial_nudge_direction(target: TargetItem) -> str | None:
+    """Return any configured approach nudge for this task1 shelf target."""
+
+    if (
+        target.product_slot_id == "H2_B_L1_C01"
+        and target.product_name == "舒肤佳香皂纯白清香型"
+        and target.hand is Hand.LEFT
+        and target.target_id == "H2_B_L_INSPECT"
+    ):
+        return "left"
+    return initial_shelf_nudge_direction(target.product_name, target.hand.value)
+
+
 class Task1Orchestrator:
     def __init__(self, settings: Task1Settings, client: Task1Client) -> None:
         self.settings = settings
@@ -793,9 +806,7 @@ class Task1Orchestrator:
             action_failures=action_failures,
             uncertain_hands=uncertain_hands,
             navigation_state=navigation_state,
-            initial_nudge_direction=initial_shelf_nudge_direction(
-                target.product_name, target.hand.value
-            ),
+            initial_nudge_direction=_initial_nudge_direction(target),
             before_retry=lambda key: self.client.prepare_pose(
                 "SHELF_PICK_READY",
                 key,

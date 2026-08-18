@@ -161,21 +161,21 @@ Task1 -> POST <robot_ip>:8084/manipulation/release/both
 
 ### 6.3 SHORTAGE 与 MISPLACED `/place`
 
-Task2 使用 `task_type=SHORTAGE` 调用 `/place`。Task2/Task3 先恢复目标货架的观察姿态；8083 根据观察点和观察姿态自行获取当前 RGB-D，并返回 Task0 参考数据、参考相机到当前相机的 SE(3) 变换和目标层号。8086 使用 Task0 参考 RGB-D 调用原格式的放置位姿接口，再将参考位姿转换到当前相机坐标系。`MISPLACED /place` 执行相同链路：
+Task2 使用 `task_type=SHORTAGE` 调用 `/place`。Task2/Task3 先恢复目标货架的观察姿态；8083 根据观察点和观察姿态自行获取当前 RGB-D，在当前图中选择一个或两个参照物，并返回参照物 mask、相对方向和目标层号。8086 对每个当前图参照物调用一次原格式的放置位姿接口，再在当前相机坐标系内合成最终放置位姿。`MISPLACED /place` 执行相同链路：
 
 ```text
 Task2 (SHORTAGE) / Task3 (MISPLACED) -> POST 127.0.0.1:8086/place
   -> POST 127.0.0.1:8083/perception/place/locate {task_type, product_name, location_id, pose_type}
-       8083 自行获取当前 RGB-D，返回 Task0 image_path/mask、bbox、rotate_matrix 和 level
-  -> 读取 image_path 同目录的 Task0 rgb.jpg 与 depth_mm.npy
-  -> POST 127.0.0.1:8084/manipulation/place_pose (Task0 RGB-D，multipart/form-data)
-  -> T_current_object = rotate_matrix @ T_reference_object
+       8083 自行获取当前 RGB-D，返回当前图 bbox/mask 数组、direction、current_image_path 和 level
+  -> 读取 current_image_path 和同目录的 current_depth_mm.npy
+  -> 对每个 mask 调用 POST 127.0.0.1:8084/manipulation/place_pose（当前 RGB-D，multipart/form-data）
+  -> 根据 direction 在 8086 内插值、外推或直接采用参照物六维位姿
   -> POST <robot_ip>:8084/pose/prepare {"pose_type":"SHELF_PLACE_READY","shelf_level":"<level>"}
   -> POST <robot_ip>:8084/manipulation/release
   <- {"status":"SUCCEEDED"}
 ```
 
-`/manipulation/place_pose` 的响应格式没有变化，仍为 `[x,y,z,rx,ry,rz]`、`camera`、`mm_rad`、`zyx`。8086 按 `R = Rz(rz) @ Ry(ry) @ Rx(rx)` 将六维位姿转为齐次矩阵，完成 SE(3) 左乘后再转回相同六维格式供 `release` 使用。`release` 成功后直接返回；结果视觉校验代码已注释，不调用 `/perception/place/check`。
+`/manipulation/place_pose` 的请求和响应格式没有变化，仍为单个 mask，以及 `[x,y,z,rx,ry,rz]`、`camera`、`mm_rad`、`zyx`。水平方向的两个参照按从左到右排列：`both` 取两位置中点，`left` 用 `2 * right - left` 向右外推，`right` 用 `2 * left - right` 向左外推；两参照的旋转矩阵取均值后通过 SVD 投影回 SO(3)。`up` 直接采用唯一支撑物位姿。`release` 成功后直接返回；结果视觉校验代码已注释，不调用 `/perception/place/check`。
 
 ### 6.4 `8086 /health`
 
@@ -322,9 +322,9 @@ POST 127.0.0.1:8108/tasks/3/run {}
   -> 到 P1，准备 SHELF_PICK_READY + P1 层号，以 level=P1 层号抓取 misplaced_product_name
   -> 到 P2，准备 SHELF_PICK_READY + P2 层号，以 level=P2 层号抓取 gt_product_name
   -> 保持在 P2，准备 P2 对应 SHELF_VIEW_UPPER/LOWER，调用 8086 放置第一件商品
-       8086 完成参考位姿转换后准备 SHELF_PLACE_READY + 8083 返回层号并释放
+       8086 根据当前参照物合成放置位姿后准备 SHELF_PLACE_READY + 8083 返回层号并释放
   -> 返回 P1，准备 P1 对应 SHELF_VIEW_UPPER/LOWER，调用 8086 放置第二件商品
-       8086 完成参考位姿转换后准备 SHELF_PLACE_READY + 8083 返回层号并释放
+       8086 根据当前参照物合成放置位姿后准备 SHELF_PLACE_READY + 8083 返回层号并释放
   -> 返回 task_boundary
   <- Task3 SUCCEEDED
 ```
@@ -723,25 +723,21 @@ Task3 只接受一组不同的非空商品名。
 }
 ```
 
-8083 根据 `location_id` 和 `pose_type` 自行获取当前 RGB-D。成功响应保留原放置定位字段并增加 `level`：
+8083 根据 `location_id` 和 `pose_type` 自行获取并持久化当前 RGB-D。请求使用 `product_name`，成功响应中的商品名字段仍为 `name`：
 
 ```json
 {
-  "product_name":"商品名",
-  "bbox":[853,404,983,797],
-  "mask":"<Task0 原图尺寸的 base64 PNG>",
+  "name":"商品名",
+  "bbox":[[210,220,300,650],[440,220,530,650]],
+  "mask":["<当前图同尺寸 base64 PNG>","<当前图同尺寸 base64 PNG>"],
+  "direction":"both",
   "image_path":"/absolute/path/to/task0/rgb.jpg",
-  "rotate_matrix":[
-    [1,0,0,25],
-    [0,1,0,-28],
-    [0,0,1,5],
-    [0,0,0,1]
-  ],
+  "current_image_path":"/absolute/path/to/place/run/current_rgb.jpg",
   "level":"L1"
 }
 ```
 
-`image_path` 指向 Task0 的 `rgb.jpg`，同目录必须存在 `depth_mm.npy`。8083 不返回本次定位使用的当前 RGB 路径，因此 8086 使用 `image_path` 作为 Web 当前视图的回退来源，并在操作日志中标记 `image_path_fallback`；该回退只影响可视化，不参与位姿转换。`rotate_matrix` 是从 Task0 参考相机坐标系到当前相机坐标系的 4x4 SE(3) 变换，平移单位与位姿一致为毫米；8086 会校验末行、旋转正交性和行列式。
+`bbox` 和 `mask` 按索引一一对应，均位于 `current_image_path` 指向的当前图坐标系；同目录必须存在 `current_depth_mm.npy`。`both`、`left`、`right` 必须各返回两个参照，`up` 必须返回一个。`image_path` 仍记录 Task0 基准图，但不再作为 8084 位姿估计输入。新版响应不再包含 `rotate_matrix`，8086 也不兼容旧响应格式。
 
 #### `POST /perception/{pick|place}/check`
 
@@ -891,7 +887,7 @@ Task1 要求 `name` 与查询值一致、`locations` 恰好一个。Task3 同样
 
 成功响应至少包含 `{"status":"SUCCEEDED"}`。
 
-`SHORTAGE` 和 `MISPLACED` 放置使用 `rotate_matrix @ T_reference_object` 转换后的六维位姿，`hand` 为小写；释放前 8086 已使用返回的层号完成 `SHELF_PLACE_READY`，释放成功后直接返回，不执行结果视觉校验。
+`SHORTAGE` 和 `MISPLACED` 放置使用 8086 根据当前图参照物位姿与 `direction` 合成的六维位姿，`hand` 为小写；释放前 8086 已使用返回的层号完成 `SHELF_PLACE_READY`，释放成功后直接返回，不执行结果视觉校验。
 
 #### `POST /manipulation/release/both`
 

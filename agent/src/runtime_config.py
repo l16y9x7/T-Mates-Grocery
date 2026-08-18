@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from dataclasses import dataclass
 from ipaddress import IPv4Address
@@ -138,6 +139,17 @@ def load_runtime_document(path: str | Path) -> RuntimeDocument:
         raise RuntimeError(f"runtime config not found: {config_path}") from exc
     except (OSError, yaml.YAMLError) as exc:
         raise RuntimeError(f"cannot read runtime config {config_path}: {exc}") from exc
+    # A process-level override lets launch scripts target a robot without
+    # rewriting the shared production configuration on disk.
+    robot_ip = os.environ.get("ROBOT_IP", "").strip()
+    if robot_ip:
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"runtime config must be a YAML object: {config_path}")
+        raw = deepcopy(raw)
+        robot = raw.setdefault("robot", {})
+        if not isinstance(robot, dict):
+            raise RuntimeError(f"runtime config robot section must be a YAML object: {config_path}")
+        robot["ip"] = robot_ip
     return validate_runtime_raw(config_path, raw)
 
 
