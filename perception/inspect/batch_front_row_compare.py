@@ -30,12 +30,15 @@ if str(PERCEPTION_ROOT) not in sys.path:
     sys.path.insert(0, str(PERCEPTION_ROOT))
 
 from test_web import server as web_server  # noqa: E402
+from shortage_depth_outlier import select_positive_depth_outliers  # noqa: E402
+from shortage_slot_matching import match_normalized_slots  # noqa: E402
 
 
 DEFAULT_DATA_ROOT = PERCEPTION_ROOT / "test_data" / "real_shortage_regression"
 DEFAULT_OUTPUT_ROOT = PERCEPTION_ROOT / "test_data" / "real_shortage_front_compare"
-COMPARISON_SCHEMA_VERSION = 11
+COMPARISON_SCHEMA_VERSION = 14
 DEPTH_DELTA_THRESHOLD_MM = 40.0
+HARD_DEPTH_DELTA_THRESHOLD_MM = 100.0
 DEPTH_CONSISTENCY_THRESHOLD_MM = 10.0
 SYSTEMATIC_DEPTH_SHIFT_MIN_MM = 30.0
 SYSTEMATIC_DEPTH_SHIFT_MAX_MM = 80.0
@@ -137,16 +140,22 @@ def match_slots(
     baseline_image_width: int,
     current_image_width: int,
     expected_count: int,
-) -> tuple[dict[int, int], float, float]:
+) -> tuple[dict[int, int], float, float, str, dict[str, float | None]]:
     """Return order-preserving matches in the shared source-image coordinates."""
 
     if not baseline or not current:
-        return {}, 0.0, normalized_pitch(
+        pitch = normalized_pitch(
             baseline,
             baseline_crop_x=baseline_crop_x,
             baseline_image_width=baseline_image_width,
             expected_count=expected_count,
         )
+        return {}, 0.0, pitch, "empty_sequence", {
+            "baseline_span": 0.0,
+            "current_span": 0.0,
+            "left_endpoint_shift": None,
+            "right_endpoint_shift": None,
+        }
     baseline_u = [
         normalized_center_x(
             item,
@@ -170,100 +179,23 @@ def match_slots(
         expected_count=expected_count,
     )
 
-    # With equal counts the ordinal identity is unambiguous: a camera/view
-    # translation must not make the nearest-neighbour matcher skip one item and
-    # invent a shortage at the opposite edge.  Match strictly left-to-right and
-    # estimate the common horizontal translation from all pairs.
-    if len(baseline_u) == len(current_u):
-        matches = {index: index for index in range(len(baseline_u))}
-        shift = float(
-            np.median(
-                np.asarray(current_u, dtype=np.float32)
-                - np.asarray(baseline_u, dtype=np.float32)
-            )
-        )
-        return matches, shift, pitch
-
-    def monotonic_alignment(shift: float) -> tuple[dict[int, int], float]:
-        """Match every item in the shorter sequence to an ordered subsequence."""
-
-        baseline_is_shorter = len(baseline_u) <= len(current_u)
-        short_values = baseline_u if baseline_is_shorter else current_u
-        long_values = current_u if baseline_is_shorter else baseline_u
-        short_count = len(short_values)
-        long_count = len(long_values)
-        infinity = float("inf")
-        costs = np.full((short_count + 1, long_count + 1), infinity, dtype=np.float64)
-        take = np.zeros((short_count + 1, long_count + 1), dtype=np.uint8)
-        costs[0, :] = 0.0
-
-        for short_index in range(1, short_count + 1):
-            for long_index in range(1, long_count + 1):
-                skip_cost = costs[short_index, long_index - 1]
-                if baseline_is_shorter:
-                    base_value = short_values[short_index - 1]
-                    current_value = long_values[long_index - 1]
-                else:
-                    base_value = long_values[long_index - 1]
-                    current_value = short_values[short_index - 1]
-                match_cost = costs[short_index - 1, long_index - 1] + abs(
-                    (base_value + shift) - current_value
-                )
-                if np.isfinite(match_cost) and match_cost <= skip_cost:
-                    costs[short_index, long_index] = match_cost
-                    take[short_index, long_index] = 1
-                else:
-                    costs[short_index, long_index] = skip_cost
-
-        matches: dict[int, int] = {}
-        short_index = short_count
-        long_index = long_count
-        while short_index > 0 and long_index > 0:
-            if take[short_index, long_index]:
-                if baseline_is_shorter:
-                    matches[short_index - 1] = long_index - 1
-                else:
-                    matches[long_index - 1] = short_index - 1
-                short_index -= 1
-                long_index -= 1
-            else:
-                long_index -= 1
-        return matches, float(costs[short_count, long_count])
-
-    # Search common translations, but evaluate every candidate with monotonic
-    # sequence alignment.  The smaller absolute shift breaks geometrically
-    # equivalent edge ambiguities, preventing a whole-slot jump.
-    shift_candidates = {0.0}
-    shift_candidates.update(
-        round(current_value - base_value, 6)
-        for base_value in baseline_u
-        for current_value in current_u
+    match_result = match_normalized_slots(
+        baseline_u,
+        current_u,
+        normalized_pitch=pitch,
     )
-    best_matches: dict[int, int] = {}
-    best_shift = 0.0
-    best_rank: tuple[float, float] | None = None
-    for shift in shift_candidates:
-        matches, total_distance = monotonic_alignment(shift)
-        rank = (total_distance, abs(shift))
-        if best_rank is None or rank < best_rank:
-            best_rank = rank
-            best_matches = matches
-            best_shift = shift
-
-    if best_matches:
-        best_shift = float(
-            np.median(
-                np.asarray(
-                    [
-                        current_u[current_index] - baseline_u[baseline_index]
-                        for baseline_index, current_index in best_matches.items()
-                    ],
-                    dtype=np.float32,
-                )
-            )
-        )
-    return best_matches, best_shift, pitch
-
+    return (
+        match_result.matches,
+        match_result.normalized_shift,
+        pitch,
+        match_result.strategy,
+        {
+            "baseline_span": match_result.baseline_span,
+            "current_span": match_result.current_span,
+            "left_endpoint_shift": match_result.left_endpoint_shift,
+            "right_endpoint_shift": match_result.right_endpoint_shift,
+        },
+    )
 
 def map_bbox(
     bbox: list[float],
@@ -408,7 +340,13 @@ def compare_prompt_group(
     current_detection_failed = (
         current_result.get("sam3_detection_status") == "empty_after_retry"
     )
-    matches, normalized_shift, pitch = match_slots(
+    (
+        matches,
+        normalized_shift,
+        pitch,
+        matching_strategy,
+        matching_diagnostics,
+    ) = match_slots(
         baseline_front,
         current_front,
         baseline_crop_x=baseline_crop[0],
@@ -419,14 +357,25 @@ def compare_prompt_group(
     )
     baseline_complete = len(baseline_front) == expected_count
 
-    matched_depth_deltas: list[float] = []
+    depth_deltas_by_baseline: list[float | None] = [None] * len(baseline_front)
     for baseline_index, current_index in matches.items():
         baseline_depth = baseline_front[baseline_index].get("stable_depth_mm")
         current_depth = current_front[current_index].get("stable_depth_mm")
         if isinstance(baseline_depth, (int, float)) and isinstance(
             current_depth, (int, float)
         ):
-            matched_depth_deltas.append(float(current_depth) - float(baseline_depth))
+            depth_deltas_by_baseline[baseline_index] = (
+                float(current_depth) - float(baseline_depth)
+            )
+    matched_depth_deltas = [
+        value for value in depth_deltas_by_baseline if value is not None
+    ]
+    depth_outliers = select_positive_depth_outliers(
+        depth_deltas_by_baseline,
+        absolute_threshold_mm=DEPTH_DELTA_THRESHOLD_MM,
+        hard_threshold_mm=HARD_DEPTH_DELTA_THRESHOLD_MM,
+        max_outliers=2,
+    )
 
     # A nearly identical positive delta on every occupied slot is camera/view
     # drift, not several products disappearing at once.  Keep the raw deltas in
@@ -437,6 +386,7 @@ def compare_prompt_group(
         and len(matched_depth_deltas) == len(baseline_front)
         and min(matched_depth_deltas) >= SYSTEMATIC_DEPTH_SHIFT_MIN_MM
         and max(matched_depth_deltas) <= SYSTEMATIC_DEPTH_SHIFT_MAX_MM
+        and not depth_outliers.indices
     )
     systematic_shift_median = (
         float(np.median(np.asarray(matched_depth_deltas, dtype=np.float32)))
@@ -489,10 +439,12 @@ def compare_prompt_group(
             and abs(depth_delta) < DEPTH_CONSISTENCY_THRESHOLD_MM
         ):
             status = "occupied_depth_consistent"
+        elif baseline_index in depth_outliers.indices:
+            status = "missing_depth_delta"
         elif systematic_depth_shift:
             status = "occupied_systematic_shift"
         elif depth_delta is not None and depth_delta > DEPTH_DELTA_THRESHOLD_MM:
-            status = "missing_depth_delta"
+            status = "occupied_depth_inlier"
         else:
             status = "occupied"
         slot = {
@@ -586,13 +538,34 @@ def compare_prompt_group(
         "slot_coordinate_space": "source_image",
         "normalized_x_shift": round(normalized_shift, 6),
         "normalized_pitch": round(pitch, 6),
-        "slot_matching_strategy": (
-            "ordinal_left_to_right"
-            if len(baseline_front) == len(current_front)
-            else "monotonic_sequence_alignment"
-        ),
+        "slot_matching_strategy": matching_strategy,
+        "slot_matching_diagnostics": {
+            key: (round(value, 6) if isinstance(value, float) else value)
+            for key, value in matching_diagnostics.items()
+        },
         "depth_delta_threshold_mm": DEPTH_DELTA_THRESHOLD_MM,
         "depth_consistency_threshold_mm": DEPTH_CONSISTENCY_THRESHOLD_MM,
+        "depth_outlier_filter": {
+            "strategy": "group_median_mad_and_largest_gap",
+            "max_outliers": 2,
+            "hard_threshold_mm": HARD_DEPTH_DELTA_THRESHOLD_MM,
+            "median_mm": depth_outliers.median_mm,
+            "mad_mm": depth_outliers.mad_mm,
+            "cutoff_mm": round(depth_outliers.cutoff_mm, 2),
+            "robust_cutoff_mm": (
+                round(depth_outliers.robust_cutoff_mm, 2)
+                if depth_outliers.robust_cutoff_mm is not None
+                else None
+            ),
+            "gap_cutoff_mm": (
+                round(depth_outliers.gap_cutoff_mm, 2)
+                if depth_outliers.gap_cutoff_mm is not None
+                else None
+            ),
+            "selected_slot_indices": [
+                index + 1 for index in depth_outliers.indices
+            ],
+        },
         "systematic_depth_shift": {
             "detected": systematic_depth_shift,
             "accepted_range_mm": [

@@ -23,21 +23,28 @@ try:
     from ..front_row_selection import select_front_row_instances
     from ..pick.locate.main import uses_upper_confidence_pick
     from ..row_detection import RowDetectionConfig, detect_rows
+    from ..shelf_mask import ShelfMaskResult, apply_shelf_mask
 except ImportError:
     from config import SAM3_URL
     from front_row_selection import select_front_row_instances
     from pick.locate.main import uses_upper_confidence_pick
     from row_detection import RowDetectionConfig, detect_rows
+    from shelf_mask import ShelfMaskResult, apply_shelf_mask
 
 try:
     from .export_sam_rows import fit_shelf_boundary_model, perspective_row_crop
+    from .shortage_depth_outlier import select_positive_depth_outliers
+    from .shortage_slot_matching import match_normalized_slots
 except ImportError:
     from export_sam_rows import fit_shelf_boundary_model, perspective_row_crop
+    from shortage_depth_outlier import select_positive_depth_outliers
+    from shortage_slot_matching import match_normalized_slots
 
 
 PoseType = Literal["SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
 Direction = Literal["left", "right", "both", "up"]
 Sam3Caller = Callable[[np.ndarray, str, float], dict[str, Any]]
+ShelfMasker = Callable[[np.ndarray], ShelfMaskResult]
 
 MAPPING_PATH = Path(__file__).resolve().parent / "shortage_mapping_config.json"
 POSE_LEVELS: dict[PoseType, tuple[str, ...]] = {
@@ -45,6 +52,7 @@ POSE_LEVELS: dict[PoseType, tuple[str, ...]] = {
     "SHELF_VIEW_LOWER": ("L3", "L4", "L5"),
 }
 DEPTH_DELTA_THRESHOLD_MM = 40.0
+HARD_DEPTH_DELTA_THRESHOLD_MM = 100.0
 DEPTH_CONSISTENCY_THRESHOLD_MM = 10.0
 SYSTEMATIC_DEPTH_SHIFT_MIN_MM = 30.0
 SYSTEMATIC_DEPTH_SHIFT_MAX_MM = 80.0
@@ -61,6 +69,8 @@ class RowCrop:
     crop_bbox_xywh: tuple[int, int, int, int]
     rgb: np.ndarray
     depth_mm: np.ndarray
+    source_rgb: np.ndarray | None = None
+    shelf_mask_result: ShelfMaskResult | None = None
 
 
 @dataclass
@@ -126,7 +136,13 @@ class GroupComparison:
     slots: list[SlotComparison]
     normalized_x_shift: float
     normalized_pitch: float
+    slot_matching_strategy: str
+    slot_matching_diagnostics: dict[str, float | None]
     systematic_depth_shift: bool
+    depth_outlier_indices: tuple[int, ...]
+    depth_outlier_median_mm: float | None
+    depth_outlier_mad_mm: float | None
+    depth_outlier_cutoff_mm: float
 
     @property
     def missing_slots(self) -> list[SlotComparison]:
@@ -139,6 +155,8 @@ class ShortageAnalysis:
     pose_type: PoseType
     image_size: tuple[int, int]
     comparisons: list[GroupComparison] = field(default_factory=list)
+    baseline_rows: dict[str, RowCrop] = field(default_factory=dict, repr=False)
+    current_rows: dict[str, RowCrop] = field(default_factory=dict, repr=False)
 
     @property
     def missing_product_names(self) -> list[str]:
@@ -266,6 +284,27 @@ def extract_rows(
             rgb=rgb_crop,
             depth_mm=np.asarray(depth_crop),
         )
+    return rows
+
+
+def apply_shelf_masks_to_rows(
+    rows: dict[str, RowCrop],
+    *,
+    shelf_masker: ShelfMasker = apply_shelf_mask,
+) -> dict[str, RowCrop]:
+    """Apply one shared shelf-mask policy to every extracted row crop."""
+
+    for row in rows.values():
+        source_rgb = np.asarray(row.rgb).copy()
+        result = shelf_masker(source_rgb)
+        if result.filtered_rgb.shape != source_rgb.shape:
+            raise SamShortageError(
+                f"shelf mask 输出尺寸错误: "
+                f"source={source_rgb.shape}, filtered={result.filtered_rgb.shape}"
+            )
+        row.source_rgb = source_rgb
+        row.shelf_mask_result = result
+        row.rgb = result.filtered_rgb
     return rows
 
 
@@ -457,93 +496,39 @@ def match_slots(
     baseline_image_width: int,
     current_image_width: int,
     expected_count: int,
-) -> tuple[dict[int, int], float, float]:
+) -> tuple[dict[int, int], float, float, str, dict[str, float | None]]:
     if not baseline or not current:
-        return {}, 0.0, _normalized_pitch(
+        pitch = _normalized_pitch(
             baseline, baseline_image_width, expected_count
         )
+        return {}, 0.0, pitch, "empty_sequence", {
+            "baseline_span": 0.0,
+            "current_span": 0.0,
+            "left_endpoint_shift": None,
+            "right_endpoint_shift": None,
+        }
     baseline_u = [
         _normalized_center_x(item, baseline_image_width) for item in baseline
     ]
     current_u = [_normalized_center_x(item, current_image_width) for item in current]
     pitch = _normalized_pitch(baseline, baseline_image_width, expected_count)
-    if len(baseline_u) == len(current_u):
-        shift = float(
-            np.median(
-                np.asarray(current_u, dtype=np.float32)
-                - np.asarray(baseline_u, dtype=np.float32)
-            )
-        )
-        return {index: index for index in range(len(baseline_u))}, shift, pitch
-
-    def monotonic_alignment(shift: float) -> tuple[dict[int, int], float]:
-        baseline_shorter = len(baseline_u) <= len(current_u)
-        short_values = baseline_u if baseline_shorter else current_u
-        long_values = current_u if baseline_shorter else baseline_u
-        short_count, long_count = len(short_values), len(long_values)
-        costs = np.full((short_count + 1, long_count + 1), np.inf, dtype=np.float64)
-        take = np.zeros((short_count + 1, long_count + 1), dtype=np.uint8)
-        costs[0, :] = 0.0
-        for short_index in range(1, short_count + 1):
-            for long_index in range(1, long_count + 1):
-                skip_cost = costs[short_index, long_index - 1]
-                if baseline_shorter:
-                    base_value = short_values[short_index - 1]
-                    current_value = long_values[long_index - 1]
-                else:
-                    base_value = long_values[long_index - 1]
-                    current_value = short_values[short_index - 1]
-                match_cost = costs[short_index - 1, long_index - 1] + abs(
-                    base_value + shift - current_value
-                )
-                if np.isfinite(match_cost) and match_cost <= skip_cost:
-                    costs[short_index, long_index] = match_cost
-                    take[short_index, long_index] = 1
-                else:
-                    costs[short_index, long_index] = skip_cost
-        matches: dict[int, int] = {}
-        short_index, long_index = short_count, long_count
-        while short_index > 0 and long_index > 0:
-            if take[short_index, long_index]:
-                if baseline_shorter:
-                    matches[short_index - 1] = long_index - 1
-                else:
-                    matches[long_index - 1] = short_index - 1
-                short_index -= 1
-                long_index -= 1
-            else:
-                long_index -= 1
-        return matches, float(costs[short_count, long_count])
-
-    candidates = {0.0}
-    candidates.update(
-        round(current_value - baseline_value, 6)
-        for baseline_value in baseline_u
-        for current_value in current_u
+    match_result = match_normalized_slots(
+        baseline_u,
+        current_u,
+        normalized_pitch=pitch,
     )
-    best_matches: dict[int, int] = {}
-    best_shift = 0.0
-    best_rank: tuple[float, float] | None = None
-    for shift in candidates:
-        matches, distance = monotonic_alignment(shift)
-        rank = (distance, abs(shift))
-        if best_rank is None or rank < best_rank:
-            best_rank, best_matches, best_shift = rank, matches, shift
-    if best_matches:
-        best_shift = float(
-            np.median(
-                np.asarray(
-                    [
-                        current_u[current_index] - baseline_u[baseline_index]
-                        for baseline_index, current_index in best_matches.items()
-                    ],
-                    dtype=np.float32,
-                )
-            )
-        )
-    return best_matches, best_shift, pitch
-
-
+    return (
+        match_result.matches,
+        match_result.normalized_shift,
+        pitch,
+        match_result.strategy,
+        {
+            "baseline_span": match_result.baseline_span,
+            "current_span": match_result.current_span,
+            "left_endpoint_shift": match_result.left_endpoint_shift,
+            "right_endpoint_shift": match_result.right_endpoint_shift,
+        },
+    )
 def _map_bbox(
     bbox: Sequence[float],
     *,
@@ -584,25 +569,33 @@ def compare_group(
     baseline_front = baseline.front_instances
     current_front = current.front_instances
     expected = baseline.expected_front_count
-    matches, shift, pitch = match_slots(
+    matches, shift, pitch, matching_strategy, matching_diagnostics = match_slots(
         baseline_front,
         current_front,
         baseline_image_width=baseline_image_size[0],
         current_image_width=current_image_size[0],
         expected_count=expected,
     )
-    deltas: list[float] = []
+    depth_deltas_by_baseline: list[float | None] = [None] * len(baseline_front)
     for baseline_index, current_index in matches.items():
         baseline_depth = baseline_front[baseline_index].stable_depth_mm
         current_depth = current_front[current_index].stable_depth_mm
         if baseline_depth is not None and current_depth is not None:
-            deltas.append(current_depth - baseline_depth)
+            depth_deltas_by_baseline[baseline_index] = current_depth - baseline_depth
+    deltas = [value for value in depth_deltas_by_baseline if value is not None]
+    depth_outliers = select_positive_depth_outliers(
+        depth_deltas_by_baseline,
+        absolute_threshold_mm=DEPTH_DELTA_THRESHOLD_MM,
+        hard_threshold_mm=HARD_DEPTH_DELTA_THRESHOLD_MM,
+        max_outliers=2,
+    )
     systematic_shift = (
         len(baseline_front) >= 2
         and len(matches) == len(baseline_front)
         and len(deltas) == len(baseline_front)
         and min(deltas) >= SYSTEMATIC_DEPTH_SHIFT_MIN_MM
         and max(deltas) <= SYSTEMATIC_DEPTH_SHIFT_MAX_MM
+        and not depth_outliers.indices
     )
     baseline_complete = len(baseline_front) == expected
     slots: list[SlotComparison] = []
@@ -644,10 +637,12 @@ def compare_group(
             # A matched RGB-D slot with effectively unchanged depth is occupied,
             # regardless of weaker geometry/ordering heuristics.
             status = "occupied_depth_consistent"
+        elif baseline_index in depth_outliers.indices:
+            status = "missing_depth_delta"
         elif systematic_shift:
             status = "occupied_systematic_shift"
         elif depth_delta is not None and depth_delta > DEPTH_DELTA_THRESHOLD_MM:
-            status = "missing_depth_delta"
+            status = "occupied_depth_inlier"
         else:
             status = "occupied"
         original_target = [
@@ -695,7 +690,13 @@ def compare_group(
         slots=slots,
         normalized_x_shift=shift,
         normalized_pitch=pitch,
+        slot_matching_strategy=matching_strategy,
+        slot_matching_diagnostics=matching_diagnostics,
         systematic_depth_shift=systematic_shift,
+        depth_outlier_indices=depth_outliers.indices,
+        depth_outlier_median_mm=depth_outliers.median_mm,
+        depth_outlier_mad_mm=depth_outliers.mad_mm,
+        depth_outlier_cutoff_mm=depth_outliers.cutoff_mm,
     )
 
 
@@ -710,6 +711,7 @@ def analyze_shortage(
     product_name_filter: str | None = None,
     mapping_path: str | Path | None = None,
     sam3_caller: Sam3Caller = call_sam3,
+    shelf_masker: ShelfMasker = apply_shelf_mask,
 ) -> ShortageAnalysis:
     normalized_location = location_id.strip().upper()
     mapping = load_mapping_config(mapping_path)
@@ -718,9 +720,19 @@ def analyze_shortage(
         raise SamShortageError(f"shortage 配置不存在: {normalized_location}")
     baseline_rows = extract_rows(baseline_rgb, baseline_depth_mm, pose_type)
     current_rows = extract_rows(current_rgb, current_depth_mm, pose_type)
+    # Baseline and current use the exact same shelf prompt, thresholds, edge
+    # cleanup and fallback policy before any product prompt is evaluated.
+    apply_shelf_masks_to_rows(baseline_rows, shelf_masker=shelf_masker)
+    apply_shelf_masks_to_rows(current_rows, shelf_masker=shelf_masker)
     image_size = (int(current_rgb.shape[1]), int(current_rgb.shape[0]))
     baseline_size = (int(baseline_rgb.shape[1]), int(baseline_rgb.shape[0]))
-    analysis = ShortageAnalysis(normalized_location, pose_type, image_size)
+    analysis = ShortageAnalysis(
+        normalized_location,
+        pose_type,
+        image_size,
+        baseline_rows=baseline_rows,
+        current_rows=current_rows,
+    )
     requested_name = (product_name_filter or "").strip()
     for level in POSE_LEVELS[pose_type]:
         baseline_row = baseline_rows.get(level)
@@ -1010,6 +1022,68 @@ def full_image_mask(
     return full
 
 
+def save_shelf_preprocessing_artifacts(
+    directory: str | Path,
+    analysis: ShortageAnalysis,
+) -> dict[str, Any]:
+    """Save baseline/current shelf masks and blacked row images for auditing."""
+
+    root = Path(directory)
+    artifact_root = root / "shelf_preprocess"
+    artifact_root.mkdir(parents=True, exist_ok=True)
+
+    def write_image(path: Path, image: np.ndarray) -> None:
+        parameters = (
+            [cv2.IMWRITE_JPEG_QUALITY, 95]
+            if path.suffix.lower() in {".jpg", ".jpeg"}
+            else []
+        )
+        success, encoded = cv2.imencode(path.suffix, np.asarray(image), parameters)
+        if not success:
+            raise OSError(f"无法编码 shelf 预处理图片: {path}")
+        encoded.tofile(path)
+
+    sources: dict[str, dict[str, Any]] = {}
+    for source_name, rows in (
+        ("baseline", analysis.baseline_rows),
+        ("current", analysis.current_rows),
+    ):
+        source_artifacts: dict[str, Any] = {}
+        for level, row in sorted(rows.items(), key=lambda item: item[1].row_index):
+            result = row.shelf_mask_result
+            if result is None:
+                continue
+            prefix = f"{source_name}_row_{row.row_index:02d}_{level}"
+            original_name = f"{prefix}_original.jpg"
+            shelf_mask_name = f"{prefix}_shelf_mask.png"
+            retained_mask_name = f"{prefix}_retained_mask.png"
+            filtered_name = f"{prefix}_filtered.jpg"
+            write_image(
+                artifact_root / original_name,
+                row.source_rgb if row.source_rgb is not None else row.rgb,
+            )
+            write_image(artifact_root / shelf_mask_name, result.shelf_mask)
+            write_image(artifact_root / retained_mask_name, result.retained_mask)
+            write_image(artifact_root / filtered_name, result.filtered_rgb)
+            source_artifacts[level] = {
+                "row_index": row.row_index,
+                "crop_bbox_xywh": list(row.crop_bbox_xywh),
+                "original_rgb": f"shelf_preprocess/{original_name}",
+                "shelf_mask": f"shelf_preprocess/{shelf_mask_name}",
+                "retained_mask": f"shelf_preprocess/{retained_mask_name}",
+                "filtered_rgb": f"shelf_preprocess/{filtered_name}",
+                "diagnostics": result.diagnostics(),
+            }
+        sources[source_name] = source_artifacts
+
+    manifest_name = "shelf_preprocess/result.json"
+    (root / manifest_name).write_text(
+        json.dumps(sources, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return {"manifest": manifest_name, **sources}
+
+
 def analysis_as_dict(analysis: ShortageAnalysis) -> dict[str, Any]:
     """Compact JSON-safe diagnostics without embedding mask pixels."""
 
@@ -1017,6 +1091,20 @@ def analysis_as_dict(analysis: ShortageAnalysis) -> dict[str, Any]:
         "location_id": analysis.location_id,
         "pose_type": analysis.pose_type,
         "image_size": list(analysis.image_size),
+        "shelf_preprocessing": {
+            source_name: {
+                level: (
+                    row.shelf_mask_result.diagnostics()
+                    if row.shelf_mask_result is not None
+                    else None
+                )
+                for level, row in rows.items()
+            }
+            for source_name, rows in (
+                ("baseline", analysis.baseline_rows),
+                ("current", analysis.current_rows),
+            )
+        },
         "findings": [
             {"shortage_product_name": name}
             for name in analysis.missing_product_names
@@ -1029,7 +1117,25 @@ def analysis_as_dict(analysis: ShortageAnalysis) -> dict[str, Any]:
                 "expected_front_count": comparison.expected_front_count,
                 "baseline_front_count": len(comparison.baseline.front_instances),
                 "current_front_count": len(comparison.current.front_instances),
+                "normalized_x_shift": round(comparison.normalized_x_shift, 6),
+                "normalized_pitch": round(comparison.normalized_pitch, 6),
+                "slot_matching_strategy": comparison.slot_matching_strategy,
+                "slot_matching_diagnostics": {
+                    key: (round(value, 6) if isinstance(value, float) else value)
+                    for key, value in comparison.slot_matching_diagnostics.items()
+                },
                 "systematic_depth_shift": comparison.systematic_depth_shift,
+                "depth_outlier_filter": {
+                    "strategy": "group_median_mad_and_largest_gap",
+                    "max_outliers": 2,
+                    "hard_threshold_mm": HARD_DEPTH_DELTA_THRESHOLD_MM,
+                    "median_mm": comparison.depth_outlier_median_mm,
+                    "mad_mm": comparison.depth_outlier_mad_mm,
+                    "cutoff_mm": round(comparison.depth_outlier_cutoff_mm, 2),
+                    "selected_slot_indices": [
+                        index + 1 for index in comparison.depth_outlier_indices
+                    ],
+                },
                 "slots": [
                     {
                         "slot_index": slot.slot_index,

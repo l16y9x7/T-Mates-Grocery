@@ -34,8 +34,10 @@ if __package__ and __package__.startswith("perception."):
     from ..initial_scan import InitialScanError, load_initial_scan
     from .sam_shortage_pipeline import (
         SamShortageError,
+        ShortageAnalysis,
         analysis_as_dict,
         analyze_shortage,
+        save_shelf_preprocessing_artifacts,
     )
     from .comparison_based import ComparisonConfig, detect_shortage
     from .comparison_based.qwen_review import (
@@ -74,8 +76,10 @@ else:
     from row_detection import RowDetectionConfig, RowDetectionResult, detect_rows
     from sam_shortage_pipeline import (
         SamShortageError,
+        ShortageAnalysis,
         analysis_as_dict,
         analyze_shortage,
+        save_shelf_preprocessing_artifacts,
     )
 
 
@@ -615,6 +619,7 @@ def inspect_shortage_sam_images(
             current_depth_mm=current_depth_mm,
             response=response,
             analysis=analysis_as_dict(analysis),
+            shortage_analysis=analysis,
         )
     except OSError as error:
         raise HTTPException(
@@ -634,6 +639,7 @@ def save_sam_shortage_debug_artifacts(
     current_depth_mm: np.ndarray,
     response: InspectApiResponse,
     analysis: dict[str, object],
+    shortage_analysis: ShortageAnalysis,
 ) -> Path:
     """Persist the exact formal SHORTAGE RGB-D inputs and slot result."""
 
@@ -667,8 +673,19 @@ def save_sam_shortage_debug_artifacts(
     write_image("current_rgb.jpg", current)
     np.save(directory / "baseline_depth_mm.npy", baseline_depth_mm, allow_pickle=False)
     np.save(directory / "current_depth_mm.npy", current_depth_mm, allow_pickle=False)
+    shelf_artifacts = save_shelf_preprocessing_artifacts(
+        directory,
+        shortage_analysis,
+    )
     saved_result = response.model_dump(mode="json")
     saved_result["sam_shortage_analysis"] = analysis
+    saved_result["artifacts"] = {
+        "baseline_rgb": "baseline_rgb.jpg",
+        "baseline_depth_mm": "baseline_depth_mm.npy",
+        "current_rgb": "current_rgb.jpg",
+        "current_depth_mm": "current_depth_mm.npy",
+        "shelf_preprocessing": shelf_artifacts,
+    }
     (directory / "result.json").write_text(
         json.dumps(saved_result, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",

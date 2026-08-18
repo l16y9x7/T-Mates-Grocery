@@ -35,9 +35,11 @@ if __package__ and __package__.startswith("perception."):
     from ...initial_scan import InitialScanError, load_initial_scan
     from ...inspect.sam_shortage_pipeline import (
         SamShortageError,
+        ShortageAnalysis,
         analysis_as_dict,
         analyze_shortage,
         full_image_mask,
+        save_shelf_preprocessing_artifacts,
         select_place_references,
     )
     from ...row_detection import (
@@ -60,9 +62,11 @@ else:
     from initial_scan import InitialScanError, load_initial_scan
     from sam_shortage_pipeline import (
         SamShortageError,
+        ShortageAnalysis,
         analysis_as_dict,
         analyze_shortage,
         full_image_mask,
+        save_shelf_preprocessing_artifacts,
         select_place_references,
     )
     from row_detection import (
@@ -790,7 +794,7 @@ def save_sam_shortage_place_artifacts(
     current_rgb: np.ndarray,
     current_depth_mm: np.ndarray,
     reference_masks: Sequence[np.ndarray],
-    analysis: dict[str, Any],
+    analysis: ShortageAnalysis,
 ) -> None:
     """Persist the formal SAM3 shortage locate result in inspect-style form."""
 
@@ -800,6 +804,7 @@ def save_sam_shortage_place_artifacts(
     _write_artifact_depth(directory / "baseline_depth_mm.npy", baseline_depth_mm)
     _write_artifact_image(directory / "current_rgb.jpg", current_rgb)
     _write_artifact_depth(directory / "current_depth_mm.npy", current_depth_mm)
+    shelf_artifacts = save_shelf_preprocessing_artifacts(directory, analysis)
     _write_artifact_json(
         directory / "rgbd.json",
         {
@@ -853,8 +858,9 @@ def save_sam_shortage_place_artifacts(
         "sam3_mask": mask_names,
         "mask_coordinate_system": "current_rgb",
         "bbox_format": ["x1", "y1", "x2", "y2"],
+        "shelf_preprocessing": shelf_artifacts,
     }
-    saved_result["shortage_analysis"] = analysis
+    saved_result["shortage_analysis"] = analysis_as_dict(analysis)
     _write_artifact_json(directory / "result.json", saved_result)
     logger.info(
         "SAM3 shortage Place Locate artifacts saved: directory=%s product=%s",
@@ -1699,7 +1705,7 @@ def locate_shortage_place_from_rgbd(
             current_rgb=current_rgb,
             current_depth_mm=current_depth_mm,
             reference_masks=full_masks,
-            analysis=analysis_as_dict(analysis),
+            analysis=analysis,
         )
     except OSError as error:
         raise HTTPException(

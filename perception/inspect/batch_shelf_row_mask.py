@@ -5,15 +5,13 @@ Run from the perception directory::
     python inspect/batch_shelf_row_mask.py --workers 4 --overwrite
 
 For every baseline/current row crop in ``real_shortage_regression`` the script
-calls SAM3 with the ``shelf`` prompt, splits every returned mask into connected
-components, and keeps the largest component that:
-
-* has pixels on both the left and right sides of the image center, and
-* has most of its pixels in the lower half of the row image.
-
-Other non-red components wider than 10% of the image and not touching either
-horizontal edge are merged into the primary component before the retained ROI
-is constructed.
+calls SAM3 with the ``shelf`` prompt and splits every returned mask into
+connected components.  The only components removed are narrow side fragments:
+they must touch or lie within 2% (at least 10 px) of the left or right image
+edge and their bottom-edge span must cover less than 30% of the image width.
+The cleaned union is accepted only when one connected component spans more
+than 60% of the image width; otherwise the output falls back to the
+complete row image.
 
 The selected binary mask and the RGB image with all other pixels set to black
 are written under ``test_data/real_shortage_shelf_rows``.  For every image
@@ -43,11 +41,12 @@ if str(PERCEPTION_ROOT) not in sys.path:
     sys.path.insert(0, str(PERCEPTION_ROOT))
 
 from test_web import server as web_server  # noqa: E402
+import shelf_mask as shelf_mask_core  # noqa: E402
 
 
 DEFAULT_DATA_ROOT = PERCEPTION_ROOT / "test_data" / "real_shortage_regression"
 DEFAULT_OUTPUT_ROOT = PERCEPTION_ROOT / "test_data" / "real_shortage_shelf_rows"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 PRINT_LOCK = threading.Lock()
 
 
@@ -151,17 +150,14 @@ def component_candidates(
     sam_result: dict[str, Any],
     rgb: np.ndarray,
     *,
-    min_lower_half_ratio: float,
-    min_merge_width_ratio: float,
-    max_red_pixel_ratio: float,
+    max_edge_component_width_ratio: float,
+    edge_touch_tolerance_ratio: float = 0.02,
+    edge_touch_min_tolerance_px: int = 10,
 ) -> list[dict[str, Any]]:
     height, width = rgb.shape[:2]
-    center_x = width / 2.0
-    hsv = cv2.cvtColor(rgb, cv2.COLOR_BGR2HSV)
-    red_pixels = (
-        ((hsv[:, :, 0] <= 10) | (hsv[:, :, 0] >= 170))
-        & (hsv[:, :, 1] >= 80)
-        & (hsv[:, :, 2] >= 50)
+    edge_touch_tolerance_px = max(
+        int(edge_touch_min_tolerance_px),
+        int(round(float(width) * edge_touch_tolerance_ratio)),
     )
     candidates: list[dict[str, Any]] = []
 
@@ -188,19 +184,21 @@ def component_candidates(
             if area <= 0:
                 continue
             component = labels == component_index
-            lower_pixels = int(np.count_nonzero(component[height // 2 :, :]))
-            lower_half_ratio = float(lower_pixels) / float(area)
             right = x + component_width
-            crosses_image_center = x < center_x < right
             width_ratio = float(component_width) / float(width)
-            touches_horizontal_edge = x <= 0 or right >= width
-            red_pixel_ratio = float(np.count_nonzero(red_pixels & component)) / float(
-                area
-            )
-            merge_eligible = (
-                width_ratio > min_merge_width_ratio
-                and not touches_horizontal_edge
-                and red_pixel_ratio < max_red_pixel_ratio
+            bottom_y = int(np.flatnonzero(np.any(component, axis=1)).max())
+            bottom_x = np.flatnonzero(component[bottom_y, :])
+            bottom_edge_left = int(bottom_x.min())
+            bottom_edge_right = int(bottom_x.max()) + 1
+            bottom_edge_width = bottom_edge_right - bottom_edge_left
+            bottom_edge_width_ratio = float(bottom_edge_width) / float(width)
+            left_edge_gap_px = max(0, x)
+            right_edge_gap_px = max(0, width - right)
+            touches_left_edge = left_edge_gap_px <= edge_touch_tolerance_px
+            touches_right_edge = right_edge_gap_px <= edge_touch_tolerance_px
+            removed_edge_sliver = (
+                (touches_left_edge or touches_right_edge)
+                and bottom_edge_width_ratio < max_edge_component_width_ratio
             )
             candidates.append(
                 {
@@ -214,20 +212,54 @@ def component_candidates(
                     "area_px": area,
                     "bbox_xywh": [x, y, component_width, component_height],
                     "width_ratio": round(width_ratio, 6),
-                    "lower_half_pixels": lower_pixels,
-                    "lower_half_ratio": round(lower_half_ratio, 6),
-                    "red_pixel_ratio": round(red_pixel_ratio, 6),
-                    "touches_horizontal_edge": touches_horizontal_edge,
-                    "crosses_image_center": crosses_image_center,
-                    "merge_eligible": merge_eligible,
-                    "valid": (
-                        crosses_image_center
-                        and lower_half_ratio >= min_lower_half_ratio
-                    ),
+                    "bottom_edge_y": bottom_y,
+                    "bottom_edge_x_range": [bottom_edge_left, bottom_edge_right],
+                    "bottom_edge_width_px": bottom_edge_width,
+                    "bottom_edge_width_ratio": round(bottom_edge_width_ratio, 6),
+                    "edge_touch_tolerance_px": edge_touch_tolerance_px,
+                    "left_edge_gap_px": left_edge_gap_px,
+                    "right_edge_gap_px": right_edge_gap_px,
+                    "touches_left_edge": touches_left_edge,
+                    "touches_right_edge": touches_right_edge,
+                    "removed_edge_sliver": removed_edge_sliver,
+                    "kept": not removed_edge_sliver,
                     "mask": component,
                 }
             )
     return candidates
+
+
+def spanning_components(
+    mask: np.ndarray,
+    *,
+    min_width_ratio: float,
+) -> list[dict[str, Any]]:
+    """Return union-mask components wider than the requested image fraction."""
+
+    binary = np.where(np.asarray(mask) > 0, 1, 0).astype(np.uint8)
+    height, width = binary.shape
+    component_count, _labels, stats, _ = cv2.connectedComponentsWithStats(
+        binary,
+        connectivity=8,
+    )
+    results: list[dict[str, Any]] = []
+    for component_index in range(1, component_count):
+        x = int(stats[component_index, cv2.CC_STAT_LEFT])
+        y = int(stats[component_index, cv2.CC_STAT_TOP])
+        component_width = int(stats[component_index, cv2.CC_STAT_WIDTH])
+        component_height = int(stats[component_index, cv2.CC_STAT_HEIGHT])
+        area = int(stats[component_index, cv2.CC_STAT_AREA])
+        width_ratio = float(component_width) / max(1.0, float(width))
+        if width_ratio > min_width_ratio:
+            results.append(
+                {
+                    "component_index": component_index,
+                    "bbox_xywh": [x, y, component_width, component_height],
+                    "area_px": area,
+                    "width_ratio": round(width_ratio, 6),
+                }
+            )
+    return sorted(results, key=lambda item: int(item["area_px"]), reverse=True)
 
 
 def process_row(
@@ -238,9 +270,10 @@ def process_row(
     detection_threshold: float,
     retry_threshold: float,
     mask_threshold: float,
-    min_lower_half_ratio: float,
-    min_merge_width_ratio: float,
-    max_red_pixel_ratio: float,
+    max_edge_component_width_ratio: float,
+    edge_touch_tolerance_ratio: float,
+    edge_touch_min_tolerance_px: int,
+    min_spanning_component_width_ratio: float,
     expansion_px: int,
     overwrite: bool,
 ) -> dict[str, Any]:
@@ -265,81 +298,47 @@ def process_row(
     row_root = Path(task["row_root"])
     rgb_path = web_server.resolve_descendant(row_root, str(row["rgb"]))
     rgb = read_image(rgb_path)
-    attempts: list[dict[str, Any]] = []
-    all_candidates: list[dict[str, Any]] = []
-    selected: dict[str, Any] | None = None
-    merged_candidates: list[dict[str, Any]] = []
-
     thresholds = [detection_threshold]
     if retry_threshold < detection_threshold:
         thresholds.append(retry_threshold)
-    for threshold in thresholds:
-        sam_result = web_server.call_sam3_image_path(
-            rgb_path,
-            prompt,
-            threshold=threshold,
-            mask_threshold=mask_threshold,
-        )
-        candidates = component_candidates(
-            sam_result,
-            rgb,
-            min_lower_half_ratio=min_lower_half_ratio,
-            min_merge_width_ratio=min_merge_width_ratio,
-            max_red_pixel_ratio=max_red_pixel_ratio,
-        )
-        valid = [candidate for candidate in candidates if candidate["valid"]]
-        attempts.append(
-            {
-                "threshold": threshold,
-                "instance_count": len(sam_result.get("instances", [])),
-                "component_count": len(candidates),
-                "valid_component_count": len(valid),
-            }
-        )
-        all_candidates = candidates
-        if valid:
-            selected = max(valid, key=lambda candidate: int(candidate["area_px"]))
-            merged_candidates = [
-                candidate
-                for candidate in candidates
-                if candidate is selected or candidate["merge_eligible"]
-            ]
-            break
 
-    shelf_mask = np.zeros(rgb.shape[:2], dtype=np.uint8)
-    for candidate in merged_candidates:
-        shelf_mask[candidate["mask"]] = 255
-    retained_mask = build_retained_roi_mask(
-        shelf_mask,
+    def call_sam3(
+        _image: np.ndarray,
+        sam_prompt: str,
+        threshold: float,
+        sam_mask_threshold: float,
+    ) -> dict[str, Any]:
+        return web_server.call_sam3_image_path(
+            rgb_path,
+            sam_prompt,
+            threshold=threshold,
+            mask_threshold=sam_mask_threshold,
+        )
+
+    shelf_result = shelf_mask_core.apply_shelf_mask(
+        rgb,
+        prompt=prompt,
+        detection_thresholds=thresholds,
+        mask_threshold=mask_threshold,
+        max_edge_component_width_ratio=max_edge_component_width_ratio,
+        edge_touch_tolerance_ratio=edge_touch_tolerance_ratio,
+        edge_touch_min_tolerance_px=edge_touch_min_tolerance_px,
+        min_spanning_component_width_ratio=min_spanning_component_width_ratio,
         expansion_px=expansion_px,
+        sam3_caller=call_sam3,
     )
-    filtered_rgb = np.zeros_like(rgb)
-    filtered_rgb[retained_mask > 0] = rgb[retained_mask > 0]
+    attempts = shelf_result.attempts
+    fallback_to_full_image = shelf_result.fallback_to_full_image
+    shelf_mask = shelf_result.shelf_mask
+    retained_mask = shelf_result.retained_mask
+    filtered_rgb = shelf_result.filtered_rgb
+    serializable_candidates = shelf_result.components
+    selected_serializable = shelf_result.selected_component
+    kept_serializable = shelf_result.kept_components
 
     write_image(output_directory / "shelf_mask.png", shelf_mask)
     write_image(output_directory / "retained_mask.png", retained_mask)
     write_image(output_directory / "shelf_filtered.jpg", filtered_rgb)
-    serializable_candidates = [
-        {key: value for key, value in candidate.items() if key != "mask"}
-        for candidate in all_candidates
-    ]
-    selected_serializable = (
-        {key: value for key, value in selected.items() if key != "mask"}
-        if selected is not None
-        else None
-    )
-    merged_serializable = [
-        {
-            "instance_index": candidate["instance_index"],
-            "component_index": candidate["component_index"],
-            "bbox_xywh": candidate["bbox_xywh"],
-            "area_px": candidate["area_px"],
-            "width_ratio": candidate["width_ratio"],
-            "red_pixel_ratio": candidate["red_pixel_ratio"],
-            "is_primary": candidate is selected,
-        }
-        for candidate in merged_candidates
-    ]
     result = {
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -349,25 +348,34 @@ def process_row(
         "row_index": row_index,
         "level": level,
         "prompt": prompt,
-        "status": "success" if selected is not None else "no_valid_component",
+        "status": "fallback_full_image" if fallback_to_full_image else "success",
         "source_rgb": str(rgb_path.resolve()),
         "image_size": [rgb.shape[1], rgb.shape[0]],
         "selection_rule": {
-            "must_cross_image_center": True,
-            "min_lower_half_ratio": min_lower_half_ratio,
-            "ranking": "largest_valid_connected_component",
             "mask_threshold": mask_threshold,
-            "merge_rule": {
-                "min_width_ratio_exclusive": min_merge_width_ratio,
-                "must_not_touch_horizontal_edge": True,
-                "max_red_pixel_ratio_exclusive": max_red_pixel_ratio,
+            "edge_component_removal": {
+                "must_touch_or_be_near_left_or_right_edge": True,
+                "edge_touch_tolerance_ratio": edge_touch_tolerance_ratio,
+                "edge_touch_min_tolerance_px": edge_touch_min_tolerance_px,
+                "width_measurement": "bottommost_mask_row_horizontal_span",
+                "max_bottom_edge_width_ratio_exclusive": (
+                    max_edge_component_width_ratio
+                ),
             },
+            "acceptance": {
+                "connected_component_min_width_ratio_exclusive": (
+                    min_spanning_component_width_ratio
+                )
+            },
+            "fallback": "full_image",
             "retained_region": "above_per_column_max_y",
             "expansion_px": expansion_px,
         },
         "attempts": attempts,
+        "fallback_to_full_image": fallback_to_full_image,
         "selected_component": selected_serializable,
-        "merged_components": merged_serializable,
+        "kept_components": kept_serializable,
+        "merged_components": kept_serializable,
         "components": serializable_candidates,
         "artifacts": {
             "shelf_mask": "shelf_mask.png",
@@ -395,9 +403,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--retry-threshold", type=float, default=0.25)
     parser.add_argument("--mask-threshold", type=float, default=0.35)
-    parser.add_argument("--min-lower-half-ratio", type=float, default=0.5)
-    parser.add_argument("--min-merge-width-ratio", type=float, default=0.1)
-    parser.add_argument("--max-red-pixel-ratio", type=float, default=0.5)
+    parser.add_argument("--max-edge-component-width-ratio", type=float, default=0.30)
+    parser.add_argument("--edge-touch-tolerance-ratio", type=float, default=0.02)
+    parser.add_argument("--edge-touch-min-tolerance-px", type=int, default=10)
+    parser.add_argument(
+        "--min-spanning-component-width-ratio",
+        type=float,
+        default=0.60,
+    )
     parser.add_argument("--expansion-px", type=int, default=10)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
@@ -405,16 +418,18 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if not 0.0 <= args.min_lower_half_ratio <= 1.0:
-        raise ValueError("--min-lower-half-ratio 必须在 [0, 1] 内")
     if args.expansion_px < 0:
         raise ValueError("--expansion-px 不能小于 0")
     if not 0.0 <= args.mask_threshold <= 1.0:
         raise ValueError("--mask-threshold 必须在 [0, 1] 内")
-    if not 0.0 <= args.min_merge_width_ratio <= 1.0:
-        raise ValueError("--min-merge-width-ratio 必须在 [0, 1] 内")
-    if not 0.0 <= args.max_red_pixel_ratio <= 1.0:
-        raise ValueError("--max-red-pixel-ratio 必须在 [0, 1] 内")
+    if not 0.0 <= args.max_edge_component_width_ratio <= 1.0:
+        raise ValueError("--max-edge-component-width-ratio 必须在 [0, 1] 内")
+    if not 0.0 <= args.edge_touch_tolerance_ratio <= 1.0:
+        raise ValueError("--edge-touch-tolerance-ratio 必须在 [0, 1] 内")
+    if args.edge_touch_min_tolerance_px < 0:
+        raise ValueError("--edge-touch-min-tolerance-px 不能小于 0")
+    if not 0.0 <= args.min_spanning_component_width_ratio <= 1.0:
+        raise ValueError("--min-spanning-component-width-ratio 必须在 [0, 1] 内")
     if not 0.0 <= args.retry_threshold <= args.threshold <= 1.0:
         raise ValueError("SAM3 threshold 必须满足 0 <= retry <= threshold <= 1")
 
@@ -471,9 +486,14 @@ def main() -> int:
                 detection_threshold=args.threshold,
                 retry_threshold=args.retry_threshold,
                 mask_threshold=args.mask_threshold,
-                min_lower_half_ratio=args.min_lower_half_ratio,
-                min_merge_width_ratio=args.min_merge_width_ratio,
-                max_red_pixel_ratio=args.max_red_pixel_ratio,
+                max_edge_component_width_ratio=(
+                    args.max_edge_component_width_ratio
+                ),
+                edge_touch_tolerance_ratio=args.edge_touch_tolerance_ratio,
+                edge_touch_min_tolerance_px=args.edge_touch_min_tolerance_px,
+                min_spanning_component_width_ratio=(
+                    args.min_spanning_component_width_ratio
+                ),
                 expansion_px=args.expansion_px,
                 overwrite=args.overwrite,
             ): task
