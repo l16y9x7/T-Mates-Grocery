@@ -14,11 +14,9 @@ than 60% of the image width and the final retained ROI covers at least 60%
 of the row image; otherwise the output falls back to the complete row image.
 
 The selected binary mask and the RGB image with all other pixels set to black
-are written under ``test_data/real_shortage_shelf_rows``.  For every image
-column covered by the selected shelf component, pixels above that column's
-maximum mask y are retained; the retained ROI is then expanded by 10 px and
-everything else is set to black.  This is an offline batch utility; it is not
-used by the formal inspection endpoint.
+are written under ``test_data/real_shortage_shelf_rows``.  The retained ROI is
+one rectangle below the mask's representative lower edge, expanded upward by
+10 px; everything else is set to black.  This is an offline batch utility.
 """
 
 from __future__ import annotations
@@ -46,7 +44,7 @@ import shelf_mask as shelf_mask_core  # noqa: E402
 
 DEFAULT_DATA_ROOT = PERCEPTION_ROOT / "test_data" / "real_shortage_regression"
 DEFAULT_OUTPUT_ROOT = PERCEPTION_ROOT / "test_data" / "real_shortage_shelf_rows"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 10
 PRINT_LOCK = threading.Lock()
 
 
@@ -111,7 +109,7 @@ def build_retained_roi_mask(
     *,
     expansion_px: int,
 ) -> np.ndarray:
-    """Keep pixels above the shelf component's per-column bottom boundary."""
+    """Keep one rectangle below the mask's representative lower edge."""
 
     component = np.asarray(shelf_component_mask) > 0
     height, width = component.shape
@@ -119,30 +117,14 @@ def build_retained_roi_mask(
     supported_x = np.flatnonzero(np.any(component, axis=0))
     if supported_x.size == 0:
         return retained
-
-    bottom_y = np.asarray(
+    lower_edge_y = np.asarray(
         [int(np.flatnonzero(component[:, x]).max()) for x in supported_x],
         dtype=np.float32,
     )
-    left = int(supported_x.min())
-    right = int(supported_x.max())
-    span_x = np.arange(left, right + 1, dtype=np.float32)
-    interpolated_bottom = np.rint(
-        np.interp(span_x, supported_x.astype(np.float32), bottom_y)
-    ).astype(np.int32)
-    for x, boundary_y in zip(range(left, right + 1), interpolated_bottom):
-        retained[: min(height, int(boundary_y) + 1), x] = 255
-
-    if expansion_px > 0:
-        kernel_size = expansion_px * 2 + 1
-        retained = cv2.dilate(
-            retained,
-            cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE,
-                (kernel_size, kernel_size),
-            ),
-            iterations=1,
-        )
+    left = max(0, int(supported_x.min()) - expansion_px)
+    right = min(width, int(supported_x.max()) + 1 + expansion_px)
+    top = max(0, int(round(float(np.median(lower_edge_y)))) - expansion_px)
+    retained[top:height, left:right] = 255
     return retained
 
 
@@ -376,12 +358,9 @@ def process_row(
                 "connected_component_min_width_ratio_exclusive": (
                     min_spanning_component_width_ratio
                 ),
-                "retained_area_min_ratio_inclusive": (
-                    shelf_mask_core.DEFAULT_MIN_RETAINED_AREA_RATIO
-                ),
             },
             "fallback": "full_image",
-            "retained_region": "above_per_column_max_y",
+            "retained_region": "full_height_band_between_left_and_right_shelf_boundaries",
             "expansion_px": expansion_px,
         },
         "attempts": attempts,

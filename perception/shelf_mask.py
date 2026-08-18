@@ -32,7 +32,6 @@ DEFAULT_MAX_EDGE_BOTTOM_WIDTH_RATIO = 0.30
 DEFAULT_EDGE_TOUCH_TOLERANCE_RATIO = 0.02
 DEFAULT_EDGE_TOUCH_MIN_TOLERANCE_PX = 10
 DEFAULT_MIN_SPANNING_WIDTH_RATIO = 0.60
-DEFAULT_MIN_RETAINED_AREA_RATIO = 0.60
 DEFAULT_RETAINED_EXPANSION_PX = 10
 
 ShelfSam3Caller = Callable[[np.ndarray, str, float, float], dict[str, Any]]
@@ -122,39 +121,50 @@ def decode_mask(value: object, image_shape: tuple[int, int]) -> np.ndarray:
 
 
 def build_retained_roi_mask(
-    shelf_component_mask: np.ndarray,
+    image_shape: tuple[int, int],
+    removed_edge_components: Sequence[dict[str, Any]],
+    selected_component: dict[str, Any],
     *,
     expansion_px: int = DEFAULT_RETAINED_EXPANSION_PX,
 ) -> np.ndarray:
-    """Keep pixels above the shelf component's per-column bottom boundary."""
+    """Keep a full-height shelf band without changing the image dimensions."""
 
-    component = np.asarray(shelf_component_mask) > 0
-    height, width = component.shape
-    retained = np.zeros((height, width), dtype=np.uint8)
-    supported_x = np.flatnonzero(np.any(component, axis=0))
-    if supported_x.size == 0:
-        return retained
-
-    bottom_y = np.asarray(
-        [int(np.flatnonzero(component[:, x]).max()) for x in supported_x],
-        dtype=np.float32,
+    height, width = image_shape
+    selected_bbox = selected_component.get("bbox_xywh") or [0, 0, width, height]
+    selected_left = max(0, min(width, int(selected_bbox[0])))
+    selected_right = max(
+        selected_left,
+        min(width, selected_left + int(selected_bbox[2])),
     )
-    left = int(supported_x.min())
-    right = int(supported_x.max())
-    span_x = np.arange(left, right + 1, dtype=np.float32)
-    interpolated_bottom = np.rint(
-        np.interp(span_x, supported_x.astype(np.float32), bottom_y)
-    ).astype(np.int32)
-    for x, boundary_y in zip(range(left, right + 1), interpolated_bottom):
-        retained[: min(height, int(boundary_y) + 1), x] = 255
+    removed_left: list[int] = []
+    removed_right: list[int] = []
+    for candidate in removed_edge_components:
+        edge_range = candidate.get("bottom_edge_x_range") or [0, width]
+        left = max(0, min(width, int(edge_range[0])))
+        right = max(left, min(width, int(edge_range[1])))
+        if candidate.get("touches_left_edge"):
+            removed_left.append(right)
+        if candidate.get("touches_right_edge"):
+            removed_right.append(left)
 
-    if expansion_px > 0:
-        size = expansion_px * 2 + 1
-        retained = cv2.dilate(
-            retained,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size)),
-            iterations=1,
-        )
+    # Rejected edge masks define the inner deletion boundary.  When a side
+    # has no rejected mask, use the main shelf component and preserve a small
+    # outward margin.  The output remains the original HxW image.
+    keep_left = (
+        max(removed_left)
+        if removed_left
+        else max(0, selected_left - expansion_px)
+    )
+    keep_right = (
+        min(removed_right)
+        if removed_right
+        else min(width, selected_right + expansion_px)
+    )
+    retained = np.zeros((height, width), dtype=np.uint8)
+    if keep_left < keep_right:
+        retained[:, keep_left:keep_right] = 255
+    else:
+        retained[:, :] = 255
     return retained
 
 
@@ -295,7 +305,6 @@ def apply_shelf_mask(
     min_spanning_component_width_ratio: float = (
         DEFAULT_MIN_SPANNING_WIDTH_RATIO
     ),
-    min_retained_area_ratio: float = DEFAULT_MIN_RETAINED_AREA_RATIO,
     expansion_px: int = DEFAULT_RETAINED_EXPANSION_PX,
     sam3_caller: ShelfSam3Caller = call_sam3_shelf,
 ) -> ShelfMaskResult:
@@ -326,14 +335,6 @@ def apply_shelf_mask(
                 merged,
                 min_width_ratio=min_spanning_component_width_ratio,
             )
-            candidate_retained = build_retained_roi_mask(
-                merged,
-                expansion_px=expansion_px,
-            )
-            retained_area_ratio = float(np.count_nonzero(candidate_retained)) / max(
-                1.0,
-                float(candidate_retained.size),
-            )
             attempts.append(
                 {
                     "threshold": float(threshold),
@@ -342,18 +343,11 @@ def apply_shelf_mask(
                     "removed_edge_sliver_count": len(candidates) - len(kept),
                     "kept_component_count": len(kept),
                     "spanning_component_count": len(spanning),
-                    "retained_area_ratio": round(retained_area_ratio, 6),
-                    "retained_area_sufficient": (
-                        retained_area_ratio >= min_retained_area_ratio
-                    ),
                 }
             )
             final_candidates = candidates
-            if spanning and retained_area_ratio >= min_retained_area_ratio:
-                selected = {
-                    **spanning[0],
-                    "retained_area_ratio": round(retained_area_ratio, 6),
-                }
+            if spanning:
+                selected = spanning[0]
                 final_kept = kept
                 final_mask = merged
                 break
@@ -373,9 +367,16 @@ def apply_shelf_mask(
     else:
         shelf_mask = final_mask
         retained_mask = build_retained_roi_mask(
-            shelf_mask,
+            image.shape[:2],
+            [item for item in final_candidates if item["removed_edge_sliver"]],
+            selected,
             expansion_px=expansion_px,
         )
+        # A rejected left/right cross-section is a full-height exclusion.
+        # Do not let another overlapping SAM instance paint that column back
+        # into the merged shelf mask.
+        shelf_mask = shelf_mask.copy()
+        shelf_mask[retained_mask == 0] = 0
         filtered = np.zeros_like(image)
         filtered[retained_mask > 0] = image[retained_mask > 0]
 
@@ -400,7 +401,6 @@ def apply_shelf_mask(
             "min_spanning_width_ratio_exclusive": (
                 min_spanning_component_width_ratio
             ),
-            "min_retained_area_ratio_inclusive": min_retained_area_ratio,
-            "retained_expansion_px": expansion_px,
+            "main_shelf_side_outward_margin_px": expansion_px,
         },
     )
