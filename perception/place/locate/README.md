@@ -77,7 +77,7 @@ mask 都和 `current_image_path` 指向的 RGB 完全同尺寸、同坐标系。
 
 ## 结果与调试产物
 
-每次正式调用 `POST /perception/place/locate` 成功后都会创建一个独立结果目录。默认保存到
+每次正式调用 `POST /perception/place/locate` 都会创建一个独立结果目录。默认保存到
 `place/locate/debug`，可通过 `PLACE_LOCATE_DEBUG_DIR` 指定其它根目录。目录结构为：
 
 ```text
@@ -97,6 +97,8 @@ mask 都和 `current_image_path` 指向的 RGB 完全同尺寸、同坐标系。
 
 `current_reference_crop_*.jpg` 与 `current_reference_mask_*.png` 按响应数组顺序保存，
 来源都是当前 RGB。`result.json` 保留正式响应字段、各槽位深度判定和所有产物路径。
+SHORTAGE 未确认到缺失槽位时仍返回原有错误状态，同时保存输入 RGB-D、`error.json`
+以及 `status` 为 `error` 的 `result.json`，便于复现失败请求。
 Place Locate 不接收 `reference_pose`，也不计算或返回商品 `target_pose`。
 
 `pose_type` 与 inspection 含义一致，正式调用使用 `SHELF_VIEW_UPPER` 或

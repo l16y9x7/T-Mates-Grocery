@@ -469,6 +469,84 @@ class PlaceLocateApiTest(unittest.TestCase):
         self.assertIs(selection.target_slot, large_slot)
         self.assertEqual(selection.direction, "both")
 
+    def test_shortage_locate_failure_still_persists_rgbd_record(self) -> None:
+        height, width = 80, 120
+        baseline_rgb = np.full((height, width, 3), 60, dtype=np.uint8)
+        baseline_depth = np.full((height, width), 900, dtype=np.float32)
+        current_rgb = np.full((height, width, 3), 90, dtype=np.uint8)
+        current_depth = np.full((height, width), 950, dtype=np.float32)
+        scan = InitialScan(
+            inspection_target_id="H1_F_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+            directory=Path("task0/H1_F_L_INSPECT_UPPER"),
+            rgb_path=Path("task0/H1_F_L_INSPECT_UPPER/rgb.jpg"),
+            depth_path=Path("task0/H1_F_L_INSPECT_UPPER/depth_mm.npy"),
+            rgb=baseline_rgb,
+            depth_mm=baseline_depth,
+            metadata={},
+        )
+        request = api.PlaceLocateRequest(
+            task_type="SHORTAGE",
+            product_name="测试商品",
+            location_id="H1_F_L_INSPECT",
+            pose_type="SHELF_VIEW_UPPER",
+        )
+        message = "当前画面没有确认商品缺失槽位: 测试商品"
+
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_root = Path(directory)
+            with (
+                patch.object(api, "load_initial_scan", return_value=scan),
+                patch.object(
+                    api,
+                    "analyze_shortage",
+                    side_effect=api.SamShortageError(message),
+                ),
+                self.assertRaises(api.HTTPException) as raised,
+            ):
+                api.locate_shortage_place_from_rgbd(
+                    request,
+                    current_rgb=current_rgb,
+                    current_depth_mm=current_depth,
+                    artifact_root=artifact_root,
+                )
+
+            self.assertEqual(raised.exception.status_code, 422)
+            artifact_directories = list(artifact_root.iterdir())
+            self.assertEqual(len(artifact_directories), 1)
+            artifact_directory = artifact_directories[0]
+            self.assertTrue(
+                {
+                    "request.json",
+                    "result.json",
+                    "error.json",
+                    "rgbd.json",
+                    "baseline_rgb.jpg",
+                    "baseline_depth_mm.npy",
+                    "current_rgb.jpg",
+                    "current_depth_mm.npy",
+                }.issubset(
+                    {path.name for path in artifact_directory.iterdir()}
+                )
+            )
+            saved_result = json.loads(
+                (artifact_directory / "result.json").read_text(encoding="utf-8")
+            )
+            saved_error = json.loads(
+                (artifact_directory / "error.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(saved_result["status"], "error")
+            self.assertEqual(saved_result["error"]["message"], message)
+            self.assertEqual(saved_error["type"], "sam_shortage_place_failed")
+            self.assertEqual(saved_error["status_code"], 422)
+            np.testing.assert_array_equal(
+                np.load(
+                    artifact_directory / "current_depth_mm.npy",
+                    allow_pickle=False,
+                ),
+                current_depth,
+            )
+
     def test_public_request_matches_inspect_and_captures_current_rgbd(self) -> None:
         required = set(api.PlaceLocateRequest.model_json_schema()["required"])
         self.assertEqual(

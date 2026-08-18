@@ -863,6 +863,94 @@ def save_sam_shortage_place_artifacts(
     )
 
 
+def save_sam_shortage_place_failure_artifacts(
+    directory: Path,
+    *,
+    request: PlaceLocateRequest,
+    baseline_rgb: np.ndarray,
+    baseline_depth_mm: np.ndarray,
+    current_rgb: np.ndarray,
+    current_depth_mm: np.ndarray,
+    baseline_path: Path,
+    error_type: str,
+    error_message: str,
+    status_code: int,
+    analysis: dict[str, Any] | None = None,
+) -> None:
+    """Persist RGB-D inputs when shortage placement cannot select a slot."""
+
+    directory.mkdir(parents=True, exist_ok=True)
+    artifacts = {
+        "baseline_rgb": "baseline_rgb.jpg",
+        "baseline_depth_mm": "baseline_depth_mm.npy",
+        "current_rgb": "current_rgb.jpg",
+        "current_depth_mm": "current_depth_mm.npy",
+        "rgbd": "rgbd.json",
+    }
+    _write_artifact_json(directory / "request.json", request.model_dump(mode="json"))
+    _write_artifact_image(directory / artifacts["baseline_rgb"], baseline_rgb)
+    _write_artifact_depth(
+        directory / artifacts["baseline_depth_mm"],
+        baseline_depth_mm,
+    )
+    _write_artifact_image(directory / artifacts["current_rgb"], current_rgb)
+    _write_artifact_depth(
+        directory / artifacts["current_depth_mm"],
+        current_depth_mm,
+    )
+    _write_artifact_json(
+        directory / artifacts["rgbd"],
+        {
+            "schema_version": 1,
+            "depth_unit": "millimeter",
+            "depth_aligned_to": "matching_rgb",
+            "baseline": {
+                "rgb": artifacts["baseline_rgb"],
+                "depth": artifacts["baseline_depth_mm"],
+                "image_size": [
+                    int(baseline_rgb.shape[1]),
+                    int(baseline_rgb.shape[0]),
+                ],
+            },
+            "current": {
+                "rgb": artifacts["current_rgb"],
+                "depth": artifacts["current_depth_mm"],
+                "image_size": [
+                    int(current_rgb.shape[1]),
+                    int(current_rgb.shape[0]),
+                ],
+            },
+        },
+    )
+
+    error = {
+        "type": error_type,
+        "message": error_message,
+        "status_code": status_code,
+    }
+    saved_result: dict[str, Any] = {
+        "status": "error",
+        "name": request.product_name,
+        "task_type": request.task_type,
+        "location_id": request.location_id,
+        "pose_type": request.pose_type,
+        "image_path": str(baseline_path.resolve()),
+        "current_image_path": str((directory / artifacts["current_rgb"]).resolve()),
+        "error": error,
+        "artifacts": artifacts,
+    }
+    if analysis is not None:
+        saved_result["shortage_analysis"] = analysis
+    _write_artifact_json(directory / "error.json", error)
+    _write_artifact_json(directory / "result.json", saved_result)
+    logger.info(
+        "Failed SAM3 shortage Place Locate artifacts saved: directory=%s product=%s error=%s",
+        directory,
+        request.product_name,
+        error_message,
+    )
+
+
 def validate_registration_quality(registration: RGBDRegistrationResult) -> None:
     """Reject a geometrically weak transform before it can produce a robot mask."""
 
@@ -1528,6 +1616,11 @@ def locate_shortage_place_from_rgbd(
             detail={"type": "initial_scan_error", "message": str(error)},
         ) from error
 
+    artifact_directory = create_place_locate_artifact_directory(
+        request,
+        artifact_root=artifact_root,
+    )
+    analysis = None
     try:
         analysis = analyze_shortage(
             location_id=initial_scan.inspection_target_id,
@@ -1542,6 +1635,29 @@ def locate_shortage_place_from_rgbd(
     except SamShortageError as error:
         message = str(error)
         status_code = 502 if message.startswith("SAM3 ") else 422
+        try:
+            save_sam_shortage_place_failure_artifacts(
+                artifact_directory,
+                request=request,
+                baseline_rgb=initial_scan.rgb,
+                baseline_depth_mm=initial_scan.depth_mm,
+                current_rgb=current_rgb,
+                current_depth_mm=current_depth_mm,
+                baseline_path=initial_scan.rgb_path,
+                error_type="sam_shortage_place_failed",
+                error_message=message,
+                status_code=status_code,
+                analysis=(
+                    analysis_as_dict(analysis)
+                    if analysis is not None
+                    else None
+                ),
+            )
+        except (OSError, TypeError, ValueError, cv2.error):
+            logger.exception(
+                "Failed to persist SAM3 shortage Place Locate error artifacts: directory=%s",
+                artifact_directory,
+            )
         raise HTTPException(
             status_code=status_code,
             detail={"type": "sam_shortage_place_failed", "message": message},
@@ -1563,10 +1679,6 @@ def locate_shortage_place_from_rgbd(
             full_image_mask(instance, selection.current_row, current_rgb.shape)
         )
 
-    artifact_directory = create_place_locate_artifact_directory(
-        request,
-        artifact_root=artifact_root,
-    )
     current_image_path = (artifact_directory / "current_rgb.jpg").resolve()
     response = PlaceLocateResponse(
         name=request.product_name,
