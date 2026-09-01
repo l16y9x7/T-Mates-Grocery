@@ -277,20 +277,9 @@
             <label class="field">
               <span>目标点 target_id</span>
               <select id="navigationTargetPreset" name="target_id_preset" required>
-                <optgroup label="任务点位">
-                  <option value="task_boundary">task_boundary · 任务判定点（与 start 同一点）</option>
-                  <option value="start">start · 起点（与 task_boundary 同一点）</option>
-                  <option value="receipt_viewpoint">receipt_viewpoint · 小票识别点（与 delivery_place 同一点）</option>
-                  <option value="delivery_place">delivery_place · 交付台放货点（与 receipt_viewpoint 同一点）</option>
-                </optgroup>
-                <option value="replenishment_pickup">replenishment_pickup · 补货台取货</option>
-                <optgroup label="货架巡检点">
-                  <option value="H1_INSPECT">H1_INSPECT · 1号点 · 正对货架1</option>
-                  <option value="H12_INSPECT">H12_INSPECT · 2号点 · 货架1/2连接处</option>
-                  <option value="H2_INSPECT">H2_INSPECT · 3号点 · 正对货架2</option>
-                  <option value="H23_INSPECT">H23_INSPECT · 4号点 · 货架2/3连接处</option>
-                  <option value="H3_INSPECT">H3_INSPECT · 5号点 · 正对货架3</option>
-                </optgroup>
+                <option id="navigationTargetsLoading" value="" selected disabled>正在读取运行配置...</option>
+                <optgroup id="taskNavigationTargets" label="任务点位"></optgroup>
+                <optgroup id="inspectionNavigationTargets" label="货架巡检点"></optgroup>
                 <option value="__custom__">自定义 target_id...</option>
               </select>
               <input id="targetId" name="target_id_custom" placeholder="输入自定义 target_id" autocomplete="off" hidden />
@@ -331,6 +320,6 @@
       </dialog>
       <footer><span>8108 UNIFIED TASK SERVICE</span><span id="footerUrl">-</span></footer>
     </main>
-    <script src="/static/app.js?v=20260817-1" defer></script>
+    <script src="/static/app.js?v=20260901-1" defer></script>
   </body>
 </html>

@@ -29,6 +29,9 @@ const shelfLevelCustom = document.querySelector("#shelfLevelCustom");
 const shelfLevelLabel = document.querySelector("#shelfLevelLabel");
 const navigationForm = document.querySelector("#navigationForm");
 const navigationTargetPreset = document.querySelector("#navigationTargetPreset");
+const navigationTargetsLoading = document.querySelector("#navigationTargetsLoading");
+const taskNavigationTargets = document.querySelector("#taskNavigationTargets");
+const inspectionNavigationTargets = document.querySelector("#inspectionNavigationTargets");
 const targetId = document.querySelector("#targetId");
 const gripperForm = document.querySelector("#gripperForm");
 const gripperSubmitButton = document.querySelector("#gripperSubmitButton");
@@ -230,6 +233,44 @@ function updateNavigationTargetCustomField() {
   const usesCustomTarget = navigationTargetPreset.value === CUSTOM_VALUE;
   targetId.hidden = !usesCustomTarget;
   targetId.required = usesCustomTarget;
+}
+
+function applyNavigationTargets(navigationTargets) {
+  const configuredGroups = [
+    [taskNavigationTargets, navigationTargets?.task_points],
+    [inspectionNavigationTargets, navigationTargets?.inspection_points],
+  ];
+  const entries = configuredGroups.flatMap(([, values]) =>
+    Array.isArray(values)
+      ? values.filter((entry) => typeof entry?.target_id === "string" && entry.target_id.trim())
+      : [],
+  );
+  if (!entries.length) return;
+
+  const previouslyLoaded = navigationTargetPreset.dataset.runtimeTargetsLoaded === "true";
+  const previousValue = previouslyLoaded ? navigationTargetPreset.value : null;
+  const seenTargets = new Set();
+  configuredGroups.forEach(([group, values]) => {
+    group.replaceChildren();
+    if (!Array.isArray(values)) return;
+    values.forEach((entry) => {
+      const targetIdValue = typeof entry?.target_id === "string" ? entry.target_id.trim() : "";
+      if (!targetIdValue || seenTargets.has(targetIdValue)) return;
+      seenTargets.add(targetIdValue);
+      const option = document.createElement("option");
+      option.value = targetIdValue;
+      const label = typeof entry.label === "string" ? entry.label.trim() : "";
+      option.textContent = label ? `${targetIdValue} · ${label}` : targetIdValue;
+      group.append(option);
+    });
+  });
+  navigationTargetsLoading?.remove();
+  navigationTargetPreset.dataset.runtimeTargetsLoaded = "true";
+  navigationTargetPreset.value =
+    previousValue && (seenTargets.has(previousValue) || previousValue === CUSTOM_VALUE)
+      ? previousValue
+      : entries[0].target_id.trim();
+  updateNavigationTargetCustomField();
 }
 
 poseTypePreset.addEventListener("change", updatePoseTypeCustomField);
@@ -1190,6 +1231,7 @@ function setRobotIpMessage(message = "", state = "") {
 }
 
 function applyRuntimeConfig(config, updateInput = true) {
+  applyNavigationTargets(config.navigation_targets);
   currentRobotIp.textContent = config.robot_ip || "-";
   if (updateInput || !robotIpInput.value) robotIpInput.value = config.robot_ip || "";
   robotIpRuntimeStatus.textContent = config.restart_supported

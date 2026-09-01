@@ -162,6 +162,55 @@ def configure_runtime(
     COORDINATOR_GETTER = coordinator_getter
 
 
+def _navigation_target_config(
+    settings: TaskServiceSettings,
+) -> dict[str, list[dict[str, str]]]:
+    """Expose the active task target IDs without duplicating them in HTML."""
+
+    task_roles: dict[str, list[str]] = {}
+
+    def add_task_target(target_id: str, role: str) -> None:
+        roles = task_roles.setdefault(target_id, [])
+        if role not in roles:
+            roles.append(role)
+
+    for task in (settings.tasks.task1, settings.tasks.task2, settings.tasks.task3):
+        add_task_target(task.task_boundary, "任务判定点")
+    for task in (
+        settings.tasks.task0,
+        settings.tasks.task1,
+        settings.tasks.task2,
+        settings.tasks.task3,
+    ):
+        add_task_target(task.start_target_id, "起点")
+    add_task_target(settings.tasks.task1.receipt_viewpoint, "小票识别点")
+    add_task_target(settings.tasks.task1.delivery_place, "交付台放货点")
+    add_task_target(settings.tasks.task2.replenishment_pickup, "补货台取货点")
+
+    inspection_target_ids = list(
+        dict.fromkeys(
+            [
+                *settings.tasks.task0.inspection_points,
+                *settings.tasks.task2.inspection_points,
+                *(
+                    point.target_id
+                    for point in settings.tasks.task3.inspection_points
+                ),
+            ]
+        )
+    )
+    return {
+        "task_points": [
+            {"target_id": target_id, "label": " / ".join(roles)}
+            for target_id, roles in task_roles.items()
+        ],
+        "inspection_points": [
+            {"target_id": target_id, "label": f"{index}号巡检点"}
+            for index, target_id in enumerate(inspection_target_ids, start=1)
+        ],
+    }
+
+
 def _coordinator() -> TaskCoordinator:
     if COORDINATOR_GETTER is None:
         raise HTTPException(status_code=503, detail="统一任务服务尚未初始化")
@@ -828,6 +877,7 @@ async def config() -> dict[str, object]:
         "perception_url": SERVICES.perception_url,
         "log_dir": str(LOG_ROOT),
         "robot_ip": ROBOT_IP,
+        "navigation_targets": _navigation_target_config(RUNTIME_SETTINGS),
         "restart_supported": restart_supported,
         "restart_unavailable_reason": restart_reason,
     }
