@@ -11,7 +11,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-PRODUCT_SLOT_PATTERN = re.compile(r"^H[12]_[FB]_L[1-5]_C\d{2}$")
+PRODUCT_SLOT_PATTERN = re.compile(r"^(?:H[12]_[FB]_L[1-5]|H[1-3]_L0[1-5])_C\d{2}$")
 
 
 class TaskType(StrEnum):
@@ -23,23 +23,55 @@ class Hand(StrEnum):
     RIGHT = "RIGHT"
 
 
-class ProductHandOption(BaseModel):
-    """一个货位的抓取手能力和对应的巡检导航点。"""
-
+class GraspOption(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    product_name: str = Field(min_length=1)
     hands: list[Hand]
     target_id: str = Field(min_length=1)
 
     @field_validator("hands")
     @classmethod
     def valid_hands(cls, value: list[Hand]) -> list[Hand]:
-        if not value:
-            raise ValueError("hands must not be empty")
-        if len(set(value)) != len(value):
-            raise ValueError("hands contains duplicate values")
+        if not value or len(set(value)) != len(value):
+            raise ValueError("hands must be non-empty and unique")
         return value
+
+
+class ProductHandOption(BaseModel):
+    """一个货位在一个或多个导航点的抓取能力。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    product_name: str = Field(min_length=1)
+    grasp_options: list[GraspOption]
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_shape(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "grasp_options" not in value:
+            value = dict(value)
+            hands = value.pop("hands", None)
+            target_id = value.pop("target_id", None)
+            value["grasp_options"] = [{"hands": hands, "target_id": target_id}]
+        elif isinstance(value, dict) and isinstance(value.get("grasp_options"), dict):
+            value = dict(value)
+            value["grasp_options"] = [value["grasp_options"]]
+        return value
+
+    @field_validator("grasp_options")
+    @classmethod
+    def valid_options(cls, value: list[GraspOption]) -> list[GraspOption]:
+        if not value:
+            raise ValueError("grasp_options must not be empty")
+        return value
+
+    @property
+    def hands(self) -> list[Hand]:
+        return list(dict.fromkeys(hand for option in self.grasp_options for hand in option.hands))
+
+    @property
+    def target_id(self) -> str:
+        return self.grasp_options[0].target_id
 
 
 class ProductHandOptionsFile(BaseModel):
@@ -47,7 +79,7 @@ class ProductHandOptionsFile(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.0", "2.0"]
     source_catalog_version: str = Field(min_length=1)
     product_hand_options: dict[str, ProductHandOption]
 
@@ -101,6 +133,7 @@ class Task1Settings(BaseModel):
     product_hand_options_file: str | None = Field(default=None, min_length=1)
     product_hand_options: dict[str, list[Hand]] = Field(default_factory=dict)
     product_target_ids: dict[str, str] = Field(default_factory=dict)
+    product_grasp_options: dict[str, list[GraspOption]] = Field(default_factory=dict)
     skip_product_names: list[str] = Field(default_factory=list)
     defer_product_names: list[str] = Field(default_factory=list)
     log_dir: str = Field(min_length=1, default="log")
@@ -182,6 +215,10 @@ class Task1Settings(BaseModel):
             }
             raw_config["product_target_ids"] = {
                 slot: option.target_id
+                for slot, option in options_config.product_hand_options.items()
+            }
+            raw_config["product_grasp_options"] = {
+                slot: option.grasp_options
                 for slot, option in options_config.product_hand_options.items()
             }
         return cls.model_validate(raw_config)

@@ -162,7 +162,7 @@ class Task2Client:
         self,
         location_id: str,
         pose_type: str,
-    ) -> list[str]:
+    ) -> list[ShortageProductFinding]:
         last_error: Task2ServiceError | None = None
         for attempt in (1, 2):
             try:
@@ -186,19 +186,42 @@ class Task2Client:
                     raise Task2ServiceError(
                         "INVALID_RESPONSE", "inspection response must contain findings"
                     ) from exc
-                names: list[str] = []
+                findings: list[ShortageProductFinding] = []
                 for raw_finding in raw_findings:
                     try:
                         finding = ShortageProductFinding.model_validate(raw_finding)
-                    except ValidationError:
+                    except ValidationError as exc:
+                        if self.settings.product_hand_options_schema_version == "2.0":
+                            raise Task2ServiceError(
+                                "INVALID_RESPONSE",
+                                "schema 2.0 inspection finding is malformed",
+                            ) from exc
                         continue
                     name = finding.shortage_product_name.strip()
-                    if name:
-                        names.append(name)
-                return names
+                    if not name:
+                        if self.settings.product_hand_options_schema_version == "2.0":
+                            raise Task2ServiceError(
+                                "INVALID_RESPONSE",
+                                "schema 2.0 inspection finding has a blank product name",
+                            )
+                        continue
+                    if (
+                        self.settings.product_hand_options_schema_version == "2.0"
+                        and finding.slot_id is None
+                    ):
+                        raise Task2ServiceError(
+                            "INVALID_RESPONSE",
+                            "schema 2.0 inspection finding is missing slot_id",
+                        )
+                    findings.append(
+                        finding.model_copy(
+                            update={"shortage_product_name": name}
+                        )
+                    )
+                return findings
             except Task2ServiceError as exc:
                 last_error = exc
-                if attempt == 2 or exc.code == "NETWORK_ERROR":
+                if attempt == 2 or exc.code in {"NETWORK_ERROR", "INVALID_RESPONSE"}:
                     raise
         assert last_error is not None
         raise last_error
@@ -223,17 +246,21 @@ class Task2Client:
         location_id: str,
         pose_type: str,
         idempotency_key: str,
+        slot_id: str | None = None,
     ) -> None:
+        payload = {
+            "task_type": TaskType.SHORTAGE.value,
+            "product_name": product_name,
+            "hand": hand.value,
+            "location_id": location_id,
+            "pose_type": pose_type,
+        }
+        if slot_id is not None:
+            payload["slot_id"] = slot_id
         await self._physical_action(
             "pick_place",
             "/place",
-            {
-                "task_type": TaskType.SHORTAGE.value,
-                "product_name": product_name,
-                "hand": hand.value,
-                "location_id": location_id,
-                "pose_type": pose_type,
-            },
+            payload,
             idempotency_key,
             self.settings.timeouts.place_seconds,
         )

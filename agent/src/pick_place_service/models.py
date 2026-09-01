@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
@@ -29,6 +30,7 @@ class PickPlaceRequest(BaseModel):
     product_type: str | int | None = None
     location_id: str | None = Field(default=None, min_length=1)
     pose_type: Literal["SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"] | None = None
+    slot_id: str | None = Field(default=None, min_length=1)
 
     @field_validator("product_name")
     @classmethod
@@ -37,6 +39,19 @@ class PickPlaceRequest(BaseModel):
         if not value:
             raise ValueError("product_name must not be blank")
         return value
+
+    @field_validator("slot_id")
+    @classmethod
+    def valid_optional_slot_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if re.fullmatch(
+            r"(?:H[12]_[FB]_L[1-5]|H[1-3]_L0[1-5])_C\d{2}",
+            normalized,
+        ) is None:
+            raise ValueError("invalid slot_id")
+        return normalized
 
     @property
     def normalized_hand(self) -> str:
@@ -76,6 +91,7 @@ class PlaceLocateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
+    slot_id: str | None = None
     bbox: list[list[int]]
     mask: list[str]
     direction: Literal["left", "right", "both", "up"]

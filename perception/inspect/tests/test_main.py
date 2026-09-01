@@ -82,6 +82,46 @@ class InspectMainTest(unittest.TestCase):
         self.assertEqual(response.findings, [])
         self.assertEqual(response.algorithms[0].difference_mode, "chroma")
 
+    def test_formal_shortage_keeps_two_same_name_physical_slots(self) -> None:
+        missing_slots = [
+            SimpleNamespace(product_name="可口可乐罐装", slot_id="H2_L01_C01"),
+            SimpleNamespace(product_name="可口可乐罐装", slot_id="H2_L01_C02"),
+        ]
+        analysis = SimpleNamespace(
+            comparisons=[SimpleNamespace(missing_slots=missing_slots)]
+        )
+        depth = np.full(self.baseline.shape[:2], 900, dtype=np.uint16)
+
+        with (
+            patch.object(inspect_api, "analyze_shortage", return_value=analysis),
+            patch.object(inspect_api, "analysis_as_dict", return_value={}),
+            patch.object(inspect_api, "save_sam_shortage_debug_artifacts"),
+        ):
+            response = inspect_api.inspect_shortage_sam_images(
+                location_id="H2_INSPECT",
+                pose_type="SHELF_VIEW_UPPER",
+                baseline=self.baseline,
+                current=self.current,
+                baseline_depth_mm=depth,
+                current_depth_mm=depth,
+            )
+
+        self.assertEqual(
+            response.model_dump(),
+            {
+                "findings": [
+                    {
+                        "shortage_product_name": "可口可乐罐装",
+                        "slot_id": "H2_L01_C01",
+                    },
+                    {
+                        "shortage_product_name": "可口可乐罐装",
+                        "slot_id": "H2_L01_C02",
+                    },
+                ]
+            },
+        )
+
     def test_route_loads_task0_and_captures_live_head_rgbd(self) -> None:
         request = inspect_api.InspectRequest(
             task_type="SHORTAGE",
@@ -162,7 +202,11 @@ class InspectMainTest(unittest.TestCase):
         )
         self.assertEqual(
             response.model_dump(),
-            {"findings": [{"shortage_product_name": "测试商品"}]},
+            {
+                "findings": [
+                    {"shortage_product_name": "测试商品", "slot_id": None}
+                ]
+            },
         )
         review_image = reviewer.calls[0]["current"]
         self.assertIsInstance(review_image, np.ndarray)
@@ -343,8 +387,8 @@ class InspectMainTest(unittest.TestCase):
             response.model_dump(),
             {
                 "findings": [
-                    {"shortage_product_name": "可口可乐罐装"},
-                    {"shortage_product_name": "雪碧罐装"},
+                    {"shortage_product_name": "可口可乐罐装", "slot_id": None},
+                    {"shortage_product_name": "雪碧罐装", "slot_id": None},
                 ]
             },
         )

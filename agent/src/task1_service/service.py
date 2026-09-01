@@ -51,7 +51,8 @@ def _recovery_direction(error: Task1ServiceError, operation: str) -> str | None:
 
 
 def shelf_level(slot_id: str) -> str:
-    return slot_id.split("_")[2]
+    level = slot_id.split("_")[-2]
+    return f"L{int(level[1:])}"
 
 
 _INSPECTION_LEFT_MAX = {
@@ -288,7 +289,7 @@ class Task1Orchestrator:
 
             step = "SKU货位转换"
             targets: list[TargetItem] = []
-            resolved_slots: set[str] = set()
+            target_slot_candidates: list[list[str]] = []
             selected_product_names = self._select_products(product_names, logger)
             for name in selected_product_names:
                 logger.event("SKU货位转换", "started", product_name=name)
@@ -314,23 +315,18 @@ class Task1Orchestrator:
                             f"invalid product slot: {invalid_slot}",
                             status_code=422,
                         )
-                    slot_id = min(
+                    candidate_slots = sorted(
                         sku.locations,
-                        key=lambda location: SHELF_LEVEL_PRIORITY[
-                            shelf_level(location)
-                        ],
+                        key=lambda location: (
+                            SHELF_LEVEL_PRIORITY[shelf_level(location)],
+                            location,
+                        ),
                     )
-                    if slot_id in resolved_slots:
-                        raise Task1ServiceError(
-                            "INVALID_RECEIPT",
-                            f"multiple products resolve to the same location: {slot_id}",
-                            status_code=422,
-                        )
-                    target_id = self._target_id(slot_id)
+                    slot_id = candidate_slots[0]
                     target = TargetItem(
                         product_name=name,
                         product_slot_id=slot_id,
-                        target_id=target_id,
+                        target_id="",
                         shelf_level=shelf_level(slot_id),
                         hand=Hand.LEFT,
                     )
@@ -344,51 +340,34 @@ class Task1Orchestrator:
                         message=exc.message,
                     )
                     continue
-                resolved_slots.add(slot_id)
                 targets.append(target)
+                target_slot_candidates.append(candidate_slots)
                 logger.event(
                     "SKU货位转换",
                     "succeeded",
                     product_name=name,
                     sku_id=sku.sku_id,
                     product_slot_id=slot_id,
-                    target_id=target_id,
+                    target_id="",
                     shelf_level=shelf_level(slot_id),
                 )
-            hands: tuple[Hand, ...] = ()
-            if len(targets) == 2:
-                try:
-                    hands = self._assign_hands(
-                        [target.product_slot_id for target in targets]
-                    )
-                except Task1ServiceError as exc:
-                    action_failures.append(self._failure("hand_assignment", None, None, exc))
-                    hands = tuple(
-                        self._allowed_hands(target.product_slot_id)[0]
-                        for target in targets
-                        if self._allowed_hands(target.product_slot_id)
-                    )
-            elif len(targets) == 1:
-                allowed = self._allowed_hands(targets[0].product_slot_id)
-                if allowed:
-                    hands = (allowed[0],)
-                else:
-                    action_failures.append(
-                        {
-                            "operation": "hand_assignment",
-                            "product_name": targets[0].product_name,
-                            "hand": "",
-                            "error_code": "NO_FEASIBLE_HAND_ASSIGNMENT",
-                            "message": "product has no configured safe hand",
-                        }
-                    )
-                    targets.clear()
-            for target, hand in zip(targets, hands):
+            try:
+                planned = self._plan_grasps(targets, target_slot_candidates)
+            except Task1ServiceError as exc:
+                action_failures.append(self._failure("hand_assignment", None, None, exc))
+                targets.clear()
+                planned = []
+            for target, (target_id, hand) in zip(targets, planned):
+                target.target_id = target_id
                 target.hand = hand
                 logger.event(
                     "抓取手分配", "succeeded", product_name=target.product_name,
                     product_slot_id=target.product_slot_id, hand=hand.value,
-                    allowed_hands=[item.value if isinstance(item, Hand) else str(item) for item in self._allowed_hands(target.product_slot_id)],
+                    target_id=target_id,
+                    allowed_choices=[
+                        {"target_id": choice_target, "hand": choice_hand.value}
+                        for choice_target, choice_hand in self._grasp_choices(target.product_slot_id)
+                    ],
                 )
 
             if len(targets) == 2 and targets[0].hand != targets[1].hand:
@@ -598,7 +577,92 @@ class Task1Orchestrator:
             self.client.set_trace_callback(None)
 
     def _allowed_hands(self, slot_id: str) -> list[Hand]:
-        return self.settings.product_hand_options.get(slot_id, [Hand.LEFT, Hand.RIGHT])
+        return list(dict.fromkeys(hand for _, hand in self._grasp_choices(slot_id)))
+
+    def _grasp_choices(self, slot_id: str) -> list[tuple[str, Hand]]:
+        configured = self.settings.product_grasp_options.get(slot_id)
+        if configured:
+            return [
+                (option.target_id, hand)
+                for option in configured
+                for hand in option.hands
+            ]
+        # The legacy fallback derives H1_F/H1_B/H2_F/H2_B inspection points
+        # from a four-part slot id. New three-part shelf slots must be explicitly
+        # mapped so an unknown catalog location cannot silently gain both hands
+        # or crash while being parsed by default_inspection_target_id().
+        if len(slot_id.split("_")) == 3:
+            return []
+        target_id = self._target_id(slot_id)
+        hands = self.settings.product_hand_options.get(
+            slot_id, [Hand.LEFT, Hand.RIGHT]
+        )
+        return [(target_id, Hand(hand)) for hand in hands]
+
+    def _plan_grasps(
+        self,
+        targets: list[TargetItem],
+        slot_candidates: list[list[str]] | None = None,
+    ) -> list[tuple[str, Hand]]:
+        candidates = slot_candidates or [
+            [target.product_slot_id] for target in targets
+        ]
+        choices = [
+            [
+                (slot, target_id, hand)
+                for slot in slots
+                for target_id, hand in self._grasp_choices(slot)
+            ]
+            for slots in candidates
+        ]
+        if any(not item for item in choices):
+            raise Task1ServiceError(
+                "NO_FEASIBLE_HAND_ASSIGNMENT",
+                "one or more products have no grasp option",
+                status_code=422,
+            )
+        if len(choices) == 2:
+            # First prefer one navigation point where both hands can pick one item.
+            # If that is impossible, still prefer carrying both items in one trip,
+            # even when the robot must visit two shelf points.
+            for require_same_target in (True, False):
+                for first in choices[0]:
+                    for second in choices[1]:
+                        if first[0] == second[0] or first[2] == second[2]:
+                            continue
+                        if require_same_target and first[1] != second[1]:
+                            continue
+                        targets[0].product_slot_id = first[0]
+                        targets[0].shelf_level = shelf_level(first[0])
+                        targets[1].product_slot_id = second[0]
+                        targets[1].shelf_level = shelf_level(second[0])
+                        return [(first[1], first[2]), (second[1], second[2])]
+            # No distinct left/right pair exists. A serial two-trip plan is still
+            # valid, but the two requested products cannot refer to one physical
+            # slot even when the SKU service returns overlapping candidates.
+            selected_pair = next(
+                (
+                    (first, second)
+                    for first in choices[0]
+                    for second in choices[1]
+                    if first[0] != second[0]
+                ),
+                None,
+            )
+            if selected_pair is None:
+                raise Task1ServiceError(
+                    "NO_FEASIBLE_HAND_ASSIGNMENT",
+                    "two products have no distinct physical slot assignment",
+                    status_code=422,
+                )
+            selected = list(selected_pair)
+        else:
+            selected = [item[0] for item in choices]
+        # No left/right pair exists: execute the one-item-per-trip path.
+        for target, (slot, _, _) in zip(targets, selected):
+            target.product_slot_id = slot
+            target.shelf_level = shelf_level(slot)
+        return [(target_id, hand) for _, target_id, hand in selected]
 
     def _select_products(
         self, product_names: list[str], logger: _Task1Log | _NullTaskLog

@@ -32,14 +32,14 @@ pick-place 编排服务默认绑定 `0.0.0.0:8086`，本机可通过 `127.0.0.1:
 
 ## 2. Task0 实际调用的接口
 
-Task0 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runtime.production.yaml`。它在正式任务前采集八个巡检点上下视角的头部 RGB-D 基准数据。
+Task0 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runtime.production.yaml`。它在正式任务前采集五个巡检点上下视角的 10 套头部 RGB-D 基准数据。
 
 | 主机:端口 | 接口 | Task0 用途 |
 |---|---|---|
 | `127.0.0.1:8108` | `GET /health` | 聚合检查 Task0-3；Task0 检查导航、姿态、头部相机和彩色/depth 流 |
 | `127.0.0.1:8108` | `POST /tasks/0/run` | 启动一次完整基准采集，请求体为空对象 |
 | `<robot_ip>:8081` | `GET /navigation/health` | Task0 健康检查 |
-| `<robot_ip>:8081` | `POST /navigation/navigate` | 前往开始点、八个巡检点并返回开始点 |
+| `<robot_ip>:8081` | `POST /navigation/navigate` | 前往开始点、五个巡检点并返回开始点 |
 | `<robot_ip>:8084` | `GET /pose/health` | Task0 健康检查 |
 | `<robot_ip>:8084` | `POST /pose/prepare` | 准备上下货架观察姿态 |
 | `<robot_ip>:8085` | `GET /camera/health` | Task0 健康检查 |
@@ -67,11 +67,11 @@ Task1 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runt
 | `127.0.0.1:8086` | `POST /pick` | 委托 pick-place 抓取商品 |
 | `127.0.0.1:8086` | `POST /place` | 同手串行或仅一手持物时放置单件商品 |
 | `127.0.0.1:25540` | `GET /sku/health` | Task1 `GET /health` 依赖检查 |
-| `127.0.0.1:25540` | `GET /sku/search_by_name` | 将商品名解析为唯一货位 |
+| `127.0.0.1:25540` | `GET /sku/search_by_name` | 将商品名解析为一个或多个候选货位 |
 
 ## 4. Task2 实际调用的接口
 
-Task2 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runtime.production.yaml`。任务启动时仍检查 Task0 预先生成的 16 张基准 `rgb.jpg`；巡检识别由感知服务自行获取基准图和当前图。`POST /tasks/2/run` 开始时先并发检查五个直接服务依赖。
+Task2 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runtime.production.yaml`。任务启动时检查 Task0 预先生成的 10 套 `rgb.jpg + depth_mm.npy + meta.json`；巡检识别由感知服务自行获取基准图和当前图。`POST /tasks/2/run` 开始时先并发检查五个直接服务依赖。
 
 | 主机:端口 | 接口 | Task2 用途 |
 |---|---|---|
@@ -194,7 +194,7 @@ GET 127.0.0.1:8086/health
 POST 127.0.0.1:8108/tasks/0/run {}
   -> 检查 navigation、pose、camera 健康状态和 head RGB-D 流
   -> POST <robot_ip>:8081/navigation/navigate {"target_id":"start"}
-  -> 对八个巡检点按蛇形姿态顺序：
+  -> 对五个巡检点按配置顺序：
        POST <robot_ip>:8081/navigation/navigate {"target_id":"<巡检点>"}
        奇数点：SHELF_VIEW_UPPER -> 等待 2 秒 -> 拍摄 -> SHELF_VIEW_LOWER -> 等待 2 秒 -> 拍摄
        偶数点：复用 SHELF_VIEW_LOWER -> 等待 2 秒 -> 拍摄 -> SHELF_VIEW_UPPER -> 等待 2 秒 -> 拍摄
@@ -220,6 +220,7 @@ POST 127.0.0.1:8108/tasks/1/run {}
   -> POST <robot_ip>:8085/camera/head/resolution {"resolution":720}
   -> 对两个商品分别：
        GET 127.0.0.1:25540/sku/search_by_name?name=<商品名>
+  -> 联合枚举两件商品的候选货位、导航点和手；优先同一点 LEFT/RIGHT，其次异点 LEFT/RIGHT
   -> 对每件商品分别：
        POST <robot_ip>:8084/pose/prepare {"pose_type":"START_POSITION"}
        POST <robot_ip>:8081/navigation/navigate {"target_id":"<货位对应导航点>"}
@@ -239,7 +240,7 @@ POST 127.0.0.1:8108/tasks/1/run {}
 
 如果两件商品只能使用同一只手，Task1 会对每件商品执行“抓取 -> 前往交付台 -> 准备放置姿态 -> 放置”，再处理下一件；重复导航到当前已在的目标点时会跳过重复的复位和导航请求。
 
-SKU 查询返回同一商品的多个货位时，Task1 按 `L3`、`L2`、`L4`、`L1`、`L5` 的层级顺序选择；同一层存在多个货位时保留 SKU 接口返回的先后顺序，选择该层第一个货位。
+SKU 查询返回同一商品的多个货位时，Task1 会联合枚举两个商品的全部候选货位及 YAML 中绑定的 `(target_id, hand)`。优先选择同一导航点且分别使用 LEFT/RIGHT 的组合，其次选择不同导航点的 LEFT/RIGHT 组合；确实无法异手分配时才按单手串行两轮处理。两件商品不会选择同一物理货位，也没有交换手动作。
 
 Task1 可在生产配置中按识别商品名配置抓取策略：
 
@@ -254,18 +255,17 @@ tasks:
 
 Task1 的小票导航和拍摄位姿失败后仍尝试识别；有效识别结果会持续累积，任意两次识别到相同的商品集合后才使用该结果，商品顺序不影响一致性判定。感知接口连续失败两次时放弃小票阶段；识别出一件或两件有效商品都继续。SKU 查询、商品导航、抓取位姿、抓取、交付台准备和放置均按商品隔离，单件失败不会阻止另一件。明确的抓取或单手放置失败会使用新动作键重试一次；抓取最终 `grasp` 失败且带有非零六维 `pose` 时，第二次尝试前按首值方向微调并恢复抓取位姿。双手释放明确失败时回退为左右手分别放置；动作结果未知时先查询 8086 最多 15 秒，仍无法确认则只把涉及的手标为不可用，避免重复物理动作。所有候选处理完后仍尝试前往 `task_boundary` 两次，失败再回 `start`。部分完成继续返回原有 `SUCCEEDED`，由 `target_items[].picked/placed` 和 `held_items` 表示实际结果。
 
-商品“外星人电解质水白桃口味0糖”（配置货位 `H2_F_L3_C03`、`H2_F_L5_C05`）执行货架抓取时，在第一次 8086 动作前先微调：左手操作向右 3 cm，右手操作向左 3 cm。该规则用于 Task1 和 Task3 的货架抓取；Task1 交付台放置、Task2 补货台抓取以及 Task2/3 货架放置均不使用。抓取完成或放弃后调用 `return`。
+商品“外星人电解质水白桃口味0糖”（配置货位 `H2_L03_C03`）执行货架抓取时，在第一次 8086 动作前先微调：左手操作向右 3 cm，右手操作向左 3 cm。该规则用于 Task1 和 Task3 的货架抓取；Task1 交付台放置、Task2 补货台抓取以及 Task2/3 货架放置均不使用。抓取完成或放弃后调用 `return`。
 
 ## 9. Task2 调用顺序
 
 Task2 的巡检点按以下顺序配置：
 
 ```text
-H2_F_L_INSPECT -> H2_F_R_INSPECT -> H1_F_L_INSPECT -> H1_F_R_INSPECT
--> H1_B_L_INSPECT -> H1_B_R_INSPECT -> H2_B_L_INSPECT -> H2_B_R_INSPECT
+H1_INSPECT -> H12_INSPECT -> H2_INSPECT -> H23_INSPECT -> H3_INSPECT
 ```
 
-`POST /tasks/2/run` 先并发检查五个直接服务依赖、头部彩色流和 Task0 基准图，然后按货架2正面、货架1正面、货架1背面、货架2背面执行单轮巡检。每个货架面先完成左右巡检点的 `SHELF_VIEW_UPPER`、`SHELF_VIEW_LOWER` 识别，再按感知响应原始顺序逐条尝试补货；finding 不去重、不限制数量，单条格式错误的 finding 被忽略。
+`POST /tasks/2/run` 先并发检查五个直接服务依赖、头部彩色流和 Task0 基准文件，然后完成五个点的 `SHELF_VIEW_UPPER`、`SHELF_VIEW_LOWER` 单轮巡检。感知 finding 必须包含精确 `slot_id`；同一物理槽从正对点和连接点重复检出时按槽去重。规划器在全部 finding 中优先选择可分别使用 LEFT/RIGHT 的两件商品，并优先共用同一货架导航点；无法分配不同手时退化为逐件往返。
 
 主顺序如下：
 
@@ -278,34 +278,32 @@ POST 127.0.0.1:8108/tasks/2/run {}
        GET <robot_ip>:8085/camera/health
        GET <robot_ip>:8085/camera/list
        GET 127.0.0.1:8086/health
-       检查 output/task0 下 16 张基准 rgb.jpg
-  -> 对每个货架面：
-       先对左右巡检点分别执行 UPPER、LOWER 位姿和 perception/inspect
-       再对该面返回的每条 finding：
-         根据商品名、巡检点和观察姿态选择第一只安全手；无法匹配时记录并跳过
-         前往 replenishment_pickup 并准备 REPLENISHMENT_TABLE_PICK_READY
-         如果手上残留上次放置失败的商品：
-           POST <robot_ip>:8084/manipulation/gripper/open {"hand":"<LEFT|RIGHT>"}
-         POST 127.0.0.1:8086/pick {"task_type":"SHORTAGE", ...}
-         抓取成功后返回发现时巡检点并恢复发现时观察姿态
-         POST 127.0.0.1:8086/place
-           {"task_type":"SHORTAGE","product_name":"...","hand":"...",
-            "location_id":"<发现时巡检点>","pose_type":"<观察姿态>"}
-         抓取和放置均成功的累计数量达到 2 时立即停止巡检
+       检查 output/task0 下五点 × UPPER/LOWER 的 RGB、depth、meta 三件套
+  -> 对 H1/H12/H2/H23/H3 分别执行 UPPER、LOWER 位姿和 perception/inspect
+  -> 按 slot_id 去重，并从 YAML 的 (target_id, hand) 绑定中规划补货批次
+  -> 对每个批次：
+       前往 replenishment_pickup 并准备 REPLENISHMENT_TABLE_PICK_READY
+       如果手上残留上次放置失败的商品，先按原手执行 gripper/open 弃置
+       可分配不同手时连续执行两次 8086/pick；否则本批只抓一件
+       每件都保持原抓取手，前往规划出的巡检点并恢复该槽所在 UPPER/LOWER 姿态
+       POST 127.0.0.1:8086/place
+         {"task_type":"SHORTAGE","product_name":"...","slot_id":"H2_L01_C01",
+          "hand":"...","location_id":"<规划巡检点>","pose_type":"<槽位姿态>"}
+       累计两件 placed=true 时结束
   -> POST <robot_ip>:8084/pose/prepare {"pose_type":"START_POSITION"}
   -> POST <robot_ip>:8081/navigation/navigate {"target_id":"task_boundary"}
   <- Task2 SUCCEEDED
 ```
 
-Task2 会把商品与发现时的“巡检点 + 上/下观察姿态”绑定，放置前恢复该上下文。Task2 Agent 不直接调用 `SHELF_PLACE_READY`；8086 完成参考位姿估计和 SE(3) 转换后，使用 8083 返回的 `level` 调用该放置预备姿态。
+Task2 会把商品与精确 `slot_id + 规划巡检点 + 上/下观察姿态 + 原抓取手` 绑定，放置前恢复该上下文且不交换手。Task2 Agent 不直接调用 `SHELF_PLACE_READY`；8086 完成参考位姿估计和 SE(3) 转换后，使用 8083 返回的 `level` 调用该放置预备姿态。
 
-Task2 的巡检点导航失败时跳过该点，观察位姿或识别失败时跳过该姿态，因此第一个货架发现缺货后，即使补货台准备或取货失败，也会继续尝试当前面的下一条 finding，并继续下一个货架面的识别。明确的抓取或放置失败使用新动作键重试一次；抓取失败若带有效执行位姿，还会在第二次尝试前微调。放置失败时该手保持持物状态，下次到补货台先最多两次调用 `/manipulation/gripper/open` 弃置；失败只封锁该手，另一只安全手仍可继续。动作结果未知会查询 8086 最多 15 秒，无法确认时只封锁受影响的手。四个货架面结束后即使不足两次成功放置，也仍尝试进入 `task_boundary`，并以兼容的 `SUCCEEDED` 返回部分结果。
+Task2 的巡检点导航失败时跳过该点，观察位姿或识别失败时跳过该姿态。明确的抓取或放置失败使用新动作键重试一次；抓取失败若带有效执行位姿，还会在第二次尝试前微调。放置失败时该手保持持物状态，下次到补货台先最多两次调用 `/manipulation/gripper/open` 弃置；失败只封锁该手，批次中另一只安全手仍会继续尝试。动作结果未知会查询 8086 最多 15 秒，无法确认时只封锁受影响的手。全部候选处理后即使不足两次成功放置，也仍尝试进入 `task_boundary`，并以兼容的 `SUCCEEDED` 返回部分结果。
 
 生产配置中 Task1/Task2 的导航、抓取、放置总超时均为 90 秒，位姿与小票/缺货识别为 30 秒。HTTP 传输重试共享同一个总时限，不会把配置超时翻倍；相机分辨率、SKU、健康检查仍使用各自原有超时。
 
 ## 10. Task3 调用顺序
 
-Task3 继续使用共享配置中的原八点往返巡检路线和 8083 乱放识别契约；Task2 的新分面顺序仅在 `tasks.task2` 中覆盖，不影响 Task3。Task3 请求 `MISPLACED` 并在发现一组乱放结果后立即停止巡检。
+Task3 使用共享配置中的五点巡检路线和 8083 乱放识别契约。Task3 请求 `MISPLACED` 并在发现一组乱放结果后立即停止巡检。
 
 ```text
 POST 127.0.0.1:8108/tasks/3/run {}
@@ -417,19 +415,12 @@ Task1 部分完成时响应结构和 `status="SUCCEEDED"` 不变；识别失败�
   "task_type":"SHORTAGE",
   "status":"SUCCEEDED",
   "inspection_pass":1,
-  "product_names":["误报商品","商品1","商品2"],
+  "product_names":["商品1","商品2"],
   "target_items":[
     {
-      "product_name":"误报商品",
-      "inspection_target_id":"H2_F_L_INSPECT",
-      "inspection_pose_type":"SHELF_VIEW_UPPER",
-      "hand":"LEFT",
-      "picked":false,
-      "placed":false
-    },
-    {
       "product_name":"商品1",
-      "inspection_target_id":"H1_F_L_INSPECT",
+      "product_slot_id":"H1_L01_C05",
+      "inspection_target_id":"H12_INSPECT",
       "inspection_pose_type":"SHELF_VIEW_UPPER",
       "hand":"LEFT",
       "picked":true,
@@ -437,8 +428,9 @@ Task1 部分完成时响应结构和 `status="SUCCEEDED"` 不变；识别失败�
     },
     {
       "product_name":"商品2",
-      "inspection_target_id":"H2_B_R_INSPECT",
-      "inspection_pose_type":"SHELF_VIEW_LOWER",
+      "product_slot_id":"H2_L01_C01",
+      "inspection_target_id":"H12_INSPECT",
+      "inspection_pose_type":"SHELF_VIEW_UPPER",
       "hand":"RIGHT",
       "picked":true,
       "placed":true
@@ -452,7 +444,7 @@ Task1 部分完成时响应结构和 `status="SUCCEEDED"` 不变；识别失败�
 
 #### `GET /health`
 
-使用统一的聚合 `GET /health`，响应格式见 11.1；Task2 的状态还要求五个下游、头部彩色流和 16 张 Task0 基准图全部就绪。
+使用统一的聚合 `GET /health`，响应格式见 11.1；Task2 的状态还要求五个下游、头部彩色流和 10 套 Task0 RGB-D 三件套全部就绪。
 
 ### 11.4 Task3 编排接口：`127.0.0.1:8108`
 
@@ -520,7 +512,7 @@ Task1 部分完成时响应结构和 `status="SUCCEEDED"` 不变；识别失败�
 {"target_id":"receipt_viewpoint"}
 ```
 
-Task0、Task2、Task3 使用八个巡检点；Task1 和 Task3 会使用 SKU 货位在 `product-hand-options.yaml` 中对应的导航点。各任务还使用各自的固定业务点和 `task_boundary`。成功响应至少包含：
+Task0、Task2、Task3 使用 `H1/H12/H2/H23/H3_INSPECT` 五个巡检点；Task1 和 Task3 会使用 SKU 货位在 `product-hand-options.yaml` 中对应的导航点。各任务还使用各自的固定业务点和 `task_boundary`。成功响应至少包含：
 
 ```json
 {"status":"SUCCEEDED"}
@@ -644,7 +636,7 @@ Task2 和 Task3 在每个巡检点的上/下观察姿态各调用一次。感知
 ```json
 {
   "task_type":"SHORTAGE",
-  "location_id":"H1_F_L_INSPECT",
+  "location_id":"H1_INSPECT",
   "pose_type":"SHELF_VIEW_UPPER"
 }
 ```
@@ -652,17 +644,17 @@ Task2 和 Task3 在每个巡检点的上/下观察姿态各调用一次。感知
 成功响应：
 
 ```json
-{"findings":[{"shortage_product_name":"缺货商品名"}]}
+{"findings":[{"shortage_product_name":"缺货商品名","slot_id":"H1_L01_C01"}]}
 ```
 
-感知接口还接受可选的正数 `reference_item_area`，Task2 和 Task3 当前都不发送。Task2 保留每条结构化、非空 finding，不做去重或数量限制；同一货架面的所有识别完成后才逐条尝试抓放。没有匹配安全手配置的候选记录后跳过，成功抓取并放置两件后立即终止后续处理。
+感知接口还接受可选的正数 `reference_item_area`，Task2 和 Task3 当前都不发送。Task2 要求 SHORTAGE finding 带精确 `slot_id`，五点巡检完成后按物理槽去重并做双手优先规划；没有匹配安全手配置的候选记录后跳过，成功抓取并放置两件后终止后续处理。
 
 Task3 使用相同的巡检导航点，将任务类型改为：
 
 ```json
 {
   "task_type":"MISPLACED",
-  "location_id":"H1_F_L_INSPECT",
+  "location_id":"H1_INSPECT",
   "pose_type":"SHELF_VIEW_UPPER"
 }
 ```
@@ -712,22 +704,24 @@ Task3 只接受一组不同的非空商品名。
 
 #### `POST /perception/place/locate`
 
-`SHORTAGE` 和 `MISPLACED` 的 `/place` 使用此接口。8086 只发送以下四个字段，不发送 `hand`、`level`、RGB 或 depth：
+`SHORTAGE` 和 `MISPLACED` 的 `/place` 使用此接口。8086 不发送 `hand`、`level`、RGB 或 depth；`SHORTAGE` 必须额外发送精确 `slot_id`：
 
 ```json
 {
   "task_type":"SHORTAGE",
   "product_name":"商品名",
-  "location_id":"H1_F_L_INSPECT",
+  "slot_id":"H1_L01_C01",
+  "location_id":"H1_INSPECT",
   "pose_type":"SHELF_VIEW_UPPER"
 }
 ```
 
-8083 根据 `location_id` 和 `pose_type` 自行获取并持久化当前 RGB-D。请求使用 `product_name`，成功响应中的商品名字段仍为 `name`：
+8083 根据 `location_id` 和 `pose_type` 自行获取并持久化当前 RGB-D，并按 `product_name + slot_id` 精确选择缺货槽。成功响应中的商品名字段仍为 `name`，同时回显 `slot_id` 供 8086 校验：
 
 ```json
 {
   "name":"商品名",
+  "slot_id":"H1_L01_C01",
   "bbox":[[210,220,300,650],[440,220,530,650]],
   "mask":["<当前图同尺寸 base64 PNG>","<当前图同尺寸 base64 PNG>"],
   "direction":"both",

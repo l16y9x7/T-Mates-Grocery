@@ -123,6 +123,7 @@ class InspectRequest(BaseModel):
 
 class ShortageProductFinding(BaseModel):
     shortage_product_name: str
+    slot_id: str | None = None
 
 
 class MisplacedProductFinding(BaseModel):
@@ -602,13 +603,24 @@ def inspect_shortage_sam_images(
                 "message": detail,
             },
         ) from error
-    response = InspectApiResponse(
-        findings=[
-            ShortageProductFinding(shortage_product_name=name)
-            for name in dict.fromkeys(analysis.missing_product_names)
-            if name.strip()
-        ]
-    )
+    findings: list[ShortageProductFinding] = []
+    seen_slots: set[tuple[str, str]] = set()
+    for comparison in analysis.comparisons:
+        for slot in comparison.missing_slots:
+            name = slot.product_name.strip() if slot.product_name else ""
+            if not name:
+                continue
+            key = ("slot", slot.slot_id) if slot.slot_id else ("name", name)
+            if key in seen_slots:
+                continue
+            seen_slots.add(key)
+            findings.append(
+                ShortageProductFinding(
+                    shortage_product_name=name,
+                    slot_id=slot.slot_id,
+                )
+            )
+    response = InspectApiResponse(findings=findings)
     try:
         save_sam_shortage_debug_artifacts(
             location_id=location_id,

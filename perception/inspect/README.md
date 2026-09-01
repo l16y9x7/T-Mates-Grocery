@@ -17,16 +17,15 @@ Content-Type: application/json
 ```json
 {
   "task_type": "SHORTAGE",
-  "location_id": "H1_F_L_INSPECT",
+  "location_id": "H1_INSPECT",
   "pose_type": "SHELF_VIEW_UPPER",
   "reference_item_area": 12000
 }
 ```
 
 - `task_type` 支持 `SHORTAGE` 和 `MISPLACED`。
-- `location_id` 是当前巡检点位 ID，必填。传入 `H1_B_L_INSPECT`、
-  `H1_B_R_INSPECT` 这类巡检导航点时，会使用 SKU 服务中对应 Left/Right
-  视角的候选配置；传入具体商品货位时保留原有候选查询逻辑。
+- `location_id` 是当前巡检点位 ID，必填，支持
+  `H1_INSPECT/H12_INSPECT/H2_INSPECT/H23_INSPECT/H3_INSPECT`。
 - `pose_type` 必填，支持 `""`、`SHELF_VIEW_UPPER` 和 `SHELF_VIEW_LOWER`，与
   `location_id` 一起用于查询当前画面候选 SKU。
 - `reference_item_area` 可省略。
@@ -45,13 +44,16 @@ Content-Type: application/json
 ```json
 {
   "findings": [
-    {"shortage_product_name": "可口可乐罐装"}
+    {
+      "shortage_product_name": "可口可乐罐装",
+      "slot_id": "H2_L01_C01"
+    }
   ]
 }
 ```
 
-同一商品即使对应多个缺货槽位，公共响应中也只保留一条
-`shortage_product_name`；内部调试结果仍保留各物理槽位。
+正式 SAM shortage 流程按物理货位返回结果；同一商品有多个缺货槽位时，每个
+`slot_id` 各返回一条，供 Task2 精确选择导航点、左右手和最终放置槽。
 
 `MISPLACED` 使用相同的顶层结构：
 

@@ -4,11 +4,11 @@
   "source_catalog": "sku/products.json",
   "case_count": 150,
   "coverage": {
-    "catalog_sku_count": 107,
-    "covered_sku_count": 107,
-    "min_occurrences_per_sku": 2,
-    "max_occurrences_per_sku": 4,
-    "split_variant_sku_count": 66
+    "catalog_sku_count": 43,
+    "covered_sku_count": 43,
+    "min_occurrences_per_sku": 6,
+    "max_occurrences_per_sku": 8,
+    "split_variant_sku_count": 34
   },
   "test_cases": [
     {
@@ -19,22 +19,22 @@
           "specification": "250ml"
         },
         {
-          "name": "好人家火锅底料",
-          "specification": "80克"
+          "name": "好友趣",
+          "specification": "韩国泡菜味"
         }
       ],
       "input_styles": [
         "full_name_with_invented_size",
-        "full_name_with_invented_size"
+        "split_name_and_type"
       ],
       "expected": {
         "sku_ids": [
           "SKU_001",
-          "SKU_054"
+          "SKU_027"
         ],
         "product_names": [
           "NFC桔汁",
-          "好人家火锅底料"
+          "好友趣韩国泡菜味"
         ]
       }
     },
@@ -46,22 +46,22 @@
           "specification": "500ml"
         },
         {
-          "name": "纯棉酒店大毛巾",
-          "specification": "10枚"
+          "name": "上好佳",
+          "specification": "鲜虾条"
         }
       ],
       "input_styles": [
         "full_name_with_invented_size",
-        "full_name_with_invented_size"
+        "split_name_and_type"
       ],
       "expected": {
         "sku_ids": [
           "SKU_002",
-          "SKU_055"
+          "SKU_031"
         ],
         "product_names": [
           "蒙牛纯牛奶",
-          "纯棉酒店大毛巾"
+          "上好佳鲜虾条"
         ]
       }
     },
@@ -73,8 +73,8 @@
           "specification": "1升"
         },
         {
-          "name": "京东京造毛巾",
-          "specification": "1个"
+          "name": "浪味仙",
+          "specification": "55g"
         }
       ],
       "input_styles": [
@@ -84,11 +84,11 @@
       "expected": {
         "sku_ids": [
           "SKU_003",
-          "SKU_056"
+          "SKU_032"
         ],
         "product_names": [
           "纯甄酸奶",
-          "京东京造毛巾"
+          "浪味仙"
         ]
       }
     },
@@ -96,12 +96,12 @@
       "case_id": "receipt_004",
       "input": [
         {
-          "name": "百草味",
-          "specification": "海苔肉松蛋卷"
+          "name": "品客",
+          "specification": "薯片烧烤牛排味"
         },
         {
-          "name": "三色藜麦",
-          "specification": "120g"
+          "name": "京东京造毛巾",
+          "specification": "6片"
         }
       ],
       "input_styles": [
@@ -110,12 +110,12 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_004",
-          "SKU_057"
+          "SKU_014",
+          "SKU_056"
         ],
         "product_names": [
-          "百草味海苔肉松蛋卷",
-          "三色藜麦"
+          "品客薯片烧烤牛排味",
+          "京东京造毛巾"
         ]
       }
     },
@@ -123,251 +123,8 @@
       "case_id": "receipt_005",
       "input": [
         {
-          "name": "三只松鼠每日坚果",
-          "specification": "250克"
-        },
-        {
-          "name": "慢碳十色糙米",
-          "specification": "500g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_005",
-          "SKU_058"
-        ],
-        "product_names": [
-          "三只松鼠每日坚果",
-          "慢碳十色糙米"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_006",
-      "input": [
-        {
-          "name": "费列罗巧克力",
-          "specification": "55g"
-        },
-        {
-          "name": "高纤七色糙米",
-          "specification": "80克"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_006",
-          "SKU_059"
-        ],
-        "product_names": [
-          "费列罗巧克力",
-          "高纤七色糙米"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_007",
-      "input": [
-        {
-          "name": "双汇王中王火腿肠",
-          "specification": "120g"
-        },
-        {
-          "name": "山西黄小米",
-          "specification": "250克"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_007",
-          "SKU_060"
-        ],
-        "product_names": [
-          "双汇王中王火腿肠",
-          "山西黄小米"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_008",
-      "input": [
-        {
-          "name": "妙芙",
-          "specification": "香芋牛奶味"
-        },
-        {
-          "name": "界面医疗医用外科口罩",
-          "specification": "1个"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_008",
-          "SKU_061"
-        ],
-        "product_names": [
-          "妙芙香芋牛奶味",
-          "界面医疗医用外科口罩"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_009",
-      "input": [
-        {
-          "name": "妙芙",
-          "specification": "绵醇奶油味"
-        },
-        {
-          "name": "中盐精制盐",
-          "specification": "120g"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_009",
-          "SKU_062"
-        ],
-        "product_names": [
-          "妙芙绵醇奶油味",
-          "中盐精制盐"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_010",
-      "input": [
-        {
-          "name": "妙芙",
-          "specification": "巧克力味"
-        },
-        {
-          "name": "小苏打",
-          "specification": "500g"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_010",
-          "SKU_063"
-        ],
-        "product_names": [
-          "妙芙巧克力味",
-          "小苏打"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_011",
-      "input": [
-        {
-          "name": "薯愿",
-          "specification": "非油炸清新番茄味"
-        },
-        {
-          "name": "镇江香醋",
-          "specification": "330毫升"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_011",
-          "SKU_064"
-        ],
-        "product_names": [
-          "薯愿非油炸清新番茄味",
-          "镇江香醋"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_012",
-      "input": [
-        {
-          "name": "薯愿",
-          "specification": "非油炸韩国泡菜味"
-        },
-        {
-          "name": "蒸鱼豉油",
-          "specification": "750毫升"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_012",
-          "SKU_065"
-        ],
-        "product_names": [
-          "薯愿非油炸韩国泡菜味",
-          "蒸鱼豉油"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_013",
-      "input": [
-        {
-          "name": "薯愿",
-          "specification": "非油炸香烤原味"
-        },
-        {
-          "name": "薄盐生抽",
-          "specification": "250ml"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_013",
-          "SKU_066"
-        ],
-        "product_names": [
-          "薯愿非油炸香烤原味",
-          "薄盐生抽"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_014",
-      "input": [
-        {
           "name": "品客",
-          "specification": "薯片烧烤牛排味"
+          "specification": "原味"
         },
         {
           "name": "可口可乐",
@@ -380,21 +137,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_014",
+          "SKU_015",
           "SKU_067"
         ],
         "product_names": [
-          "品客薯片烧烤牛排味",
+          "品客原味",
           "可口可乐罐装"
         ]
       }
     },
     {
-      "case_id": "receipt_015",
+      "case_id": "receipt_006",
       "input": [
         {
           "name": "品客",
-          "specification": "原味"
+          "specification": "酸乳酪洋葱味"
         },
         {
           "name": "雪碧",
@@ -407,21 +164,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_015",
+          "SKU_016",
           "SKU_068"
         ],
         "product_names": [
-          "品客原味",
+          "品客酸乳酪洋葱味",
           "雪碧罐装"
         ]
       }
     },
     {
-      "case_id": "receipt_016",
+      "case_id": "receipt_007",
       "input": [
         {
-          "name": "品客",
-          "specification": "酸乳酪洋葱味"
+          "name": "奥利奥",
+          "specification": "香甜不腻"
         },
         {
           "name": "芬达",
@@ -434,21 +191,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_016",
+          "SKU_017",
           "SKU_069"
         ],
         "product_names": [
-          "品客酸乳酪洋葱味",
+          "奥利奥香甜不腻",
           "芬达罐装"
         ]
       }
     },
     {
-      "case_id": "receipt_017",
+      "case_id": "receipt_008",
       "input": [
         {
           "name": "奥利奥",
-          "specification": "香甜不腻"
+          "specification": "浓醇巧克力味"
         },
         {
           "name": "百事可乐",
@@ -461,21 +218,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_017",
+          "SKU_019",
           "SKU_070"
         ],
         "product_names": [
-          "奥利奥香甜不腻",
+          "奥利奥浓醇巧克力味",
           "百事可乐瓶装"
         ]
       }
     },
     {
-      "case_id": "receipt_018",
+      "case_id": "receipt_009",
       "input": [
         {
           "name": "奥利奥",
-          "specification": "冰淇淋抹茶味"
+          "specification": "白桃乌龙味"
         },
         {
           "name": "7喜",
@@ -488,21 +245,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_018",
+          "SKU_020",
           "SKU_071"
         ],
         "product_names": [
-          "奥利奥冰淇淋抹茶味",
+          "奥利奥白桃乌龙味",
           "7喜瓶装"
         ]
       }
     },
     {
-      "case_id": "receipt_019",
+      "case_id": "receipt_010",
       "input": [
         {
-          "name": "奥利奥",
-          "specification": "浓醇巧克力味"
+          "name": "呀！土豆",
+          "specification": "番茄酱味"
         },
         {
           "name": "水溶C100",
@@ -515,241 +272,25 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_019",
+          "SKU_026",
           "SKU_072"
         ],
         "product_names": [
-          "奥利奥浓醇巧克力味",
+          "呀！土豆番茄酱味",
           "水溶C100瓶装"
         ]
       }
     },
     {
-      "case_id": "receipt_020",
+      "case_id": "receipt_011",
       "input": [
         {
-          "name": "奥利奥",
-          "specification": "白桃乌龙味"
-        },
-        {
-          "name": "小青柠汁饮料",
-          "specification": "1升"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_020",
-          "SKU_073"
-        ],
-        "product_names": [
-          "奥利奥白桃乌龙味",
-          "小青柠汁饮料"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_021",
-      "input": [
-        {
-          "name": "Lay's乐事薯片",
-          "specification": "墨西哥鸡汁番茄味"
+          "name": "好友趣韩国泡菜味",
+          "specification": "55g"
         },
         {
           "name": "美年达",
           "specification": "瓶装"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_021",
-          "SKU_074"
-        ],
-        "product_names": [
-          "Lay's乐事薯片墨西哥鸡汁番茄味",
-          "美年达瓶装"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_022",
-      "input": [
-        {
-          "name": "Lay's乐事薯片",
-          "specification": "经典原味"
-        },
-        {
-          "name": "名仁苏打水饮料",
-          "specification": "750毫升"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_022",
-          "SKU_075"
-        ],
-        "product_names": [
-          "Lay's乐事薯片经典原味",
-          "名仁苏打水饮料"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_023",
-      "input": [
-        {
-          "name": "Lay's乐事薯片",
-          "specification": "黄瓜味"
-        },
-        {
-          "name": "东方树叶",
-          "specification": "茉莉花茶"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_023",
-          "SKU_076"
-        ],
-        "product_names": [
-          "Lay's乐事薯片黄瓜味",
-          "东方树叶茉莉花茶"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_024",
-      "input": [
-        {
-          "name": "Lay's乐事薯片",
-          "specification": "意大利香浓红烩味"
-        },
-        {
-          "name": "绿豆冰沙",
-          "specification": "500ml"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_024",
-          "SKU_077"
-        ],
-        "product_names": [
-          "Lay's乐事薯片意大利香浓红烩味",
-          "绿豆冰沙"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_025",
-      "input": [
-        {
-          "name": "Lay's乐事薯片",
-          "specification": "青柠味"
-        },
-        {
-          "name": "外星人电解质水",
-          "specification": "椰子口味"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_025",
-          "SKU_078"
-        ],
-        "product_names": [
-          "Lay's乐事薯片青柠味",
-          "外星人电解质水椰子口味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_026",
-      "input": [
-        {
-          "name": "呀！土豆",
-          "specification": "番茄酱味"
-        },
-        {
-          "name": "外星人电解质水",
-          "specification": "青柠口味"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_026",
-          "SKU_079"
-        ],
-        "product_names": [
-          "呀！土豆番茄酱味",
-          "外星人电解质水青柠口味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_027",
-      "input": [
-        {
-          "name": "好友趣",
-          "specification": "韩国泡菜味"
-        },
-        {
-          "name": "外星人电解质水",
-          "specification": "白桃口味0糖"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_027",
-          "SKU_080"
-        ],
-        "product_names": [
-          "好友趣韩国泡菜味",
-          "外星人电解质水白桃口味0糖"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_028",
-      "input": [
-        {
-          "name": "卫龙辣条",
-          "specification": "500g"
-        },
-        {
-          "name": "外星人电解质水",
-          "specification": "西柚口味"
         }
       ],
       "input_styles": [
@@ -758,75 +299,156 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_028",
-          "SKU_081"
+          "SKU_027",
+          "SKU_074"
         ],
         "product_names": [
-          "卫龙辣条",
-          "外星人电解质水西柚口味"
+          "好友趣韩国泡菜味",
+          "美年达瓶装"
         ]
       }
     },
     {
-      "case_id": "receipt_029",
+      "case_id": "receipt_012",
       "input": [
         {
-          "name": "百醇",
-          "specification": "草莓香草味"
+          "name": "上好佳鲜虾条",
+          "specification": "120g"
         },
         {
-          "name": "尖叫",
-          "specification": "500ml"
+          "name": "外星人电解质水",
+          "specification": "椰子口味"
         }
       ],
       "input_styles": [
-        "split_name_and_type",
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_031",
+          "SKU_078"
+        ],
+        "product_names": [
+          "上好佳鲜虾条",
+          "外星人电解质水椰子口味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_013",
+      "input": [
+        {
+          "name": "浪味仙",
+          "specification": "500g"
+        },
+        {
+          "name": "外星人电解质水",
+          "specification": "青柠口味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_032",
+          "SKU_079"
+        ],
+        "product_names": [
+          "浪味仙",
+          "外星人电解质水青柠口味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_014",
+      "input": [
+        {
+          "name": "京东京造毛巾",
+          "specification": "2包"
+        },
+        {
+          "name": "外星人电解质水",
+          "specification": "白桃口味0糖"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_056",
+          "SKU_080"
+        ],
+        "product_names": [
+          "京东京造毛巾",
+          "外星人电解质水白桃口味0糖"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_015",
+      "input": [
+        {
+          "name": "可口可乐罐装",
+          "specification": "750毫升"
+        },
+        {
+          "name": "尖叫",
+          "specification": "1升"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
         "full_name_with_invented_size"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_029",
+          "SKU_067",
           "SKU_082"
         ],
         "product_names": [
-          "百醇草莓香草味",
+          "可口可乐罐装",
           "尖叫"
         ]
       }
     },
     {
-      "case_id": "receipt_030",
+      "case_id": "receipt_016",
       "input": [
         {
-          "name": "百醇",
-          "specification": "巧克力味"
+          "name": "雪碧罐装",
+          "specification": "250ml"
         },
         {
           "name": "百岁山矿泉水",
-          "specification": "1升"
+          "specification": "330毫升"
         }
       ],
       "input_styles": [
-        "split_name_and_type",
+        "full_name_with_invented_size",
         "full_name_with_invented_size"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_030",
+          "SKU_068",
           "SKU_083"
         ],
         "product_names": [
-          "百醇巧克力味",
+          "雪碧罐装",
           "百岁山矿泉水"
         ]
       }
     },
     {
-      "case_id": "receipt_031",
+      "case_id": "receipt_017",
       "input": [
         {
-          "name": "上好佳",
-          "specification": "鲜虾条"
+          "name": "芬达罐装",
+          "specification": "500ml"
         },
         {
           "name": "脉动",
@@ -834,26 +456,26 @@
         }
       ],
       "input_styles": [
-        "split_name_and_type",
+        "full_name_with_invented_size",
         "split_name_and_type"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_031",
+          "SKU_069",
           "SKU_084"
         ],
         "product_names": [
-          "上好佳鲜虾条",
+          "芬达罐装",
           "脉动观梅止渴饮"
         ]
       }
     },
     {
-      "case_id": "receipt_032",
+      "case_id": "receipt_018",
       "input": [
         {
-          "name": "浪味仙",
-          "specification": "120g"
+          "name": "百事可乐瓶装",
+          "specification": "1升"
         },
         {
           "name": "脉动",
@@ -866,21 +488,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_032",
+          "SKU_070",
           "SKU_085"
         ],
         "product_names": [
-          "浪味仙",
+          "百事可乐瓶装",
           "脉动芒果口味"
         ]
       }
     },
     {
-      "case_id": "receipt_033",
+      "case_id": "receipt_019",
       "input": [
         {
-          "name": "好丽友派",
-          "specification": "500g"
+          "name": "7喜瓶装",
+          "specification": "330毫升"
         },
         {
           "name": "脉动",
@@ -893,21 +515,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_033",
+          "SKU_071",
           "SKU_086"
         ],
         "product_names": [
-          "好丽友派",
+          "7喜瓶装",
           "脉动菠萝口味"
         ]
       }
     },
     {
-      "case_id": "receipt_034",
+      "case_id": "receipt_020",
       "input": [
         {
-          "name": "吐司方方原味",
-          "specification": "80克"
+          "name": "水溶C100瓶装",
+          "specification": "750毫升"
         },
         {
           "name": "脉动",
@@ -920,102 +542,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_034",
+          "SKU_072",
           "SKU_087"
         ],
         "product_names": [
-          "吐司方方原味",
+          "水溶C100瓶装",
           "脉动猫薄荷瓶"
         ]
       }
     },
     {
-      "case_id": "receipt_035",
+      "case_id": "receipt_021",
       "input": [
         {
-          "name": "好友趣",
-          "specification": "蜂蜜黄油味"
-        },
-        {
-          "name": "外星人电解质水",
-          "specification": "青柠口味0糖"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_035",
-          "SKU_088"
-        ],
-        "product_names": [
-          "好友趣蜂蜜黄油味",
-          "外星人电解质水青柠口味0糖"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_036",
-      "input": [
-        {
-          "name": "可孚棉签",
-          "specification": "1个"
-        },
-        {
-          "name": "宝矿力水特",
-          "specification": "330毫升"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_036",
-          "SKU_089"
-        ],
-        "product_names": [
-          "可孚棉签",
-          "宝矿力水特"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_037",
-      "input": [
-        {
-          "name": "小鹿妈妈牙线",
-          "specification": "6片"
-        },
-        {
-          "name": "舒肤佳",
-          "specification": "香皂纯白清香型"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_037",
-          "SKU_090"
-        ],
-        "product_names": [
-          "小鹿妈妈牙线",
-          "舒肤佳香皂纯白清香型"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_038",
-      "input": [
-        {
-          "name": "得宝纸巾",
-          "specification": "12抽"
+          "name": "美年达瓶装",
+          "specification": "250ml"
         },
         {
           "name": "舒肤佳",
@@ -1028,12 +569,471 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_038",
+          "SKU_074",
           "SKU_091"
         ],
         "product_names": [
-          "得宝纸巾",
+          "美年达瓶装",
           "舒肤佳香皂芦荟呵护香型"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_022",
+      "input": [
+        {
+          "name": "外星人电解质水椰子口味",
+          "specification": "500ml"
+        },
+        {
+          "name": "舒肤佳",
+          "specification": "香皂柠檬清新香型"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_078",
+          "SKU_092"
+        ],
+        "product_names": [
+          "外星人电解质水椰子口味",
+          "舒肤佳香皂柠檬清新香型"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_023",
+      "input": [
+        {
+          "name": "外星人电解质水青柠口味",
+          "specification": "1升"
+        },
+        {
+          "name": "汰渍肥皂",
+          "specification": "1个"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_079",
+          "SKU_093"
+        ],
+        "product_names": [
+          "外星人电解质水青柠口味",
+          "汰渍肥皂"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_024",
+      "input": [
+        {
+          "name": "外星人电解质水白桃口味0糖",
+          "specification": "330毫升"
+        },
+        {
+          "name": "舒克",
+          "specification": "牙膏竹炭薄荷"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_080",
+          "SKU_095"
+        ],
+        "product_names": [
+          "外星人电解质水白桃口味0糖",
+          "舒克牙膏竹炭薄荷"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_025",
+      "input": [
+        {
+          "name": "尖叫",
+          "specification": "750毫升"
+        },
+        {
+          "name": "舒克",
+          "specification": "牙膏柠檬百香果"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_082",
+          "SKU_096"
+        ],
+        "product_names": [
+          "尖叫",
+          "舒克牙膏柠檬百香果"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_026",
+      "input": [
+        {
+          "name": "百岁山矿泉水",
+          "specification": "250ml"
+        },
+        {
+          "name": "舒克",
+          "specification": "牙膏海盐薄荷"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_083",
+          "SKU_097"
+        ],
+        "product_names": [
+          "百岁山矿泉水",
+          "舒克牙膏海盐薄荷"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_027",
+      "input": [
+        {
+          "name": "脉动观梅止渴饮",
+          "specification": "500ml"
+        },
+        {
+          "name": "Dove",
+          "specification": "沐浴泡泡樱花甜香"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_084",
+          "SKU_099"
+        ],
+        "product_names": [
+          "脉动观梅止渴饮",
+          "Dove沐浴泡泡樱花甜香"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_028",
+      "input": [
+        {
+          "name": "脉动芒果口味",
+          "specification": "1升"
+        },
+        {
+          "name": "Dove",
+          "specification": "沐浴泡泡白桃果香"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_085",
+          "SKU_100"
+        ],
+        "product_names": [
+          "脉动芒果口味",
+          "Dove沐浴泡泡白桃果香"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_029",
+      "input": [
+        {
+          "name": "脉动菠萝口味",
+          "specification": "330毫升"
+        },
+        {
+          "name": "Dove",
+          "specification": "沐浴泡泡清甜奶香"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_086",
+          "SKU_101"
+        ],
+        "product_names": [
+          "脉动菠萝口味",
+          "Dove沐浴泡泡清甜奶香"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_030",
+      "input": [
+        {
+          "name": "脉动猫薄荷瓶",
+          "specification": "750毫升"
+        },
+        {
+          "name": "Dove",
+          "specification": "沐浴乳"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_087",
+          "SKU_103"
+        ],
+        "product_names": [
+          "脉动猫薄荷瓶",
+          "Dove沐浴乳"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_031",
+      "input": [
+        {
+          "name": "舒肤佳香皂芦荟呵护香型",
+          "specification": "1个"
+        },
+        {
+          "name": "拖鞋",
+          "specification": "2包"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_091",
+          "SKU_104"
+        ],
+        "product_names": [
+          "舒肤佳香皂芦荟呵护香型",
+          "拖鞋"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_032",
+      "input": [
+        {
+          "name": "舒肤佳香皂柠檬清新香型",
+          "specification": "6片"
+        },
+        {
+          "name": "半亩花田",
+          "specification": "洗发水"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_092",
+          "SKU_106"
+        ],
+        "product_names": [
+          "舒肤佳香皂柠檬清新香型",
+          "半亩花田洗发水"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_033",
+      "input": [
+        {
+          "name": "汰渍肥皂",
+          "specification": "12抽"
+        },
+        {
+          "name": "心相印",
+          "specification": "厨房纸巾"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_093",
+          "SKU_107"
+        ],
+        "product_names": [
+          "汰渍肥皂",
+          "心相印厨房纸巾"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_034",
+      "input": [
+        {
+          "name": "舒克牙膏竹炭薄荷",
+          "specification": "80克"
+        },
+        {
+          "name": "NFC桔汁",
+          "specification": "500ml"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_095",
+          "SKU_001"
+        ],
+        "product_names": [
+          "舒克牙膏竹炭薄荷",
+          "NFC桔汁"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_035",
+      "input": [
+        {
+          "name": "舒克牙膏柠檬百香果",
+          "specification": "250克"
+        },
+        {
+          "name": "蒙牛纯牛奶",
+          "specification": "1升"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_096",
+          "SKU_002"
+        ],
+        "product_names": [
+          "舒克牙膏柠檬百香果",
+          "蒙牛纯牛奶"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_036",
+      "input": [
+        {
+          "name": "舒克牙膏海盐薄荷",
+          "specification": "55g"
+        },
+        {
+          "name": "纯甄酸奶",
+          "specification": "330毫升"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_097",
+          "SKU_003"
+        ],
+        "product_names": [
+          "舒克牙膏海盐薄荷",
+          "纯甄酸奶"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_037",
+      "input": [
+        {
+          "name": "Dove沐浴泡泡樱花甜香",
+          "specification": "500ml"
+        },
+        {
+          "name": "品客薯片烧烤牛排味",
+          "specification": "250克"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_099",
+          "SKU_014"
+        ],
+        "product_names": [
+          "Dove沐浴泡泡樱花甜香",
+          "品客薯片烧烤牛排味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_038",
+      "input": [
+        {
+          "name": "Dove沐浴泡泡白桃果香",
+          "specification": "1升"
+        },
+        {
+          "name": "品客原味",
+          "specification": "55g"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_100",
+          "SKU_015"
+        ],
+        "product_names": [
+          "Dove沐浴泡泡白桃果香",
+          "品客原味"
         ]
       }
     },
@@ -1041,7 +1041,250 @@
       "case_id": "receipt_039",
       "input": [
         {
-          "name": "草原红太阳烧烤料",
+          "name": "Dove沐浴泡泡清甜奶香",
+          "specification": "330毫升"
+        },
+        {
+          "name": "品客酸乳酪洋葱味",
+          "specification": "120g"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_101",
+          "SKU_016"
+        ],
+        "product_names": [
+          "Dove沐浴泡泡清甜奶香",
+          "品客酸乳酪洋葱味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_040",
+      "input": [
+        {
+          "name": "Dove沐浴乳",
+          "specification": "750毫升"
+        },
+        {
+          "name": "奥利奥香甜不腻",
+          "specification": "500g"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_103",
+          "SKU_017"
+        ],
+        "product_names": [
+          "Dove沐浴乳",
+          "奥利奥香甜不腻"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_041",
+      "input": [
+        {
+          "name": "拖鞋",
+          "specification": "1个"
+        },
+        {
+          "name": "奥利奥浓醇巧克力味",
+          "specification": "80克"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_104",
+          "SKU_019"
+        ],
+        "product_names": [
+          "拖鞋",
+          "奥利奥浓醇巧克力味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_042",
+      "input": [
+        {
+          "name": "半亩花田洗发水",
+          "specification": "500ml"
+        },
+        {
+          "name": "奥利奥白桃乌龙味",
+          "specification": "250克"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_106",
+          "SKU_020"
+        ],
+        "product_names": [
+          "半亩花田洗发水",
+          "奥利奥白桃乌龙味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_043",
+      "input": [
+        {
+          "name": "心相印厨房纸巾",
+          "specification": "12抽"
+        },
+        {
+          "name": "呀！土豆番茄酱味",
+          "specification": "55g"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_107",
+          "SKU_026"
+        ],
+        "product_names": [
+          "心相印厨房纸巾",
+          "呀！土豆番茄酱味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_044",
+      "input": [
+        {
+          "name": "NFC桔汁",
+          "specification": "330毫升"
+        },
+        {
+          "name": "脉动",
+          "specification": "芒果口味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_001",
+          "SKU_085"
+        ],
+        "product_names": [
+          "NFC桔汁",
+          "脉动芒果口味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_045",
+      "input": [
+        {
+          "name": "蒙牛纯牛奶",
+          "specification": "750毫升"
+        },
+        {
+          "name": "脉动",
+          "specification": "菠萝口味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_002",
+          "SKU_086"
+        ],
+        "product_names": [
+          "蒙牛纯牛奶",
+          "脉动菠萝口味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_046",
+      "input": [
+        {
+          "name": "纯甄酸奶",
+          "specification": "250ml"
+        },
+        {
+          "name": "脉动",
+          "specification": "猫薄荷瓶"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_003",
+          "SKU_087"
+        ],
+        "product_names": [
+          "纯甄酸奶",
+          "脉动猫薄荷瓶"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_047",
+      "input": [
+        {
+          "name": "品客",
+          "specification": "薯片烧烤牛排味"
+        },
+        {
+          "name": "舒肤佳",
+          "specification": "香皂芦荟呵护香型"
+        }
+      ],
+      "input_styles": [
+        "split_name_and_type",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_014",
+          "SKU_091"
+        ],
+        "product_names": [
+          "品客薯片烧烤牛排味",
+          "舒肤佳香皂芦荟呵护香型"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_048",
+      "input": [
+        {
+          "name": "品客",
           "specification": "原味"
         },
         {
@@ -1055,25 +1298,25 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_039",
+          "SKU_015",
           "SKU_092"
         ],
         "product_names": [
-          "草原红太阳烧烤料原味",
+          "品客原味",
           "舒肤佳香皂柠檬清新香型"
         ]
       }
     },
     {
-      "case_id": "receipt_040",
+      "case_id": "receipt_049",
       "input": [
         {
-          "name": "草原红太阳烧烤料",
-          "specification": "香辣味"
+          "name": "品客",
+          "specification": "酸乳酪洋葱味"
         },
         {
           "name": "汰渍肥皂",
-          "specification": "12抽"
+          "specification": "6片"
         }
       ],
       "input_styles": [
@@ -1082,48 +1325,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_040",
+          "SKU_016",
           "SKU_093"
         ],
         "product_names": [
-          "草原红太阳烧烤料香辣味",
+          "品客酸乳酪洋葱味",
           "汰渍肥皂"
         ]
       }
     },
     {
-      "case_id": "receipt_041",
+      "case_id": "receipt_050",
       "input": [
         {
-          "name": "草原红太阳烧烤酱",
-          "specification": "香辣"
-        },
-        {
-          "name": "杯子",
-          "specification": "2包"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_041",
-          "SKU_094"
-        ],
-        "product_names": [
-          "草原红太阳烧烤酱香辣",
-          "杯子"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_042",
-      "input": [
-        {
-          "name": "草原红太阳烧烤酱",
-          "specification": "原味"
+          "name": "奥利奥",
+          "specification": "香甜不腻"
         },
         {
           "name": "舒克",
@@ -1136,79 +1352,25 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_042",
+          "SKU_017",
           "SKU_095"
         ],
         "product_names": [
-          "草原红太阳烧烤酱原味",
+          "奥利奥香甜不腻",
           "舒克牙膏竹炭薄荷"
         ]
       }
     },
     {
-      "case_id": "receipt_043",
+      "case_id": "receipt_051",
       "input": [
         {
-          "name": "海氏海诺创口贴",
-          "specification": "12抽"
+          "name": "奥利奥",
+          "specification": "浓醇巧克力味"
         },
         {
           "name": "舒克",
           "specification": "牙膏柠檬百香果"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_043",
-          "SKU_096"
-        ],
-        "product_names": [
-          "海氏海诺创口贴",
-          "舒克牙膏柠檬百香果"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_044",
-      "input": [
-        {
-          "name": "德佑湿巾",
-          "specification": "2包"
-        },
-        {
-          "name": "舒克",
-          "specification": "牙膏海盐薄荷"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_044",
-          "SKU_097"
-        ],
-        "product_names": [
-          "德佑湿巾",
-          "舒克牙膏海盐薄荷"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_045",
-      "input": [
-        {
-          "name": "心相印",
-          "specification": "纸巾"
-        },
-        {
-          "name": "冷酸灵",
-          "specification": "云感觉牙刷"
         }
       ],
       "input_styles": [
@@ -1217,21 +1379,48 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_045",
-          "SKU_098"
+          "SKU_019",
+          "SKU_096"
         ],
         "product_names": [
-          "心相印纸巾",
-          "冷酸灵云感觉牙刷"
+          "奥利奥浓醇巧克力味",
+          "舒克牙膏柠檬百香果"
         ]
       }
     },
     {
-      "case_id": "receipt_046",
+      "case_id": "receipt_052",
       "input": [
         {
-          "name": "合味道",
-          "specification": "海鲜味"
+          "name": "奥利奥",
+          "specification": "白桃乌龙味"
+        },
+        {
+          "name": "舒克",
+          "specification": "牙膏海盐薄荷"
+        }
+      ],
+      "input_styles": [
+        "split_name_and_type",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_020",
+          "SKU_097"
+        ],
+        "product_names": [
+          "奥利奥白桃乌龙味",
+          "舒克牙膏海盐薄荷"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_053",
+      "input": [
+        {
+          "name": "呀！土豆",
+          "specification": "番茄酱味"
         },
         {
           "name": "Dove",
@@ -1244,21 +1433,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_046",
+          "SKU_026",
           "SKU_099"
         ],
         "product_names": [
-          "合味道海鲜味",
+          "呀！土豆番茄酱味",
           "Dove沐浴泡泡樱花甜香"
         ]
       }
     },
     {
-      "case_id": "receipt_047",
+      "case_id": "receipt_054",
       "input": [
         {
-          "name": "合味道",
-          "specification": "五香牛肉味"
+          "name": "好友趣",
+          "specification": "韩国泡菜味"
         },
         {
           "name": "Dove",
@@ -1271,21 +1460,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_047",
+          "SKU_027",
           "SKU_100"
         ],
         "product_names": [
-          "合味道五香牛肉味",
+          "好友趣韩国泡菜味",
           "Dove沐浴泡泡白桃果香"
         ]
       }
     },
     {
-      "case_id": "receipt_048",
+      "case_id": "receipt_055",
       "input": [
         {
-          "name": "农心碗面",
-          "specification": "500g"
+          "name": "上好佳",
+          "specification": "鲜虾条"
         },
         {
           "name": "Dove",
@@ -1293,53 +1482,26 @@
         }
       ],
       "input_styles": [
-        "full_name_with_invented_size",
+        "split_name_and_type",
         "split_name_and_type"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_048",
+          "SKU_031",
           "SKU_101"
         ],
         "product_names": [
-          "农心碗面",
+          "上好佳鲜虾条",
           "Dove沐浴泡泡清甜奶香"
         ]
       }
     },
     {
-      "case_id": "receipt_049",
+      "case_id": "receipt_056",
       "input": [
         {
-          "name": "健食力低脂香肠",
-          "specification": "80克"
-        },
-        {
-          "name": "威露士",
-          "specification": "500ml"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_049",
-          "SKU_102"
-        ],
-        "product_names": [
-          "健食力低脂香肠",
-          "威露士"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_050",
-      "input": [
-        {
-          "name": "妙洁海绵百洁布",
-          "specification": "10枚"
+          "name": "浪味仙",
+          "specification": "55g"
         },
         {
           "name": "Dove",
@@ -1352,75 +1514,48 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_050",
+          "SKU_032",
           "SKU_103"
         ],
         "product_names": [
-          "妙洁海绵百洁布",
+          "浪味仙",
           "Dove沐浴乳"
         ]
       }
     },
     {
-      "case_id": "receipt_051",
+      "case_id": "receipt_057",
       "input": [
         {
-          "name": "康师傅",
-          "specification": "香辣牛肉面"
+          "name": "京东京造毛巾",
+          "specification": "6片"
         },
         {
           "name": "拖鞋",
-          "specification": "2包"
+          "specification": "10枚"
         }
       ],
       "input_styles": [
-        "split_name_and_type",
+        "full_name_with_invented_size",
         "full_name_with_invented_size"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_051",
+          "SKU_056",
           "SKU_104"
         ],
         "product_names": [
-          "康师傅香辣牛肉面",
+          "京东京造毛巾",
           "拖鞋"
         ]
       }
     },
     {
-      "case_id": "receipt_052",
+      "case_id": "receipt_058",
       "input": [
         {
-          "name": "康师傅",
-          "specification": "鲜虾鱼板面"
-        },
-        {
-          "name": "Dove",
-          "specification": "沐浴泡泡樱花甜香袋装"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_052",
-          "SKU_105"
-        ],
-        "product_names": [
-          "康师傅鲜虾鱼板面",
-          "Dove沐浴泡泡樱花甜香袋装"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_053",
-      "input": [
-        {
-          "name": "康师傅",
-          "specification": "老坛酸菜牛肉面"
+          "name": "可口可乐",
+          "specification": "罐装"
         },
         {
           "name": "半亩花田",
@@ -1433,147 +1568,12 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_053",
+          "SKU_067",
           "SKU_106"
         ],
         "product_names": [
-          "康师傅老坛酸菜牛肉面",
+          "可口可乐罐装",
           "半亩花田洗发水"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_054",
-      "input": [
-        {
-          "name": "好人家火锅底料",
-          "specification": "80克"
-        },
-        {
-          "name": "心相印",
-          "specification": "厨房纸巾"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_054",
-          "SKU_107"
-        ],
-        "product_names": [
-          "好人家火锅底料",
-          "心相印厨房纸巾"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_055",
-      "input": [
-        {
-          "name": "纯棉酒店大毛巾",
-          "specification": "10枚"
-        },
-        {
-          "name": "NFC桔汁",
-          "specification": "1升"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_055",
-          "SKU_001"
-        ],
-        "product_names": [
-          "纯棉酒店大毛巾",
-          "NFC桔汁"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_056",
-      "input": [
-        {
-          "name": "京东京造毛巾",
-          "specification": "1个"
-        },
-        {
-          "name": "蒙牛纯牛奶",
-          "specification": "330毫升"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_056",
-          "SKU_002"
-        ],
-        "product_names": [
-          "京东京造毛巾",
-          "蒙牛纯牛奶"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_057",
-      "input": [
-        {
-          "name": "三色藜麦",
-          "specification": "120g"
-        },
-        {
-          "name": "纯甄酸奶",
-          "specification": "750毫升"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_057",
-          "SKU_003"
-        ],
-        "product_names": [
-          "三色藜麦",
-          "纯甄酸奶"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_058",
-      "input": [
-        {
-          "name": "慢碳十色糙米",
-          "specification": "500g"
-        },
-        {
-          "name": "百草味海苔肉松蛋卷",
-          "specification": "55g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_058",
-          "SKU_004"
-        ],
-        "product_names": [
-          "慢碳十色糙米",
-          "百草味海苔肉松蛋卷"
         ]
       }
     },
@@ -1581,26 +1581,26 @@
       "case_id": "receipt_059",
       "input": [
         {
-          "name": "高纤七色糙米",
-          "specification": "80克"
+          "name": "雪碧",
+          "specification": "罐装"
         },
         {
-          "name": "三只松鼠每日坚果",
-          "specification": "120g"
+          "name": "心相印",
+          "specification": "厨房纸巾"
         }
       ],
       "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
+        "split_name_and_type",
+        "split_name_and_type"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_059",
-          "SKU_005"
+          "SKU_068",
+          "SKU_107"
         ],
         "product_names": [
-          "高纤七色糙米",
-          "三只松鼠每日坚果"
+          "雪碧罐装",
+          "心相印厨房纸巾"
         ]
       }
     },
@@ -1608,26 +1608,26 @@
       "case_id": "receipt_060",
       "input": [
         {
-          "name": "山西黄小米",
-          "specification": "250克"
+          "name": "芬达",
+          "specification": "罐装"
         },
         {
-          "name": "费列罗巧克力",
-          "specification": "500g"
+          "name": "NFC桔汁",
+          "specification": "1升"
         }
       ],
       "input_styles": [
-        "full_name_with_invented_size",
+        "split_name_and_type",
         "full_name_with_invented_size"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_060",
-          "SKU_006"
+          "SKU_069",
+          "SKU_001"
         ],
         "product_names": [
-          "山西黄小米",
-          "费列罗巧克力"
+          "芬达罐装",
+          "NFC桔汁"
         ]
       }
     },
@@ -1635,26 +1635,26 @@
       "case_id": "receipt_061",
       "input": [
         {
-          "name": "界面医疗医用外科口罩",
-          "specification": "1个"
+          "name": "百事可乐",
+          "specification": "瓶装"
         },
         {
-          "name": "双汇王中王火腿肠",
-          "specification": "80克"
+          "name": "蒙牛纯牛奶",
+          "specification": "330毫升"
         }
       ],
       "input_styles": [
-        "full_name_with_invented_size",
+        "split_name_and_type",
         "full_name_with_invented_size"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_061",
-          "SKU_007"
+          "SKU_070",
+          "SKU_002"
         ],
         "product_names": [
-          "界面医疗医用外科口罩",
-          "双汇王中王火腿肠"
+          "百事可乐瓶装",
+          "蒙牛纯牛奶"
         ]
       }
     },
@@ -1662,26 +1662,26 @@
       "case_id": "receipt_062",
       "input": [
         {
-          "name": "中盐精制盐",
-          "specification": "120g"
+          "name": "7喜",
+          "specification": "瓶装"
         },
         {
-          "name": "妙芙香芋牛奶味",
+          "name": "纯甄酸奶",
           "specification": "750毫升"
         }
       ],
       "input_styles": [
-        "full_name_with_invented_size",
+        "split_name_and_type",
         "full_name_with_invented_size"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_062",
-          "SKU_008"
+          "SKU_071",
+          "SKU_003"
         ],
         "product_names": [
-          "中盐精制盐",
-          "妙芙香芋牛奶味"
+          "7喜瓶装",
+          "纯甄酸奶"
         ]
       }
     },
@@ -1689,143 +1689,8 @@
       "case_id": "receipt_063",
       "input": [
         {
-          "name": "小苏打",
-          "specification": "500g"
-        },
-        {
-          "name": "妙芙绵醇奶油味",
-          "specification": "55g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_063",
-          "SKU_009"
-        ],
-        "product_names": [
-          "小苏打",
-          "妙芙绵醇奶油味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_064",
-      "input": [
-        {
-          "name": "镇江香醋",
-          "specification": "330毫升"
-        },
-        {
-          "name": "妙芙巧克力味",
-          "specification": "120g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_064",
-          "SKU_010"
-        ],
-        "product_names": [
-          "镇江香醋",
-          "妙芙巧克力味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_065",
-      "input": [
-        {
-          "name": "蒸鱼豉油",
-          "specification": "750毫升"
-        },
-        {
-          "name": "薯愿非油炸清新番茄味",
-          "specification": "500g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_065",
-          "SKU_011"
-        ],
-        "product_names": [
-          "蒸鱼豉油",
-          "薯愿非油炸清新番茄味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_066",
-      "input": [
-        {
-          "name": "薄盐生抽",
-          "specification": "250ml"
-        },
-        {
-          "name": "薯愿非油炸韩国泡菜味",
-          "specification": "80克"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_066",
-          "SKU_012"
-        ],
-        "product_names": [
-          "薄盐生抽",
-          "薯愿非油炸韩国泡菜味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_067",
-      "input": [
-        {
-          "name": "可口可乐罐装",
-          "specification": "500ml"
-        },
-        {
-          "name": "薯愿非油炸香烤原味",
-          "specification": "250克"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_067",
-          "SKU_013"
-        ],
-        "product_names": [
-          "可口可乐罐装",
-          "薯愿非油炸香烤原味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_068",
-      "input": [
-        {
-          "name": "雪碧罐装",
-          "specification": "1升"
+          "name": "水溶C100",
+          "specification": "瓶装"
         },
         {
           "name": "品客薯片烧烤牛排味",
@@ -1833,26 +1698,26 @@
         }
       ],
       "input_styles": [
-        "full_name_with_invented_size",
+        "split_name_and_type",
         "full_name_with_invented_size"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_068",
+          "SKU_072",
           "SKU_014"
         ],
         "product_names": [
-          "雪碧罐装",
+          "水溶C100瓶装",
           "品客薯片烧烤牛排味"
         ]
       }
     },
     {
-      "case_id": "receipt_069",
+      "case_id": "receipt_064",
       "input": [
         {
-          "name": "芬达罐装",
-          "specification": "330毫升"
+          "name": "美年达",
+          "specification": "瓶装"
         },
         {
           "name": "品客原味",
@@ -1860,26 +1725,26 @@
         }
       ],
       "input_styles": [
-        "full_name_with_invented_size",
+        "split_name_and_type",
         "full_name_with_invented_size"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_069",
+          "SKU_074",
           "SKU_015"
         ],
         "product_names": [
-          "芬达罐装",
+          "美年达瓶装",
           "品客原味"
         ]
       }
     },
     {
-      "case_id": "receipt_070",
+      "case_id": "receipt_065",
       "input": [
         {
-          "name": "百事可乐瓶装",
-          "specification": "750毫升"
+          "name": "外星人电解质水",
+          "specification": "椰子口味"
         },
         {
           "name": "品客酸乳酪洋葱味",
@@ -1887,26 +1752,26 @@
         }
       ],
       "input_styles": [
-        "full_name_with_invented_size",
+        "split_name_and_type",
         "full_name_with_invented_size"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_070",
+          "SKU_078",
           "SKU_016"
         ],
         "product_names": [
-          "百事可乐瓶装",
+          "外星人电解质水椰子口味",
           "品客酸乳酪洋葱味"
         ]
       }
     },
     {
-      "case_id": "receipt_071",
+      "case_id": "receipt_066",
       "input": [
         {
-          "name": "7喜瓶装",
-          "specification": "250ml"
+          "name": "外星人电解质水",
+          "specification": "青柠口味"
         },
         {
           "name": "奥利奥香甜不腻",
@@ -1914,300 +1779,57 @@
         }
       ],
       "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_071",
-          "SKU_017"
-        ],
-        "product_names": [
-          "7喜瓶装",
-          "奥利奥香甜不腻"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_072",
-      "input": [
-        {
-          "name": "水溶C100瓶装",
-          "specification": "500ml"
-        },
-        {
-          "name": "奥利奥冰淇淋抹茶味",
-          "specification": "750毫升"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_072",
-          "SKU_018"
-        ],
-        "product_names": [
-          "水溶C100瓶装",
-          "奥利奥冰淇淋抹茶味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_073",
-      "input": [
-        {
-          "name": "小青柠汁饮料",
-          "specification": "1升"
-        },
-        {
-          "name": "奥利奥浓醇巧克力味",
-          "specification": "55g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_073",
-          "SKU_019"
-        ],
-        "product_names": [
-          "小青柠汁饮料",
-          "奥利奥浓醇巧克力味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_074",
-      "input": [
-        {
-          "name": "美年达瓶装",
-          "specification": "330毫升"
-        },
-        {
-          "name": "奥利奥白桃乌龙味",
-          "specification": "120g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_074",
-          "SKU_020"
-        ],
-        "product_names": [
-          "美年达瓶装",
-          "奥利奥白桃乌龙味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_075",
-      "input": [
-        {
-          "name": "名仁苏打水饮料",
-          "specification": "750毫升"
-        },
-        {
-          "name": "Lay's乐事薯片墨西哥鸡汁番茄味",
-          "specification": "1升"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_075",
-          "SKU_021"
-        ],
-        "product_names": [
-          "名仁苏打水饮料",
-          "Lay's乐事薯片墨西哥鸡汁番茄味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_076",
-      "input": [
-        {
-          "name": "东方树叶茉莉花茶",
-          "specification": "250ml"
-        },
-        {
-          "name": "Lay's乐事薯片经典原味",
-          "specification": "80克"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_076",
-          "SKU_022"
-        ],
-        "product_names": [
-          "东方树叶茉莉花茶",
-          "Lay's乐事薯片经典原味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_077",
-      "input": [
-        {
-          "name": "绿豆冰沙",
-          "specification": "500ml"
-        },
-        {
-          "name": "Lay's乐事薯片黄瓜味",
-          "specification": "250克"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_077",
-          "SKU_023"
-        ],
-        "product_names": [
-          "绿豆冰沙",
-          "Lay's乐事薯片黄瓜味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_078",
-      "input": [
-        {
-          "name": "外星人电解质水椰子口味",
-          "specification": "1升"
-        },
-        {
-          "name": "Lay's乐事薯片意大利香浓红烩味",
-          "specification": "55g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_078",
-          "SKU_024"
-        ],
-        "product_names": [
-          "外星人电解质水椰子口味",
-          "Lay's乐事薯片意大利香浓红烩味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_079",
-      "input": [
-        {
-          "name": "外星人电解质水青柠口味",
-          "specification": "330毫升"
-        },
-        {
-          "name": "Lay's乐事薯片青柠味",
-          "specification": "120g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
+        "split_name_and_type",
         "full_name_with_invented_size"
       ],
       "expected": {
         "sku_ids": [
           "SKU_079",
-          "SKU_025"
+          "SKU_017"
         ],
         "product_names": [
           "外星人电解质水青柠口味",
-          "Lay's乐事薯片青柠味"
+          "奥利奥香甜不腻"
         ]
       }
     },
     {
-      "case_id": "receipt_080",
+      "case_id": "receipt_067",
       "input": [
         {
-          "name": "外星人电解质水白桃口味0糖",
-          "specification": "750毫升"
+          "name": "外星人电解质水",
+          "specification": "白桃口味0糖"
         },
         {
-          "name": "呀！土豆番茄酱味",
-          "specification": "500g"
+          "name": "奥利奥浓醇巧克力味",
+          "specification": "250克"
         }
       ],
       "input_styles": [
-        "full_name_with_invented_size",
+        "split_name_and_type",
         "full_name_with_invented_size"
       ],
       "expected": {
         "sku_ids": [
           "SKU_080",
-          "SKU_026"
+          "SKU_019"
         ],
         "product_names": [
           "外星人电解质水白桃口味0糖",
-          "呀！土豆番茄酱味"
+          "奥利奥浓醇巧克力味"
         ]
       }
     },
     {
-      "case_id": "receipt_081",
-      "input": [
-        {
-          "name": "外星人电解质水西柚口味",
-          "specification": "250ml"
-        },
-        {
-          "name": "好友趣韩国泡菜味",
-          "specification": "80克"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_081",
-          "SKU_027"
-        ],
-        "product_names": [
-          "外星人电解质水西柚口味",
-          "好友趣韩国泡菜味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_082",
+      "case_id": "receipt_068",
       "input": [
         {
           "name": "尖叫",
-          "specification": "500ml"
+          "specification": "1升"
         },
         {
-          "name": "卫龙辣条",
-          "specification": "250克"
+          "name": "奥利奥白桃乌龙味",
+          "specification": "55g"
         }
       ],
       "input_styles": [
@@ -2217,50 +1839,23 @@
       "expected": {
         "sku_ids": [
           "SKU_082",
-          "SKU_028"
+          "SKU_020"
         ],
         "product_names": [
           "尖叫",
-          "卫龙辣条"
+          "奥利奥白桃乌龙味"
         ]
       }
     },
     {
-      "case_id": "receipt_083",
+      "case_id": "receipt_069",
       "input": [
         {
           "name": "百岁山矿泉水",
-          "specification": "1升"
-        },
-        {
-          "name": "百醇草莓香草味",
-          "specification": "55g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_083",
-          "SKU_029"
-        ],
-        "product_names": [
-          "百岁山矿泉水",
-          "百醇草莓香草味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_084",
-      "input": [
-        {
-          "name": "脉动观梅止渴饮",
           "specification": "330毫升"
         },
         {
-          "name": "百醇巧克力味",
+          "name": "呀！土豆番茄酱味",
           "specification": "120g"
         }
       ],
@@ -2270,25 +1865,52 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_084",
-          "SKU_030"
+          "SKU_083",
+          "SKU_026"
         ],
         "product_names": [
-          "脉动观梅止渴饮",
-          "百醇巧克力味"
+          "百岁山矿泉水",
+          "呀！土豆番茄酱味"
         ]
       }
     },
     {
-      "case_id": "receipt_085",
+      "case_id": "receipt_070",
+      "input": [
+        {
+          "name": "脉动",
+          "specification": "观梅止渴饮"
+        },
+        {
+          "name": "好友趣韩国泡菜味",
+          "specification": "500g"
+        }
+      ],
+      "input_styles": [
+        "split_name_and_type",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_084",
+          "SKU_027"
+        ],
+        "product_names": [
+          "脉动观梅止渴饮",
+          "好友趣韩国泡菜味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_071",
       "input": [
         {
           "name": "脉动芒果口味",
-          "specification": "750毫升"
+          "specification": "250ml"
         },
         {
           "name": "上好佳鲜虾条",
-          "specification": "500g"
+          "specification": "80克"
         }
       ],
       "input_styles": [
@@ -2307,15 +1929,15 @@
       }
     },
     {
-      "case_id": "receipt_086",
+      "case_id": "receipt_072",
       "input": [
         {
           "name": "脉动菠萝口味",
-          "specification": "250ml"
+          "specification": "500ml"
         },
         {
           "name": "浪味仙",
-          "specification": "80克"
+          "specification": "250克"
         }
       ],
       "input_styles": [
@@ -2334,15 +1956,15 @@
       }
     },
     {
-      "case_id": "receipt_087",
+      "case_id": "receipt_073",
       "input": [
         {
           "name": "脉动猫薄荷瓶",
-          "specification": "500ml"
+          "specification": "1升"
         },
         {
-          "name": "好丽友派",
-          "specification": "250克"
+          "name": "京东京造毛巾",
+          "specification": "1个"
         }
       ],
       "input_styles": [
@@ -2352,105 +1974,24 @@
       "expected": {
         "sku_ids": [
           "SKU_087",
-          "SKU_033"
+          "SKU_056"
         ],
         "product_names": [
           "脉动猫薄荷瓶",
-          "好丽友派"
+          "京东京造毛巾"
         ]
       }
     },
     {
-      "case_id": "receipt_088",
-      "input": [
-        {
-          "name": "外星人电解质水青柠口味0糖",
-          "specification": "1升"
-        },
-        {
-          "name": "吐司方方原味",
-          "specification": "55g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_088",
-          "SKU_034"
-        ],
-        "product_names": [
-          "外星人电解质水青柠口味0糖",
-          "吐司方方原味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_089",
-      "input": [
-        {
-          "name": "宝矿力水特",
-          "specification": "330毫升"
-        },
-        {
-          "name": "好友趣蜂蜜黄油味",
-          "specification": "120g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_089",
-          "SKU_035"
-        ],
-        "product_names": [
-          "宝矿力水特",
-          "好友趣蜂蜜黄油味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_090",
-      "input": [
-        {
-          "name": "舒肤佳香皂纯白清香型",
-          "specification": "10枚"
-        },
-        {
-          "name": "可孚棉签",
-          "specification": "12抽"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_090",
-          "SKU_036"
-        ],
-        "product_names": [
-          "舒肤佳香皂纯白清香型",
-          "可孚棉签"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_091",
+      "case_id": "receipt_074",
       "input": [
         {
           "name": "舒肤佳香皂芦荟呵护香型",
-          "specification": "1个"
+          "specification": "2包"
         },
         {
-          "name": "小鹿妈妈牙线",
-          "specification": "2包"
+          "name": "可口可乐罐装",
+          "specification": "500ml"
         }
       ],
       "input_styles": [
@@ -2460,24 +2001,24 @@
       "expected": {
         "sku_ids": [
           "SKU_091",
-          "SKU_037"
+          "SKU_067"
         ],
         "product_names": [
           "舒肤佳香皂芦荟呵护香型",
-          "小鹿妈妈牙线"
+          "可口可乐罐装"
         ]
       }
     },
     {
-      "case_id": "receipt_092",
+      "case_id": "receipt_075",
       "input": [
         {
           "name": "舒肤佳香皂柠檬清新香型",
-          "specification": "6片"
+          "specification": "10枚"
         },
         {
-          "name": "得宝纸巾",
-          "specification": "10枚"
+          "name": "雪碧罐装",
+          "specification": "1升"
         }
       ],
       "input_styles": [
@@ -2487,24 +2028,24 @@
       "expected": {
         "sku_ids": [
           "SKU_092",
-          "SKU_038"
+          "SKU_068"
         ],
         "product_names": [
           "舒肤佳香皂柠檬清新香型",
-          "得宝纸巾"
+          "雪碧罐装"
         ]
       }
     },
     {
-      "case_id": "receipt_093",
+      "case_id": "receipt_076",
       "input": [
         {
           "name": "汰渍肥皂",
-          "specification": "12抽"
+          "specification": "1个"
         },
         {
-          "name": "草原红太阳烧烤料原味",
-          "specification": "55g"
+          "name": "芬达罐装",
+          "specification": "330毫升"
         }
       ],
       "input_styles": [
@@ -2514,51 +2055,24 @@
       "expected": {
         "sku_ids": [
           "SKU_093",
-          "SKU_039"
+          "SKU_069"
         ],
         "product_names": [
           "汰渍肥皂",
-          "草原红太阳烧烤料原味"
+          "芬达罐装"
         ]
       }
     },
     {
-      "case_id": "receipt_094",
-      "input": [
-        {
-          "name": "杯子",
-          "specification": "2包"
-        },
-        {
-          "name": "草原红太阳烧烤料香辣味",
-          "specification": "120g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_094",
-          "SKU_040"
-        ],
-        "product_names": [
-          "杯子",
-          "草原红太阳烧烤料香辣味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_095",
+      "case_id": "receipt_077",
       "input": [
         {
           "name": "舒克牙膏竹炭薄荷",
-          "specification": "250克"
+          "specification": "120g"
         },
         {
-          "name": "草原红太阳烧烤酱香辣",
-          "specification": "500g"
+          "name": "百事可乐瓶装",
+          "specification": "750毫升"
         }
       ],
       "input_styles": [
@@ -2568,24 +2082,24 @@
       "expected": {
         "sku_ids": [
           "SKU_095",
-          "SKU_041"
+          "SKU_070"
         ],
         "product_names": [
           "舒克牙膏竹炭薄荷",
-          "草原红太阳烧烤酱香辣"
+          "百事可乐瓶装"
         ]
       }
     },
     {
-      "case_id": "receipt_096",
+      "case_id": "receipt_078",
       "input": [
         {
           "name": "舒克牙膏柠檬百香果",
-          "specification": "55g"
+          "specification": "500g"
         },
         {
-          "name": "草原红太阳烧烤酱原味",
-          "specification": "80克"
+          "name": "7喜瓶装",
+          "specification": "250ml"
         }
       ],
       "input_styles": [
@@ -2595,24 +2109,24 @@
       "expected": {
         "sku_ids": [
           "SKU_096",
-          "SKU_042"
+          "SKU_071"
         ],
         "product_names": [
           "舒克牙膏柠檬百香果",
-          "草原红太阳烧烤酱原味"
+          "7喜瓶装"
         ]
       }
     },
     {
-      "case_id": "receipt_097",
+      "case_id": "receipt_079",
       "input": [
         {
           "name": "舒克牙膏海盐薄荷",
-          "specification": "120g"
+          "specification": "80克"
         },
         {
-          "name": "海氏海诺创口贴",
-          "specification": "10枚"
+          "name": "水溶C100瓶装",
+          "specification": "500ml"
         }
       ],
       "input_styles": [
@@ -2622,51 +2136,24 @@
       "expected": {
         "sku_ids": [
           "SKU_097",
-          "SKU_043"
+          "SKU_072"
         ],
         "product_names": [
           "舒克牙膏海盐薄荷",
-          "海氏海诺创口贴"
+          "水溶C100瓶装"
         ]
       }
     },
     {
-      "case_id": "receipt_098",
-      "input": [
-        {
-          "name": "冷酸灵云感觉牙刷",
-          "specification": "12抽"
-        },
-        {
-          "name": "德佑湿巾",
-          "specification": "1个"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_098",
-          "SKU_044"
-        ],
-        "product_names": [
-          "冷酸灵云感觉牙刷",
-          "德佑湿巾"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_099",
+      "case_id": "receipt_080",
       "input": [
         {
           "name": "Dove沐浴泡泡樱花甜香",
-          "specification": "330毫升"
+          "specification": "750毫升"
         },
         {
-          "name": "心相印纸巾",
-          "specification": "6片"
+          "name": "美年达瓶装",
+          "specification": "1升"
         }
       ],
       "input_styles": [
@@ -2676,24 +2163,24 @@
       "expected": {
         "sku_ids": [
           "SKU_099",
-          "SKU_045"
+          "SKU_074"
         ],
         "product_names": [
           "Dove沐浴泡泡樱花甜香",
-          "心相印纸巾"
+          "美年达瓶装"
         ]
       }
     },
     {
-      "case_id": "receipt_100",
+      "case_id": "receipt_081",
       "input": [
         {
           "name": "Dove沐浴泡泡白桃果香",
-          "specification": "750毫升"
+          "specification": "250ml"
         },
         {
-          "name": "合味道海鲜味",
-          "specification": "500g"
+          "name": "外星人电解质水椰子口味",
+          "specification": "330毫升"
         }
       ],
       "input_styles": [
@@ -2703,24 +2190,24 @@
       "expected": {
         "sku_ids": [
           "SKU_100",
-          "SKU_046"
+          "SKU_078"
         ],
         "product_names": [
           "Dove沐浴泡泡白桃果香",
-          "合味道海鲜味"
+          "外星人电解质水椰子口味"
         ]
       }
     },
     {
-      "case_id": "receipt_101",
+      "case_id": "receipt_082",
       "input": [
         {
           "name": "Dove沐浴泡泡清甜奶香",
-          "specification": "250ml"
+          "specification": "500ml"
         },
         {
-          "name": "合味道五香牛肉味",
-          "specification": "80克"
+          "name": "外星人电解质水青柠口味",
+          "specification": "750毫升"
         }
       ],
       "input_styles": [
@@ -2730,51 +2217,24 @@
       "expected": {
         "sku_ids": [
           "SKU_101",
-          "SKU_047"
+          "SKU_079"
         ],
         "product_names": [
           "Dove沐浴泡泡清甜奶香",
-          "合味道五香牛肉味"
+          "外星人电解质水青柠口味"
         ]
       }
     },
     {
-      "case_id": "receipt_102",
-      "input": [
-        {
-          "name": "威露士",
-          "specification": "500ml"
-        },
-        {
-          "name": "农心碗面",
-          "specification": "250克"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_102",
-          "SKU_048"
-        ],
-        "product_names": [
-          "威露士",
-          "农心碗面"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_103",
+      "case_id": "receipt_083",
       "input": [
         {
           "name": "Dove沐浴乳",
           "specification": "1升"
         },
         {
-          "name": "健食力低脂香肠",
-          "specification": "55g"
+          "name": "外星人电解质水白桃口味0糖",
+          "specification": "250ml"
         }
       ],
       "input_styles": [
@@ -2784,24 +2244,24 @@
       "expected": {
         "sku_ids": [
           "SKU_103",
-          "SKU_049"
+          "SKU_080"
         ],
         "product_names": [
           "Dove沐浴乳",
-          "健食力低脂香肠"
+          "外星人电解质水白桃口味0糖"
         ]
       }
     },
     {
-      "case_id": "receipt_104",
+      "case_id": "receipt_084",
       "input": [
         {
           "name": "拖鞋",
           "specification": "2包"
         },
         {
-          "name": "妙洁海绵百洁布",
-          "specification": "6片"
+          "name": "尖叫",
+          "specification": "500ml"
         }
       ],
       "input_styles": [
@@ -2811,51 +2271,24 @@
       "expected": {
         "sku_ids": [
           "SKU_104",
-          "SKU_050"
+          "SKU_082"
         ],
         "product_names": [
           "拖鞋",
-          "妙洁海绵百洁布"
+          "尖叫"
         ]
       }
     },
     {
-      "case_id": "receipt_105",
-      "input": [
-        {
-          "name": "Dove沐浴泡泡樱花甜香袋装",
-          "specification": "750毫升"
-        },
-        {
-          "name": "康师傅香辣牛肉面",
-          "specification": "500g"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_105",
-          "SKU_051"
-        ],
-        "product_names": [
-          "Dove沐浴泡泡樱花甜香袋装",
-          "康师傅香辣牛肉面"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_106",
+      "case_id": "receipt_085",
       "input": [
         {
           "name": "半亩花田洗发水",
-          "specification": "250ml"
+          "specification": "750毫升"
         },
         {
-          "name": "康师傅鲜虾鱼板面",
-          "specification": "80克"
+          "name": "百岁山矿泉水",
+          "specification": "1升"
         }
       ],
       "input_styles": [
@@ -2865,24 +2298,24 @@
       "expected": {
         "sku_ids": [
           "SKU_106",
-          "SKU_052"
+          "SKU_083"
         ],
         "product_names": [
           "半亩花田洗发水",
-          "康师傅鲜虾鱼板面"
+          "百岁山矿泉水"
         ]
       }
     },
     {
-      "case_id": "receipt_107",
+      "case_id": "receipt_086",
       "input": [
         {
           "name": "心相印厨房纸巾",
-          "specification": "6片"
+          "specification": "1个"
         },
         {
-          "name": "康师傅老坛酸菜牛肉面",
-          "specification": "250克"
+          "name": "脉动观梅止渴饮",
+          "specification": "330毫升"
         }
       ],
       "input_styles": [
@@ -2892,11 +2325,578 @@
       "expected": {
         "sku_ids": [
           "SKU_107",
-          "SKU_053"
+          "SKU_084"
         ],
         "product_names": [
           "心相印厨房纸巾",
-          "康师傅老坛酸菜牛肉面"
+          "脉动观梅止渴饮"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_087",
+      "input": [
+        {
+          "name": "NFC桔汁",
+          "specification": "500ml"
+        },
+        {
+          "name": "蒙牛纯牛奶",
+          "specification": "750毫升"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_001",
+          "SKU_002"
+        ],
+        "product_names": [
+          "NFC桔汁",
+          "蒙牛纯牛奶"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_088",
+      "input": [
+        {
+          "name": "蒙牛纯牛奶",
+          "specification": "1升"
+        },
+        {
+          "name": "纯甄酸奶",
+          "specification": "250ml"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_002",
+          "SKU_003"
+        ],
+        "product_names": [
+          "蒙牛纯牛奶",
+          "纯甄酸奶"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_089",
+      "input": [
+        {
+          "name": "纯甄酸奶",
+          "specification": "330毫升"
+        },
+        {
+          "name": "品客",
+          "specification": "薯片烧烤牛排味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_003",
+          "SKU_014"
+        ],
+        "product_names": [
+          "纯甄酸奶",
+          "品客薯片烧烤牛排味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_090",
+      "input": [
+        {
+          "name": "品客薯片烧烤牛排味",
+          "specification": "250克"
+        },
+        {
+          "name": "品客",
+          "specification": "原味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_014",
+          "SKU_015"
+        ],
+        "product_names": [
+          "品客薯片烧烤牛排味",
+          "品客原味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_091",
+      "input": [
+        {
+          "name": "品客原味",
+          "specification": "55g"
+        },
+        {
+          "name": "品客",
+          "specification": "酸乳酪洋葱味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_015",
+          "SKU_016"
+        ],
+        "product_names": [
+          "品客原味",
+          "品客酸乳酪洋葱味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_092",
+      "input": [
+        {
+          "name": "品客酸乳酪洋葱味",
+          "specification": "120g"
+        },
+        {
+          "name": "奥利奥",
+          "specification": "香甜不腻"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_016",
+          "SKU_017"
+        ],
+        "product_names": [
+          "品客酸乳酪洋葱味",
+          "奥利奥香甜不腻"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_093",
+      "input": [
+        {
+          "name": "奥利奥香甜不腻",
+          "specification": "500g"
+        },
+        {
+          "name": "奥利奥",
+          "specification": "浓醇巧克力味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_017",
+          "SKU_019"
+        ],
+        "product_names": [
+          "奥利奥香甜不腻",
+          "奥利奥浓醇巧克力味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_094",
+      "input": [
+        {
+          "name": "奥利奥浓醇巧克力味",
+          "specification": "80克"
+        },
+        {
+          "name": "奥利奥",
+          "specification": "白桃乌龙味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_019",
+          "SKU_020"
+        ],
+        "product_names": [
+          "奥利奥浓醇巧克力味",
+          "奥利奥白桃乌龙味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_095",
+      "input": [
+        {
+          "name": "奥利奥白桃乌龙味",
+          "specification": "250克"
+        },
+        {
+          "name": "呀！土豆",
+          "specification": "番茄酱味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_020",
+          "SKU_026"
+        ],
+        "product_names": [
+          "奥利奥白桃乌龙味",
+          "呀！土豆番茄酱味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_096",
+      "input": [
+        {
+          "name": "呀！土豆番茄酱味",
+          "specification": "55g"
+        },
+        {
+          "name": "好友趣",
+          "specification": "韩国泡菜味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_026",
+          "SKU_027"
+        ],
+        "product_names": [
+          "呀！土豆番茄酱味",
+          "好友趣韩国泡菜味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_097",
+      "input": [
+        {
+          "name": "好友趣韩国泡菜味",
+          "specification": "120g"
+        },
+        {
+          "name": "上好佳",
+          "specification": "鲜虾条"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_027",
+          "SKU_031"
+        ],
+        "product_names": [
+          "好友趣韩国泡菜味",
+          "上好佳鲜虾条"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_098",
+      "input": [
+        {
+          "name": "上好佳鲜虾条",
+          "specification": "500g"
+        },
+        {
+          "name": "浪味仙",
+          "specification": "55g"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_031",
+          "SKU_032"
+        ],
+        "product_names": [
+          "上好佳鲜虾条",
+          "浪味仙"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_099",
+      "input": [
+        {
+          "name": "浪味仙",
+          "specification": "80克"
+        },
+        {
+          "name": "京东京造毛巾",
+          "specification": "6片"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_032",
+          "SKU_056"
+        ],
+        "product_names": [
+          "浪味仙",
+          "京东京造毛巾"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_100",
+      "input": [
+        {
+          "name": "京东京造毛巾",
+          "specification": "10枚"
+        },
+        {
+          "name": "可口可乐",
+          "specification": "罐装"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_056",
+          "SKU_067"
+        ],
+        "product_names": [
+          "京东京造毛巾",
+          "可口可乐罐装"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_101",
+      "input": [
+        {
+          "name": "可口可乐罐装",
+          "specification": "250ml"
+        },
+        {
+          "name": "雪碧",
+          "specification": "罐装"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_067",
+          "SKU_068"
+        ],
+        "product_names": [
+          "可口可乐罐装",
+          "雪碧罐装"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_102",
+      "input": [
+        {
+          "name": "雪碧罐装",
+          "specification": "500ml"
+        },
+        {
+          "name": "芬达",
+          "specification": "罐装"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_068",
+          "SKU_069"
+        ],
+        "product_names": [
+          "雪碧罐装",
+          "芬达罐装"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_103",
+      "input": [
+        {
+          "name": "芬达罐装",
+          "specification": "1升"
+        },
+        {
+          "name": "百事可乐",
+          "specification": "瓶装"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_069",
+          "SKU_070"
+        ],
+        "product_names": [
+          "芬达罐装",
+          "百事可乐瓶装"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_104",
+      "input": [
+        {
+          "name": "百事可乐瓶装",
+          "specification": "330毫升"
+        },
+        {
+          "name": "7喜",
+          "specification": "瓶装"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_070",
+          "SKU_071"
+        ],
+        "product_names": [
+          "百事可乐瓶装",
+          "7喜瓶装"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_105",
+      "input": [
+        {
+          "name": "7喜瓶装",
+          "specification": "750毫升"
+        },
+        {
+          "name": "水溶C100",
+          "specification": "瓶装"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_071",
+          "SKU_072"
+        ],
+        "product_names": [
+          "7喜瓶装",
+          "水溶C100瓶装"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_106",
+      "input": [
+        {
+          "name": "水溶C100瓶装",
+          "specification": "250ml"
+        },
+        {
+          "name": "美年达",
+          "specification": "瓶装"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_072",
+          "SKU_074"
+        ],
+        "product_names": [
+          "水溶C100瓶装",
+          "美年达瓶装"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_107",
+      "input": [
+        {
+          "name": "美年达瓶装",
+          "specification": "500ml"
+        },
+        {
+          "name": "外星人电解质水",
+          "specification": "椰子口味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_074",
+          "SKU_078"
+        ],
+        "product_names": [
+          "美年达瓶装",
+          "外星人电解质水椰子口味"
         ]
       }
     },
@@ -2904,8 +2904,602 @@
       "case_id": "receipt_108",
       "input": [
         {
-          "name": "NFC桔汁",
+          "name": "外星人电解质水椰子口味",
           "specification": "1升"
+        },
+        {
+          "name": "外星人电解质水",
+          "specification": "青柠口味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_078",
+          "SKU_079"
+        ],
+        "product_names": [
+          "外星人电解质水椰子口味",
+          "外星人电解质水青柠口味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_109",
+      "input": [
+        {
+          "name": "外星人电解质水青柠口味",
+          "specification": "330毫升"
+        },
+        {
+          "name": "外星人电解质水",
+          "specification": "白桃口味0糖"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_079",
+          "SKU_080"
+        ],
+        "product_names": [
+          "外星人电解质水青柠口味",
+          "外星人电解质水白桃口味0糖"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_110",
+      "input": [
+        {
+          "name": "外星人电解质水白桃口味0糖",
+          "specification": "750毫升"
+        },
+        {
+          "name": "尖叫",
+          "specification": "1升"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_080",
+          "SKU_082"
+        ],
+        "product_names": [
+          "外星人电解质水白桃口味0糖",
+          "尖叫"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_111",
+      "input": [
+        {
+          "name": "尖叫",
+          "specification": "250ml"
+        },
+        {
+          "name": "百岁山矿泉水",
+          "specification": "330毫升"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_082",
+          "SKU_083"
+        ],
+        "product_names": [
+          "尖叫",
+          "百岁山矿泉水"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_112",
+      "input": [
+        {
+          "name": "百岁山矿泉水",
+          "specification": "500ml"
+        },
+        {
+          "name": "脉动",
+          "specification": "观梅止渴饮"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_083",
+          "SKU_084"
+        ],
+        "product_names": [
+          "百岁山矿泉水",
+          "脉动观梅止渴饮"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_113",
+      "input": [
+        {
+          "name": "脉动观梅止渴饮",
+          "specification": "1升"
+        },
+        {
+          "name": "脉动",
+          "specification": "芒果口味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_084",
+          "SKU_085"
+        ],
+        "product_names": [
+          "脉动观梅止渴饮",
+          "脉动芒果口味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_114",
+      "input": [
+        {
+          "name": "脉动芒果口味",
+          "specification": "330毫升"
+        },
+        {
+          "name": "脉动",
+          "specification": "菠萝口味"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_085",
+          "SKU_086"
+        ],
+        "product_names": [
+          "脉动芒果口味",
+          "脉动菠萝口味"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_115",
+      "input": [
+        {
+          "name": "脉动菠萝口味",
+          "specification": "750毫升"
+        },
+        {
+          "name": "脉动",
+          "specification": "猫薄荷瓶"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_086",
+          "SKU_087"
+        ],
+        "product_names": [
+          "脉动菠萝口味",
+          "脉动猫薄荷瓶"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_116",
+      "input": [
+        {
+          "name": "脉动猫薄荷瓶",
+          "specification": "250ml"
+        },
+        {
+          "name": "舒肤佳",
+          "specification": "香皂芦荟呵护香型"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_087",
+          "SKU_091"
+        ],
+        "product_names": [
+          "脉动猫薄荷瓶",
+          "舒肤佳香皂芦荟呵护香型"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_117",
+      "input": [
+        {
+          "name": "舒肤佳香皂芦荟呵护香型",
+          "specification": "6片"
+        },
+        {
+          "name": "舒肤佳",
+          "specification": "香皂柠檬清新香型"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_091",
+          "SKU_092"
+        ],
+        "product_names": [
+          "舒肤佳香皂芦荟呵护香型",
+          "舒肤佳香皂柠檬清新香型"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_118",
+      "input": [
+        {
+          "name": "舒肤佳香皂柠檬清新香型",
+          "specification": "12抽"
+        },
+        {
+          "name": "汰渍肥皂",
+          "specification": "1个"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_092",
+          "SKU_093"
+        ],
+        "product_names": [
+          "舒肤佳香皂柠檬清新香型",
+          "汰渍肥皂"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_119",
+      "input": [
+        {
+          "name": "汰渍肥皂",
+          "specification": "2包"
+        },
+        {
+          "name": "舒克",
+          "specification": "牙膏竹炭薄荷"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_093",
+          "SKU_095"
+        ],
+        "product_names": [
+          "汰渍肥皂",
+          "舒克牙膏竹炭薄荷"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_120",
+      "input": [
+        {
+          "name": "舒克牙膏竹炭薄荷",
+          "specification": "250克"
+        },
+        {
+          "name": "舒克",
+          "specification": "牙膏柠檬百香果"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_095",
+          "SKU_096"
+        ],
+        "product_names": [
+          "舒克牙膏竹炭薄荷",
+          "舒克牙膏柠檬百香果"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_121",
+      "input": [
+        {
+          "name": "舒克牙膏柠檬百香果",
+          "specification": "55g"
+        },
+        {
+          "name": "舒克",
+          "specification": "牙膏海盐薄荷"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_096",
+          "SKU_097"
+        ],
+        "product_names": [
+          "舒克牙膏柠檬百香果",
+          "舒克牙膏海盐薄荷"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_122",
+      "input": [
+        {
+          "name": "舒克牙膏海盐薄荷",
+          "specification": "120g"
+        },
+        {
+          "name": "Dove",
+          "specification": "沐浴泡泡樱花甜香"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_097",
+          "SKU_099"
+        ],
+        "product_names": [
+          "舒克牙膏海盐薄荷",
+          "Dove沐浴泡泡樱花甜香"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_123",
+      "input": [
+        {
+          "name": "Dove沐浴泡泡樱花甜香",
+          "specification": "1升"
+        },
+        {
+          "name": "Dove",
+          "specification": "沐浴泡泡白桃果香"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_099",
+          "SKU_100"
+        ],
+        "product_names": [
+          "Dove沐浴泡泡樱花甜香",
+          "Dove沐浴泡泡白桃果香"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_124",
+      "input": [
+        {
+          "name": "Dove沐浴泡泡白桃果香",
+          "specification": "330毫升"
+        },
+        {
+          "name": "Dove",
+          "specification": "沐浴泡泡清甜奶香"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_100",
+          "SKU_101"
+        ],
+        "product_names": [
+          "Dove沐浴泡泡白桃果香",
+          "Dove沐浴泡泡清甜奶香"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_125",
+      "input": [
+        {
+          "name": "Dove沐浴泡泡清甜奶香",
+          "specification": "750毫升"
+        },
+        {
+          "name": "Dove",
+          "specification": "沐浴乳"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_101",
+          "SKU_103"
+        ],
+        "product_names": [
+          "Dove沐浴泡泡清甜奶香",
+          "Dove沐浴乳"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_126",
+      "input": [
+        {
+          "name": "Dove沐浴乳",
+          "specification": "250ml"
+        },
+        {
+          "name": "拖鞋",
+          "specification": "2包"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_103",
+          "SKU_104"
+        ],
+        "product_names": [
+          "Dove沐浴乳",
+          "拖鞋"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_127",
+      "input": [
+        {
+          "name": "拖鞋",
+          "specification": "6片"
+        },
+        {
+          "name": "半亩花田",
+          "specification": "洗发水"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_104",
+          "SKU_106"
+        ],
+        "product_names": [
+          "拖鞋",
+          "半亩花田洗发水"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_128",
+      "input": [
+        {
+          "name": "半亩花田洗发水",
+          "specification": "1升"
+        },
+        {
+          "name": "心相印",
+          "specification": "厨房纸巾"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "split_name_and_type"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_106",
+          "SKU_107"
+        ],
+        "product_names": [
+          "半亩花田洗发水",
+          "心相印厨房纸巾"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_129",
+      "input": [
+        {
+          "name": "心相印厨房纸巾",
+          "specification": "2包"
+        },
+        {
+          "name": "NFC桔汁",
+          "specification": "500ml"
+        }
+      ],
+      "input_styles": [
+        "full_name_with_invented_size",
+        "full_name_with_invented_size"
+      ],
+      "expected": {
+        "sku_ids": [
+          "SKU_107",
+          "SKU_001"
+        ],
+        "product_names": [
+          "心相印厨房纸巾",
+          "NFC桔汁"
+        ]
+      }
+    },
+    {
+      "case_id": "receipt_130",
+      "input": [
+        {
+          "name": "NFC桔汁",
+          "specification": "750毫升"
         },
         {
           "name": "7喜",
@@ -2928,11 +3522,11 @@
       }
     },
     {
-      "case_id": "receipt_109",
+      "case_id": "receipt_131",
       "input": [
         {
           "name": "蒙牛纯牛奶",
-          "specification": "330毫升"
+          "specification": "250ml"
         },
         {
           "name": "水溶C100",
@@ -2955,38 +3549,11 @@
       }
     },
     {
-      "case_id": "receipt_110",
+      "case_id": "receipt_132",
       "input": [
         {
           "name": "纯甄酸奶",
-          "specification": "750毫升"
-        },
-        {
-          "name": "小青柠汁饮料",
-          "specification": "1升"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_003",
-          "SKU_073"
-        ],
-        "product_names": [
-          "纯甄酸奶",
-          "小青柠汁饮料"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_111",
-      "input": [
-        {
-          "name": "百草味",
-          "specification": "海苔肉松蛋卷"
+          "specification": "500ml"
         },
         {
           "name": "美年达",
@@ -2994,107 +3561,26 @@
         }
       ],
       "input_styles": [
-        "split_name_and_type",
+        "full_name_with_invented_size",
         "split_name_and_type"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_004",
+          "SKU_003",
           "SKU_074"
         ],
         "product_names": [
-          "百草味海苔肉松蛋卷",
+          "纯甄酸奶",
           "美年达瓶装"
         ]
       }
     },
     {
-      "case_id": "receipt_112",
+      "case_id": "receipt_133",
       "input": [
         {
-          "name": "三只松鼠每日坚果",
-          "specification": "120g"
-        },
-        {
-          "name": "名仁苏打水饮料",
-          "specification": "750毫升"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_005",
-          "SKU_075"
-        ],
-        "product_names": [
-          "三只松鼠每日坚果",
-          "名仁苏打水饮料"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_113",
-      "input": [
-        {
-          "name": "费列罗巧克力",
-          "specification": "500g"
-        },
-        {
-          "name": "东方树叶",
-          "specification": "茉莉花茶"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_006",
-          "SKU_076"
-        ],
-        "product_names": [
-          "费列罗巧克力",
-          "东方树叶茉莉花茶"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_114",
-      "input": [
-        {
-          "name": "双汇王中王火腿肠",
-          "specification": "80克"
-        },
-        {
-          "name": "绿豆冰沙",
-          "specification": "500ml"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_007",
-          "SKU_077"
-        ],
-        "product_names": [
-          "双汇王中王火腿肠",
-          "绿豆冰沙"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_115",
-      "input": [
-        {
-          "name": "妙芙",
-          "specification": "香芋牛奶味"
+          "name": "品客",
+          "specification": "薯片烧烤牛排味"
         },
         {
           "name": "外星人电解质水",
@@ -3107,21 +3593,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_008",
+          "SKU_014",
           "SKU_078"
         ],
         "product_names": [
-          "妙芙香芋牛奶味",
+          "品客薯片烧烤牛排味",
           "外星人电解质水椰子口味"
         ]
       }
     },
     {
-      "case_id": "receipt_116",
+      "case_id": "receipt_134",
       "input": [
         {
-          "name": "妙芙",
-          "specification": "绵醇奶油味"
+          "name": "品客",
+          "specification": "原味"
         },
         {
           "name": "外星人电解质水",
@@ -3134,21 +3620,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_009",
+          "SKU_015",
           "SKU_079"
         ],
         "product_names": [
-          "妙芙绵醇奶油味",
+          "品客原味",
           "外星人电解质水青柠口味"
         ]
       }
     },
     {
-      "case_id": "receipt_117",
+      "case_id": "receipt_135",
       "input": [
         {
-          "name": "妙芙",
-          "specification": "巧克力味"
+          "name": "品客",
+          "specification": "酸乳酪洋葱味"
         },
         {
           "name": "外星人电解质水",
@@ -3161,52 +3647,25 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_010",
+          "SKU_016",
           "SKU_080"
         ],
         "product_names": [
-          "妙芙巧克力味",
+          "品客酸乳酪洋葱味",
           "外星人电解质水白桃口味0糖"
         ]
       }
     },
     {
-      "case_id": "receipt_118",
+      "case_id": "receipt_136",
       "input": [
         {
-          "name": "薯愿",
-          "specification": "非油炸清新番茄味"
-        },
-        {
-          "name": "外星人电解质水",
-          "specification": "西柚口味"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_011",
-          "SKU_081"
-        ],
-        "product_names": [
-          "薯愿非油炸清新番茄味",
-          "外星人电解质水西柚口味"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_119",
-      "input": [
-        {
-          "name": "薯愿",
-          "specification": "非油炸韩国泡菜味"
+          "name": "奥利奥",
+          "specification": "香甜不腻"
         },
         {
           "name": "尖叫",
-          "specification": "500ml"
+          "specification": "330毫升"
         }
       ],
       "input_styles": [
@@ -3215,25 +3674,25 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_012",
+          "SKU_017",
           "SKU_082"
         ],
         "product_names": [
-          "薯愿非油炸韩国泡菜味",
+          "奥利奥香甜不腻",
           "尖叫"
         ]
       }
     },
     {
-      "case_id": "receipt_120",
+      "case_id": "receipt_137",
       "input": [
         {
-          "name": "薯愿",
-          "specification": "非油炸香烤原味"
+          "name": "奥利奥",
+          "specification": "浓醇巧克力味"
         },
         {
           "name": "百岁山矿泉水",
-          "specification": "1升"
+          "specification": "750毫升"
         }
       ],
       "input_styles": [
@@ -3242,21 +3701,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_013",
+          "SKU_019",
           "SKU_083"
         ],
         "product_names": [
-          "薯愿非油炸香烤原味",
+          "奥利奥浓醇巧克力味",
           "百岁山矿泉水"
         ]
       }
     },
     {
-      "case_id": "receipt_121",
+      "case_id": "receipt_138",
       "input": [
         {
-          "name": "品客",
-          "specification": "薯片烧烤牛排味"
+          "name": "奥利奥",
+          "specification": "白桃乌龙味"
         },
         {
           "name": "脉动",
@@ -3269,21 +3728,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_014",
+          "SKU_020",
           "SKU_084"
         ],
         "product_names": [
-          "品客薯片烧烤牛排味",
+          "奥利奥白桃乌龙味",
           "脉动观梅止渴饮"
         ]
       }
     },
     {
-      "case_id": "receipt_122",
+      "case_id": "receipt_139",
       "input": [
         {
-          "name": "品客",
-          "specification": "原味"
+          "name": "呀！土豆",
+          "specification": "番茄酱味"
         },
         {
           "name": "脉动",
@@ -3296,21 +3755,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_015",
+          "SKU_026",
           "SKU_085"
         ],
         "product_names": [
-          "品客原味",
+          "呀！土豆番茄酱味",
           "脉动芒果口味"
         ]
       }
     },
     {
-      "case_id": "receipt_123",
+      "case_id": "receipt_140",
       "input": [
         {
-          "name": "品客",
-          "specification": "酸乳酪洋葱味"
+          "name": "好友趣",
+          "specification": "韩国泡菜味"
         },
         {
           "name": "脉动",
@@ -3323,21 +3782,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_016",
+          "SKU_027",
           "SKU_086"
         ],
         "product_names": [
-          "品客酸乳酪洋葱味",
+          "好友趣韩国泡菜味",
           "脉动菠萝口味"
         ]
       }
     },
     {
-      "case_id": "receipt_124",
+      "case_id": "receipt_141",
       "input": [
         {
-          "name": "奥利奥",
-          "specification": "香甜不腻"
+          "name": "上好佳",
+          "specification": "鲜虾条"
         },
         {
           "name": "脉动",
@@ -3350,102 +3809,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_017",
+          "SKU_031",
           "SKU_087"
         ],
         "product_names": [
-          "奥利奥香甜不腻",
+          "上好佳鲜虾条",
           "脉动猫薄荷瓶"
         ]
       }
     },
     {
-      "case_id": "receipt_125",
+      "case_id": "receipt_142",
       "input": [
         {
-          "name": "奥利奥",
-          "specification": "冰淇淋抹茶味"
-        },
-        {
-          "name": "外星人电解质水",
-          "specification": "青柠口味0糖"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_018",
-          "SKU_088"
-        ],
-        "product_names": [
-          "奥利奥冰淇淋抹茶味",
-          "外星人电解质水青柠口味0糖"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_126",
-      "input": [
-        {
-          "name": "奥利奥",
-          "specification": "浓醇巧克力味"
-        },
-        {
-          "name": "宝矿力水特",
-          "specification": "330毫升"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_019",
-          "SKU_089"
-        ],
-        "product_names": [
-          "奥利奥浓醇巧克力味",
-          "宝矿力水特"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_127",
-      "input": [
-        {
-          "name": "奥利奥",
-          "specification": "白桃乌龙味"
-        },
-        {
-          "name": "舒肤佳",
-          "specification": "香皂纯白清香型"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_020",
-          "SKU_090"
-        ],
-        "product_names": [
-          "奥利奥白桃乌龙味",
-          "舒肤佳香皂纯白清香型"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_128",
-      "input": [
-        {
-          "name": "Lay's乐事薯片",
-          "specification": "墨西哥鸡汁番茄味"
+          "name": "浪味仙",
+          "specification": "120g"
         },
         {
           "name": "舒肤佳",
@@ -3453,26 +3831,26 @@
         }
       ],
       "input_styles": [
-        "split_name_and_type",
+        "full_name_with_invented_size",
         "split_name_and_type"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_021",
+          "SKU_032",
           "SKU_091"
         ],
         "product_names": [
-          "Lay's乐事薯片墨西哥鸡汁番茄味",
+          "浪味仙",
           "舒肤佳香皂芦荟呵护香型"
         ]
       }
     },
     {
-      "case_id": "receipt_129",
+      "case_id": "receipt_143",
       "input": [
         {
-          "name": "Lay's乐事薯片",
-          "specification": "经典原味"
+          "name": "京东京造毛巾",
+          "specification": "12抽"
         },
         {
           "name": "舒肤佳",
@@ -3480,30 +3858,30 @@
         }
       ],
       "input_styles": [
-        "split_name_and_type",
+        "full_name_with_invented_size",
         "split_name_and_type"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_022",
+          "SKU_056",
           "SKU_092"
         ],
         "product_names": [
-          "Lay's乐事薯片经典原味",
+          "京东京造毛巾",
           "舒肤佳香皂柠檬清新香型"
         ]
       }
     },
     {
-      "case_id": "receipt_130",
+      "case_id": "receipt_144",
       "input": [
         {
-          "name": "Lay's乐事薯片",
-          "specification": "黄瓜味"
+          "name": "可口可乐",
+          "specification": "罐装"
         },
         {
           "name": "汰渍肥皂",
-          "specification": "12抽"
+          "specification": "6片"
         }
       ],
       "input_styles": [
@@ -3512,48 +3890,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_023",
+          "SKU_067",
           "SKU_093"
         ],
         "product_names": [
-          "Lay's乐事薯片黄瓜味",
+          "可口可乐罐装",
           "汰渍肥皂"
         ]
       }
     },
     {
-      "case_id": "receipt_131",
+      "case_id": "receipt_145",
       "input": [
         {
-          "name": "Lay's乐事薯片",
-          "specification": "意大利香浓红烩味"
-        },
-        {
-          "name": "杯子",
-          "specification": "2包"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_024",
-          "SKU_094"
-        ],
-        "product_names": [
-          "Lay's乐事薯片意大利香浓红烩味",
-          "杯子"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_132",
-      "input": [
-        {
-          "name": "Lay's乐事薯片",
-          "specification": "青柠味"
+          "name": "雪碧",
+          "specification": "罐装"
         },
         {
           "name": "舒克",
@@ -3566,21 +3917,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_025",
+          "SKU_068",
           "SKU_095"
         ],
         "product_names": [
-          "Lay's乐事薯片青柠味",
+          "雪碧罐装",
           "舒克牙膏竹炭薄荷"
         ]
       }
     },
     {
-      "case_id": "receipt_133",
+      "case_id": "receipt_146",
       "input": [
         {
-          "name": "呀！土豆",
-          "specification": "番茄酱味"
+          "name": "芬达",
+          "specification": "罐装"
         },
         {
           "name": "舒克",
@@ -3593,21 +3944,21 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_026",
+          "SKU_069",
           "SKU_096"
         ],
         "product_names": [
-          "呀！土豆番茄酱味",
+          "芬达罐装",
           "舒克牙膏柠檬百香果"
         ]
       }
     },
     {
-      "case_id": "receipt_134",
+      "case_id": "receipt_147",
       "input": [
         {
-          "name": "好友趣",
-          "specification": "韩国泡菜味"
+          "name": "百事可乐",
+          "specification": "瓶装"
         },
         {
           "name": "舒克",
@@ -3620,363 +3971,12 @@
       ],
       "expected": {
         "sku_ids": [
-          "SKU_027",
+          "SKU_070",
           "SKU_097"
         ],
         "product_names": [
-          "好友趣韩国泡菜味",
+          "百事可乐瓶装",
           "舒克牙膏海盐薄荷"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_135",
-      "input": [
-        {
-          "name": "卫龙辣条",
-          "specification": "250克"
-        },
-        {
-          "name": "冷酸灵",
-          "specification": "云感觉牙刷"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_028",
-          "SKU_098"
-        ],
-        "product_names": [
-          "卫龙辣条",
-          "冷酸灵云感觉牙刷"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_136",
-      "input": [
-        {
-          "name": "百醇",
-          "specification": "草莓香草味"
-        },
-        {
-          "name": "Dove",
-          "specification": "沐浴泡泡樱花甜香"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_029",
-          "SKU_099"
-        ],
-        "product_names": [
-          "百醇草莓香草味",
-          "Dove沐浴泡泡樱花甜香"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_137",
-      "input": [
-        {
-          "name": "百醇",
-          "specification": "巧克力味"
-        },
-        {
-          "name": "Dove",
-          "specification": "沐浴泡泡白桃果香"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_030",
-          "SKU_100"
-        ],
-        "product_names": [
-          "百醇巧克力味",
-          "Dove沐浴泡泡白桃果香"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_138",
-      "input": [
-        {
-          "name": "上好佳",
-          "specification": "鲜虾条"
-        },
-        {
-          "name": "Dove",
-          "specification": "沐浴泡泡清甜奶香"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_031",
-          "SKU_101"
-        ],
-        "product_names": [
-          "上好佳鲜虾条",
-          "Dove沐浴泡泡清甜奶香"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_139",
-      "input": [
-        {
-          "name": "浪味仙",
-          "specification": "80克"
-        },
-        {
-          "name": "威露士",
-          "specification": "500ml"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_032",
-          "SKU_102"
-        ],
-        "product_names": [
-          "浪味仙",
-          "威露士"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_140",
-      "input": [
-        {
-          "name": "好丽友派",
-          "specification": "250克"
-        },
-        {
-          "name": "Dove",
-          "specification": "沐浴乳"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_033",
-          "SKU_103"
-        ],
-        "product_names": [
-          "好丽友派",
-          "Dove沐浴乳"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_141",
-      "input": [
-        {
-          "name": "吐司方方原味",
-          "specification": "55g"
-        },
-        {
-          "name": "拖鞋",
-          "specification": "2包"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_034",
-          "SKU_104"
-        ],
-        "product_names": [
-          "吐司方方原味",
-          "拖鞋"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_142",
-      "input": [
-        {
-          "name": "好友趣",
-          "specification": "蜂蜜黄油味"
-        },
-        {
-          "name": "Dove",
-          "specification": "沐浴泡泡樱花甜香袋装"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_035",
-          "SKU_105"
-        ],
-        "product_names": [
-          "好友趣蜂蜜黄油味",
-          "Dove沐浴泡泡樱花甜香袋装"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_143",
-      "input": [
-        {
-          "name": "可孚棉签",
-          "specification": "12抽"
-        },
-        {
-          "name": "半亩花田",
-          "specification": "洗发水"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_036",
-          "SKU_106"
-        ],
-        "product_names": [
-          "可孚棉签",
-          "半亩花田洗发水"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_144",
-      "input": [
-        {
-          "name": "小鹿妈妈牙线",
-          "specification": "2包"
-        },
-        {
-          "name": "心相印",
-          "specification": "厨房纸巾"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "split_name_and_type"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_037",
-          "SKU_107"
-        ],
-        "product_names": [
-          "小鹿妈妈牙线",
-          "心相印厨房纸巾"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_145",
-      "input": [
-        {
-          "name": "得宝纸巾",
-          "specification": "10枚"
-        },
-        {
-          "name": "NFC桔汁",
-          "specification": "1升"
-        }
-      ],
-      "input_styles": [
-        "full_name_with_invented_size",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_038",
-          "SKU_001"
-        ],
-        "product_names": [
-          "得宝纸巾",
-          "NFC桔汁"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_146",
-      "input": [
-        {
-          "name": "草原红太阳烧烤料",
-          "specification": "原味"
-        },
-        {
-          "name": "蒙牛纯牛奶",
-          "specification": "330毫升"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_039",
-          "SKU_002"
-        ],
-        "product_names": [
-          "草原红太阳烧烤料原味",
-          "蒙牛纯牛奶"
-        ]
-      }
-    },
-    {
-      "case_id": "receipt_147",
-      "input": [
-        {
-          "name": "草原红太阳烧烤料",
-          "specification": "香辣味"
-        },
-        {
-          "name": "纯甄酸奶",
-          "specification": "750毫升"
-        }
-      ],
-      "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
-      ],
-      "expected": {
-        "sku_ids": [
-          "SKU_040",
-          "SKU_003"
-        ],
-        "product_names": [
-          "草原红太阳烧烤料香辣味",
-          "纯甄酸奶"
         ]
       }
     },
@@ -3984,26 +3984,26 @@
       "case_id": "receipt_148",
       "input": [
         {
-          "name": "草原红太阳烧烤酱",
-          "specification": "香辣"
+          "name": "7喜瓶装",
+          "specification": "1升"
         },
         {
-          "name": "百草味海苔肉松蛋卷",
-          "specification": "55g"
+          "name": "Dove",
+          "specification": "沐浴泡泡樱花甜香"
         }
       ],
       "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
+        "full_name_with_invented_size",
+        "split_name_and_type"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_041",
-          "SKU_004"
+          "SKU_071",
+          "SKU_099"
         ],
         "product_names": [
-          "草原红太阳烧烤酱香辣",
-          "百草味海苔肉松蛋卷"
+          "7喜瓶装",
+          "Dove沐浴泡泡樱花甜香"
         ]
       }
     },
@@ -4011,26 +4011,26 @@
       "case_id": "receipt_149",
       "input": [
         {
-          "name": "草原红太阳烧烤酱",
-          "specification": "原味"
+          "name": "水溶C100瓶装",
+          "specification": "330毫升"
         },
         {
-          "name": "三只松鼠每日坚果",
-          "specification": "120g"
+          "name": "Dove",
+          "specification": "沐浴泡泡白桃果香"
         }
       ],
       "input_styles": [
-        "split_name_and_type",
-        "full_name_with_invented_size"
+        "full_name_with_invented_size",
+        "split_name_and_type"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_042",
-          "SKU_005"
+          "SKU_072",
+          "SKU_100"
         ],
         "product_names": [
-          "草原红太阳烧烤酱原味",
-          "三只松鼠每日坚果"
+          "水溶C100瓶装",
+          "Dove沐浴泡泡白桃果香"
         ]
       }
     },
@@ -4038,26 +4038,26 @@
       "case_id": "receipt_150",
       "input": [
         {
-          "name": "海氏海诺创口贴",
-          "specification": "10枚"
+          "name": "美年达瓶装",
+          "specification": "750毫升"
         },
         {
-          "name": "费列罗巧克力",
-          "specification": "500g"
+          "name": "Dove",
+          "specification": "沐浴泡泡清甜奶香"
         }
       ],
       "input_styles": [
         "full_name_with_invented_size",
-        "full_name_with_invented_size"
+        "split_name_and_type"
       ],
       "expected": {
         "sku_ids": [
-          "SKU_043",
-          "SKU_006"
+          "SKU_074",
+          "SKU_101"
         ],
         "product_names": [
-          "海氏海诺创口贴",
-          "费列罗巧克力"
+          "美年达瓶装",
+          "Dove沐浴泡泡清甜奶香"
         ]
       }
     }

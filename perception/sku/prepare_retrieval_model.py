@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--download-only",
         action="store_true",
-        help="只下载模型，不生成 107 个 SKU 的特征索引",
+        help="只下载模型，不生成当前商品目录的特征索引",
     )
     parser.add_argument(
         "--device", default="auto", choices=("auto", "cuda", "mps", "cpu")

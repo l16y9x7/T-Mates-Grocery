@@ -1,20 +1,5 @@
 [
   {
-    "product_name": "草原红太阳烧烤料原味",
-    "level": "L1",
-    "hand": "left"
-  },
-  {
-    "product_name": "草原红太阳烧烤料香辣味",
-    "level": "L1",
-    "hand": "left"
-  },
-  {
-    "product_name": "草原红太阳烧烤酱香辣",
-    "level": "L1",
-    "hand": "left"
-  },
-  {
     "product_name": "外星人电解质水椰子口味",
     "level": "L3",
     "hand": "left"
@@ -55,16 +40,6 @@
     "hand": "right"
   },
   {
-    "product_name": "外星人电解质水青柠口味0糖",
-    "level": "L4",
-    "hand": "right"
-  },
-  {
-    "product_name": "外星人电解质水青柠口味",
-    "level": "L4",
-    "hand": "right"
-  },
-  {
     "product_name": "脉动观梅止渴饮",
     "level": "L5",
     "hand": "left"
@@ -73,31 +48,6 @@
     "product_name": "脉动芒果口味",
     "level": "L5",
     "hand": "left"
-  },
-  {
-    "product_name": "脉动菠萝口味",
-    "level": "L5",
-    "hand": "left"
-  },
-  {
-    "product_name": "脉动菠萝口味",
-    "level": "L5",
-    "hand": "right"
-  },
-  {
-    "product_name": "镇江香醋",
-    "level": "L5",
-    "hand": "right"
-  },
-  {
-    "product_name": "蒸鱼豉油",
-    "level": "L5",
-    "hand": "right"
-  },
-  {
-    "product_name": "薄盐生抽",
-    "level": "L5",
-    "hand": "right"
   },
   {
     "product_name": "舒克牙膏柠檬百香果",

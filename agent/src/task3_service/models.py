@@ -11,7 +11,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-PRODUCT_SLOT_PATTERN = re.compile(r"^H[12]_[FB]_L[1-5]_C\d{2}$")
+PRODUCT_SLOT_PATTERN = re.compile(r"^(?:H[12]_[FB]_L[1-5]|H[1-3]_L0[1-5])_C\d{2}$")
 
 
 class TaskType(StrEnum):
@@ -32,10 +32,9 @@ class InspectionPose(StrEnum):
         return "UPPER" if self is InspectionPose.UPPER else "LOWER"
 
 
-class ProductHandOption(BaseModel):
+class GraspOption(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    product_name: str = Field(min_length=1)
     hands: list[Hand]
     target_id: str = Field(min_length=1)
 
@@ -49,10 +48,35 @@ class ProductHandOption(BaseModel):
         return value
 
 
+class ProductHandOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    product_name: str = Field(min_length=1)
+    grasp_options: list[GraspOption]
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_shape(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "grasp_options" not in value:
+            value = dict(value)
+            value["grasp_options"] = [{"hands": value.pop("hands", None), "target_id": value.pop("target_id", None)}]
+        elif isinstance(value, dict) and isinstance(value.get("grasp_options"), dict):
+            value = dict(value); value["grasp_options"] = [value["grasp_options"]]
+        return value
+
+    @property
+    def hands(self) -> list[Hand]:
+        return list(dict.fromkeys(hand for option in self.grasp_options for hand in option.hands))
+
+    @property
+    def target_id(self) -> str:
+        return self.grasp_options[0].target_id
+
+
 class ProductHandOptionsFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.0", "2.0"]
     source_catalog_version: str = Field(min_length=1)
     product_hand_options: dict[str, ProductHandOption]
 
@@ -135,10 +159,10 @@ class Task3Settings(BaseModel):
                 raise ValueError(
                     f"inspection location is absent from product hand options: {point.location_id}"
                 )
-            if option.target_id != point.target_id:
+            if not any(grasp.target_id == point.target_id for grasp in option.grasp_options):
                 raise ValueError(
-                    f"inspection location {point.location_id} maps to {option.target_id}, "
-                    f"not {point.target_id}"
+                    f"inspection location {point.location_id} does not map to "
+                    f"{point.target_id}"
                 )
         return self
 
@@ -169,7 +193,8 @@ class Task3Settings(BaseModel):
         ):
             locations_by_target: dict[str, list[str]] = {}
             for slot_id, option in options.product_hand_options.items():
-                locations_by_target.setdefault(option.target_id, []).append(slot_id)
+                for grasp in option.grasp_options:
+                    locations_by_target.setdefault(grasp.target_id, []).append(slot_id)
             missing_targets = sorted(
                 target_id
                 for target_id in inspection_points

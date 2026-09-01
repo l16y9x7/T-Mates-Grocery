@@ -9,4 +9,15 @@ latest_camera_rgb.jpg
 perception/sku/.feature_cache/
 perception/sku/models/
 real_shortage_output/
+
+# Local captures, reference images, and runtime artifacts (keep locally only)
+/images/
+/sample.jpg
+/start_all.sh
+/perception/hard_case/
+/perception/rgb_data/
+/perception/record_20260813_074305_858375/
+/perception/sku/nohup.out
+/perception/test_web/nohup.out
+/agent/config/product-hand-options_bak.yaml
 debug/

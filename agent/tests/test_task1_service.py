@@ -11,7 +11,10 @@ import task1_service.service as task1_service_module
 from task1_service.client import Task1Client
 from task1_service.models import (
     ActionResponse,
+    GraspOption,
+    Hand,
     ProductHandOptionsFile,
+    TargetItem,
     Task1Request,
     Task1ServiceError,
     Task1Settings,
@@ -234,17 +237,17 @@ def test_production_config_loads_complete_product_hand_options() -> None:
     with options_path.open("r", encoding="utf-8") as options_file:
         options = ProductHandOptionsFile.model_validate(yaml.safe_load(options_file))
 
-    assert len(options.product_hand_options) == 122
-    assert options.product_hand_options["H1_F_L1_C01"].product_name == "NFC桔汁"
-    assert options.product_hand_options["H2_B_L5_C02"].product_name == "心相印厨房纸巾"
+    assert len(options.product_hand_options) == 74
+    assert options.product_hand_options["H3_L01_C01"].product_name == "NFC桔汁"
+    assert options.product_hand_options["H1_L04_C02"].product_name == "心相印厨房纸巾"
 
     task_settings = TaskServiceSettings.load(
         CONFIG_DIR / "runtime.production.yaml"
     ).tasks.task1
-    assert len(task_settings.product_hand_options) == 122
-    assert task_settings.product_hand_options["H1_F_L1_C01"] == ["LEFT"]
-    assert task_settings.product_target_ids["H1_F_L1_C01"] == "H1_F_L_INSPECT"
-    assert task_settings.product_target_ids["H1_F_L1_C04"] == "H1_F_R_INSPECT"
+    assert len(task_settings.product_hand_options) == 74
+    assert task_settings.product_hand_options["H3_L01_C01"] == ["LEFT", "RIGHT"]
+    assert task_settings.product_target_ids["H3_L01_C01"] == "H3_INSPECT"
+    assert len(task_settings.product_grasp_options["H1_L01_C04"]) == 2
     assert task_settings.services.pose.endswith(":8084")
 
 
@@ -472,6 +475,89 @@ async def test_task1_uses_first_location_when_sku_has_multiple_locations() -> No
 
     assert result.target_items[0].product_slot_id == "H2_F_L1_C01"
     assert result.target_items[0].picked is True
+
+
+def test_task1_rejects_unmapped_new_style_slot_with_business_error() -> None:
+    orchestrator = Task1Orchestrator(settings(), None)  # type: ignore[arg-type]
+    target = TargetItem(
+        product_name="未配置商品",
+        product_slot_id="H1_L01_C99",
+        target_id="",
+        shelf_level="L1",
+        hand=Hand.LEFT,
+    )
+
+    with pytest.raises(Task1ServiceError) as error:
+        orchestrator._plan_grasps([target])
+
+    assert error.value.code == "NO_FEASIBLE_HAND_ASSIGNMENT"
+
+
+@pytest.mark.asyncio
+async def test_task1_reselects_overlapping_sku_location_to_keep_slots_distinct(
+    tmp_path: Path,
+) -> None:
+    mock = Task1Mock()
+    mock.sku_locations = {
+        "可口可乐罐装": ["H3_L01_C03", "H3_L01_C04"],
+        "百事可乐瓶装": ["H3_L01_C03"],
+    }
+    task_settings = settings().model_copy(
+        update={
+            "log_dir": str(tmp_path),
+            "product_grasp_options": {
+                "H3_L01_C03": [
+                    GraspOption(hands=[Hand.LEFT], target_id="H3_INSPECT")
+                ],
+                "H3_L01_C04": [
+                    GraspOption(hands=[Hand.RIGHT], target_id="H3_INSPECT")
+                ],
+            }
+        }
+    )
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
+
+    assert [item.product_slot_id for item in result.target_items] == [
+        "H3_L01_C04",
+        "H3_L01_C03",
+    ]
+    assert [item.hand for item in result.target_items] == [Hand.RIGHT, Hand.LEFT]
+    assert all(item.picked and item.placed for item in result.target_items)
+
+
+def test_task1_rejects_two_products_when_only_same_slot_is_available() -> None:
+    shared_slot = "H3_L01_C03"
+    task_settings = settings().model_copy(
+        update={
+            "product_grasp_options": {
+                shared_slot: [
+                    GraspOption(
+                        hands=[Hand.LEFT, Hand.RIGHT], target_id="H3_INSPECT"
+                    )
+                ]
+            }
+        }
+    )
+    orchestrator = Task1Orchestrator(task_settings, None)  # type: ignore[arg-type]
+    targets = [
+        TargetItem(
+            product_name=product_name,
+            product_slot_id=shared_slot,
+            target_id="",
+            shelf_level="L1",
+            hand=Hand.LEFT,
+        )
+        for product_name in ("商品一", "商品二")
+    ]
+
+    with pytest.raises(Task1ServiceError) as error:
+        orchestrator._plan_grasps(targets, [[shared_slot], [shared_slot]])
+
+    assert error.value.code == "NO_FEASIBLE_HAND_ASSIGNMENT"
+    assert "distinct physical slot" in error.value.message
 
 
 @pytest.mark.parametrize(

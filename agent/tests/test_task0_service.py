@@ -285,7 +285,7 @@ def test_task0_settings_validate_points_and_load_production_config(tmp_path: Pat
     assert production.camera == "head"
     assert production.start_target_id == "start"
     assert production.capture_settle_seconds == 2
-    assert len(production.inspection_points) == 8
+    assert len(production.inspection_points) == 5
 
     with pytest.raises(ValidationError):
         settings(tmp_path, ["POINT/UNSAFE"])

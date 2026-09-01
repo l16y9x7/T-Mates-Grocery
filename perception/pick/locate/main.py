@@ -203,7 +203,7 @@ UPPER_CONFIDENCE_PICK_PRODUCTS = frozenset(
 MAX_MASK_AREA_PICK_PRODUCTS = frozenset({"中盐精制盐", "小苏打"})
 
 LOCATION_PATTERN = re.compile(
-    r"^H(?P<shelf>[12])_(?P<face>[FB])_L(?P<level>[1-5])_C(?P<column>\d{2})$"
+    r"^H(?P<shelf>[1-3])_L(?P<level>0[1-5])_C(?P<column>\d{2})$"
 )
 
 
@@ -681,28 +681,31 @@ def fetch_sku_reference_image(product: dict[str, Any]) -> QwenReferenceImage:
 
 
 def lookup_sku_row(location_id: str) -> list[dict[str, Any]]:
-    """Return the standard row containing location_id, ordered left to right."""
+    """Return every physical column in a standard row, ordered left to right."""
     try:
         response = requests.request(
             "GET",
-            f"{SKU_API_URL}/sku/get_candidate_SKU",
+            f"{SKU_API_URL}/sku/get_row_layout",
             json={"location_id": location_id, "pose_type": ""},
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-        rows = response.json()
+        row = response.json()
     except requests.RequestException as error:
         raise HTTPException(status_code=502, detail=f"SKU 行查询请求失败: {error}") from error
     except ValueError as error:
         raise HTTPException(status_code=502, detail="SKU 行查询响应不是有效 JSON") from error
     if (
-        not isinstance(rows, list)
-        or len(rows) != 1
-        or not isinstance(rows[0], list)
-        or not all(isinstance(product, dict) for product in rows[0])
+        not isinstance(row, list)
+        or not row
+        or not all(
+            isinstance(product, dict)
+            and isinstance(product.get("location_id"), str)
+            for product in row
+        )
     ):
         raise HTTPException(status_code=502, detail="SKU 行查询响应格式错误")
-    return rows[0]
+    return row
 
 
 def normalize_level(level: str) -> str:
@@ -877,7 +880,7 @@ def hard_case_level_required(
 
 
 def select_location_for_level(
-    product: dict[str, Any], level: str
+    product: dict[str, Any], level: str, hand: str = "left"
 ) -> tuple[str, re.Match[str]]:
     locations = product.get("locations")
     if not isinstance(locations, list) or not locations:
@@ -888,13 +891,12 @@ def select_location_for_level(
         if not isinstance(value, str):
             continue
         match = LOCATION_PATTERN.fullmatch(value.strip().upper())
-        if match is not None and f"L{match.group('level')}" == normalized_level:
+        if match is not None and f"L{int(match.group('level'))}" == normalized_level:
             parsed.append((value.strip().upper(), match))
     if not parsed:
         raise HTTPException(status_code=404, detail=f"hard case SKU 在 {normalized_level} 没有 location")
-    if len(parsed) != 1:
-        raise HTTPException(status_code=502, detail=f"hard case SKU 在 {normalized_level} 存在多个 location")
-    return parsed[0]
+    parsed.sort(key=lambda item: int(item[1].group("column")))
+    return parsed[-1] if hand.strip().lower() == "right" else parsed[0]
 
 
 def hard_case_standard_order(
@@ -2277,7 +2279,7 @@ def apply_hard_case_ordering(
     actual_hand = hand.strip().lower()
     preferred_hand = actual_hand
 
-    target_location, target_match = select_location_for_level(product, level)
+    target_location, target_match = select_location_for_level(product, level, hand)
     standard_order = hard_case_standard_order(target_location, config)
     target_name = product["name"].strip()
     if target_name not in standard_order:
@@ -2428,7 +2430,7 @@ def locate_product_in_image(
         assert normalized_level is not None
         hard_case_group_id, _ = hard_case
         target_location, target_match = select_location_for_level(
-            product, normalized_level
+            product, normalized_level, hand
         )
         if hard_case_group_id == "bbq_sauce_spicy":
             bbox_instruction = "每个红色烧烤酱袋子堆分别输出 bbox。"
@@ -2439,7 +2441,7 @@ def locate_product_in_image(
         qwen_prompt = (
             f"{qwen_prompt}\n"
             f"该 hard case 商品本次只处理标准库位置 {target_location} "
-            f"对应的 L{target_match.group('level')} 层；如果该 SKU 有多个位置，"
+            f"对应的 L{int(target_match.group('level'))} 层；如果该 SKU 有多个位置，"
             "这里使用调用方指定的层。不要输出同品牌在其他货架层的商品；"
             f"{bbox_instruction}"
         )

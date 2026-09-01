@@ -354,6 +354,7 @@ class PlaceLocateApiTest(unittest.TestCase):
             public_request = api.PlaceLocateRequest(
                 task_type="SHORTAGE",
                 product_name="测试商品",
+                slot_id="H1_L01_C01",
                 location_id="H1_F_L_INSPECT",
                 pose_type="SHELF_VIEW_UPPER",
             )
@@ -372,6 +373,7 @@ class PlaceLocateApiTest(unittest.TestCase):
             response.model_dump(),
             {
                 "name": "测试商品",
+                "slot_id": "H1_L01_C01",
                 "bbox": [[100, 200, 300, 400], [400, 200, 600, 400]],
                 "mask": ["mask-1", "mask-2"],
                 "direction": "both",
@@ -432,11 +434,13 @@ class PlaceLocateApiTest(unittest.TestCase):
         pipeline = sys.modules[api.select_place_references.__module__]
         small_slot = SimpleNamespace(
             slot_index=1,
+            slot_id="H1_L01_C01",
             product_name="测试商品",
             target_bbox_current_crop_xyxy=[30, 20, 50, 40],
         )
         large_slot = SimpleNamespace(
             slot_index=2,
+            slot_id="H1_L01_C02",
             product_name="测试商品",
             target_bbox_current_crop_xyxy=[80, 10, 150, 60],
         )
@@ -469,6 +473,26 @@ class PlaceLocateApiTest(unittest.TestCase):
         self.assertIs(selection.target_slot, large_slot)
         self.assertEqual(selection.direction, "both")
 
+        with (
+            patch.object(
+                pipeline,
+                "_level_reference_candidates",
+                return_value=candidates,
+            ),
+            patch.object(
+                pipeline,
+                "uses_upper_confidence_pick",
+                return_value=False,
+            ),
+        ):
+            exact = api.select_place_references(
+                analysis,
+                "测试商品",
+                "H1_L01_C01",
+            )
+
+        self.assertIs(exact.target_slot, small_slot)
+
     def test_shortage_locate_failure_still_persists_rgbd_record(self) -> None:
         height, width = 80, 120
         baseline_rgb = np.full((height, width, 3), 60, dtype=np.uint8)
@@ -488,6 +512,7 @@ class PlaceLocateApiTest(unittest.TestCase):
         request = api.PlaceLocateRequest(
             task_type="SHORTAGE",
             product_name="测试商品",
+            slot_id="H1_L01_C01",
             location_id="H1_F_L_INSPECT",
             pose_type="SHELF_VIEW_UPPER",
         )
@@ -599,6 +624,7 @@ class PlaceLocateApiTest(unittest.TestCase):
         payload = api.PlaceLocateRequest(
             task_type="SHORTAGE",
             product_name="测试商品",
+            slot_id="H1_L01_C01",
             location_id="H1_F_L_INSPECT",
             pose_type="SHELF_VIEW_UPPER",
         ).model_dump()

@@ -24,7 +24,7 @@ DEFAULT_API_URL = os.getenv("LOCATE_API_URL", "http://127.0.0.1:8083").rstrip("/
 DEFAULT_TIMEOUT_SECONDS = float(os.getenv("LOCATE_REQUEST_TIMEOUT_SECONDS", "600"))
 DEFAULT_WORKERS = int(os.getenv("LOCATE_BATCH_WORKERS", "4"))
 INVALID_WINDOWS_FILENAME_CHARS = set('<>:"/\\|?*')
-LOCATION_LEVEL_PATTERN = re.compile(r"_L([1-5])_")
+LOCATION_LEVEL_PATTERN = re.compile(r"_L0?([1-5])_")
 
 # These records contain SKUs stocked on more than one level. Their level is
 # fixed by the capture sequence: paired left/right wrist records observe the

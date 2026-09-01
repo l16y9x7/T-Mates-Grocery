@@ -1,6 +1,6 @@
 {
-  "schema_version": "1.0",
-  "catalog_version": "retail_perception_sku_2026-08-04_v1",
+  "schema_version": "2.0",
+  "catalog_version": "retail_perception_sku_2026-09-01_v2",
   "products": [
     {
       "sku_id": "SKU_001",

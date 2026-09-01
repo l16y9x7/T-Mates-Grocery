@@ -60,7 +60,8 @@ def shelf_level(slot_id: str) -> str:
         raise Task3ServiceError(
             "INVALID_PRODUCT_SLOT", f"invalid product slot: {slot_id}", status_code=422
         )
-    return slot_id.split("_")[2]
+    level = slot_id.split("_")[-2]
+    return f"L{int(level[1:])}"
 
 
 def shelf_view_pose(level: str) -> InspectionPose:
@@ -371,23 +372,25 @@ class Task3Orchestrator:
                 status_code=422,
             )
 
-        first_hand, second_hand = self._assign_hands(p1, p2)
+        first_source, first_destination, second_source, second_destination = (
+            self._plan_swap_grasps(p1, p2)
+        )
         items = [
             SwapItem(
                 product_name=finding.misplaced_product_name,
                 source_slot_id=p1,
                 destination_slot_id=p2,
-                source_target_id=p1_option.target_id,
-                destination_target_id=p2_option.target_id,
-                hand=first_hand,
+                source_target_id=first_source[0],
+                destination_target_id=first_destination[0],
+                hand=first_source[1],
             ),
             SwapItem(
                 product_name=finding.gt_product_name,
                 source_slot_id=p2,
                 destination_slot_id=p1,
-                source_target_id=p2_option.target_id,
-                destination_target_id=p1_option.target_id,
-                hand=second_hand,
+                source_target_id=second_source[0],
+                destination_target_id=second_destination[0],
+                hand=second_source[1],
             ),
         ]
         logger.event(
@@ -402,21 +405,19 @@ class Task3Orchestrator:
     def _resolve_detected_slot(
         self, sku: SkuResponse, finding: FindingContext
     ) -> str:
-        shelf_face = "_".join(finding.inspection_location_id.split("_")[:2])
         visible_levels = POSE_LEVELS[finding.inspection_pose_type]
         candidates = [
             slot
             for slot in sku.locations
             if PRODUCT_SLOT_PATTERN.fullmatch(slot)
             and slot in self.settings.product_hand_options
-            and self.settings.product_hand_options[slot].target_id
-            == finding.inspection_target_id
-            and slot.startswith(f"{shelf_face}_")
+            and any(
+                grasp.target_id == finding.inspection_target_id
+                for grasp in self.settings.product_hand_options[slot].grasp_options
+            )
             and shelf_level(slot) in visible_levels
         ]
-        return self._require_single_candidate(
-            sku.name, candidates, "detected misplaced location"
-        )
+        return self._select_candidate(sku.name, candidates, "detected misplaced location")
 
     def _resolve_unique_slot(self, sku: SkuResponse) -> str:
         candidates = [
@@ -425,7 +426,20 @@ class Task3Orchestrator:
             if PRODUCT_SLOT_PATTERN.fullmatch(slot)
             and slot in self.settings.product_hand_options
         ]
-        return self._require_single_candidate(sku.name, candidates, "standard location")
+        return self._select_candidate(sku.name, candidates, "standard location")
+
+    @staticmethod
+    def _select_candidate(
+        product_name: str, candidates: list[str], purpose: str
+    ) -> str:
+        unique = sorted(set(candidates))
+        if not unique:
+            raise Task3ServiceError(
+                "UNKNOWN_PRODUCT_SLOT",
+                f"SKU {product_name} has no configured {purpose}",
+                status_code=422,
+            )
+        return unique[0]
 
     @staticmethod
     def _require_single_candidate(
@@ -454,6 +468,42 @@ class Task3Orchestrator:
         raise Task3ServiceError(
             "NO_FEASIBLE_HAND_ASSIGNMENT",
             f"no two-hand swap assignment can reach both {p1} and {p2}",
+            status_code=422,
+        )
+
+    def _slot_grasps(self, slot: str, hand: Hand) -> list[tuple[str, Hand]]:
+        return [
+            (grasp.target_id, hand)
+            for grasp in self.settings.product_hand_options[slot].grasp_options
+            if hand in grasp.hands
+        ]
+
+    def _plan_swap_grasps(
+        self, p1: str, p2: str
+    ) -> tuple[
+        tuple[str, Hand], tuple[str, Hand], tuple[str, Hand], tuple[str, Hand]
+    ]:
+        """Choose fixed hands for both items; hands never exchange held products."""
+        for first_hand, second_hand in (
+            (Hand.LEFT, Hand.RIGHT),
+            (Hand.RIGHT, Hand.LEFT),
+        ):
+            first_sources = self._slot_grasps(p1, first_hand)
+            first_destinations = self._slot_grasps(p2, first_hand)
+            second_sources = self._slot_grasps(p2, second_hand)
+            second_destinations = self._slot_grasps(p1, second_hand)
+            if all(
+                (first_sources, first_destinations, second_sources, second_destinations)
+            ):
+                return (
+                    first_sources[0],
+                    first_destinations[0],
+                    second_sources[0],
+                    second_destinations[0],
+                )
+        raise Task3ServiceError(
+            "NO_FEASIBLE_HAND_ASSIGNMENT",
+            f"no fixed left/right hand assignment can reach both {p1} and {p2}",
             status_code=422,
         )
 

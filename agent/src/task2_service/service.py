@@ -1,4 +1,4 @@
-"""任务二的串行巡检与补货流程。"""
+"""任务二的巡检与双手优先补货流程。"""
 
 from __future__ import annotations
 
@@ -54,6 +54,7 @@ class FindingContext:
     product_name: str
     inspection_target_id: str
     inspection_pose_type: InspectionPose
+    product_slot_id: str | None = None
 
 
 class Task2Orchestrator:
@@ -66,10 +67,10 @@ class Task2Orchestrator:
 
     def baselines_ready(self) -> bool:
         return all(
-            self._baseline_path(target_id, pose).is_file()
-            and self._baseline_path(target_id, pose).stat().st_size > 0
+            path.is_file() and path.stat().st_size > 0
             for target_id in self.settings.inspection_points
             for pose in (InspectionPose.UPPER, InspectionPose.LOWER)
+            for path in self._baseline_files(target_id, pose)
         )
 
     async def run(
@@ -107,21 +108,40 @@ class Task2Orchestrator:
                     inspection_points,
                     action_failures,
                 )
+                candidate_sets: list[list[TargetItem]] = []
+                seen_slots: set[str] = set()
                 for finding in findings:
+                    if finding.product_slot_id is not None:
+                        if finding.product_slot_id in seen_slots:
+                            logger.event(
+                                "缺货记录",
+                                "skipped",
+                                product_name=finding.product_name,
+                                product_slot_id=finding.product_slot_id,
+                                reason="duplicate_slot_finding",
+                            )
+                            continue
+                        seen_slots.add(finding.product_slot_id)
                     try:
-                        allowed_hands = self._allowed_hands(finding)
+                        choices = self._target_choices(finding)
                     except Task2ServiceError as hand_error:
                         logger.event(
                             "抓取手分配",
                             "skipped",
                             product_name=finding.product_name,
+                            product_slot_id=finding.product_slot_id,
                             inspection_target_id=finding.inspection_target_id,
                             inspection_pose_type=finding.inspection_pose_type.value,
                             error_code=hand_error.code,
                             message=hand_error.message,
                         )
                         continue
+                    candidate_sets.append(choices)
 
+                for batch in self._plan_target_batches(candidate_sets):
+                    if successful_placements >= 2:
+                        break
+                    pick_capacity = 2 - successful_placements
                     step = "补货台准备"
                     index = len(targets)
                     try:
@@ -131,14 +151,14 @@ class Task2Orchestrator:
                     except Task2ServiceError as exc:
                         navigation_state["target_id"] = None
                         failure = self._failure(
-                            "replenishment_prepare", finding.product_name, None, exc
+                            "replenishment_prepare", batch[0].product_name, None, exc
                         )
                         action_failures.append(failure)
                         logger.event(
                             "补货台准备",
                             "skipped",
                             **failure,
-                            fallback="continue_next_finding",
+                            fallback="continue_next_batch",
                         )
                         continue
                     if held_items:
@@ -152,66 +172,41 @@ class Task2Orchestrator:
                             action_failures,
                         )
 
-                    available_hands = [
-                        hand
-                        for hand in allowed_hands
-                        if hand not in held_items and hand not in uncertain_hands
-                    ]
-                    if not available_hands:
+                    picked_targets: list[tuple[TargetItem, int]] = []
+                    for target in batch:
+                        if len(picked_targets) >= pick_capacity:
+                            break
+                        if (
+                            target.hand in held_items
+                            or target.hand in uncertain_hands
+                        ):
+                            logger.event(
+                                "抓取手分配",
+                                "skipped",
+                                product_name=target.product_name,
+                                product_slot_id=target.product_slot_id,
+                                inspection_target_id=target.inspection_target_id,
+                                inspection_pose_type=target.inspection_pose_type.value,
+                                hand=target.hand.value,
+                                error_code="NO_AVAILABLE_SAFE_HAND",
+                                message="safe hand is occupied or has unknown state",
+                            )
+                            continue
+                        targets.append(target)
+                        target_index = len(targets) - 1
                         logger.event(
                             "抓取手分配",
-                            "skipped",
-                            product_name=finding.product_name,
-                            inspection_target_id=finding.inspection_target_id,
-                            inspection_pose_type=finding.inspection_pose_type.value,
-                            error_code="NO_AVAILABLE_SAFE_HAND",
-                            message="all safe hands are occupied or have unknown state",
-                        )
-                        continue
-                    target = TargetItem(
-                        product_name=finding.product_name,
-                        inspection_target_id=finding.inspection_target_id,
-                        inspection_pose_type=finding.inspection_pose_type,
-                        hand=available_hands[0],
-                    )
-                    targets.append(target)
-                    index = len(targets) - 1
-                    logger.event(
-                        "抓取手分配",
-                        "succeeded",
-                        product_name=target.product_name,
-                        inspection_target_id=target.inspection_target_id,
-                        inspection_pose_type=target.inspection_pose_type.value,
-                        hand=target.hand.value,
-                        allowed_hands=[hand.value for hand in allowed_hands],
-                    )
-
-                    step = "补货商品抓取"
-                    picked = await self._pick_target(
-                        target,
-                        index,
-                        task_run_id,
-                        logger,
-                        navigation_state,
-                        held_items,
-                        uncertain_hands,
-                        action_failures,
-                    )
-                    if not picked:
-                        logger.event(
-                            "货架商品放置",
-                            "skipped",
+                            "succeeded",
                             product_name=target.product_name,
+                            product_slot_id=target.product_slot_id,
+                            inspection_target_id=target.inspection_target_id,
+                            inspection_pose_type=target.inspection_pose_type.value,
                             hand=target.hand.value,
-                            reason="pick_not_succeeded",
                         )
-                        continue
-
-                    step = "货架商品放置"
-                    try:
-                        placed = await self._place_target(
+                        step = "补货商品抓取"
+                        picked = await self._pick_target(
                             target,
-                            index,
+                            target_index,
                             task_run_id,
                             logger,
                             navigation_state,
@@ -219,26 +214,51 @@ class Task2Orchestrator:
                             uncertain_hands,
                             action_failures,
                         )
-                    except Task2ServiceError as exc:
-                        navigation_state["target_id"] = None
-                        failure = self._failure(
-                            "place_prerequisite",
-                            target.product_name,
-                            target.hand,
-                            exc,
-                        )
-                        action_failures.append(failure)
-                        logger.event(
-                            "货架商品放置",
-                            "skipped",
-                            **failure,
-                            fallback="continue_next_finding",
-                        )
-                        placed = False
-                    if placed:
-                        successful_placements += 1
-                        if successful_placements == 2:
-                            break
+                        if picked:
+                            picked_targets.append((target, target_index))
+                        else:
+                            logger.event(
+                                "货架商品放置",
+                                "skipped",
+                                product_name=target.product_name,
+                                product_slot_id=target.product_slot_id,
+                                hand=target.hand.value,
+                                reason="pick_not_succeeded",
+                            )
+
+                    for target, target_index in picked_targets:
+                        step = "货架商品放置"
+                        try:
+                            placed = await self._place_target(
+                                target,
+                                target_index,
+                                task_run_id,
+                                logger,
+                                navigation_state,
+                                held_items,
+                                uncertain_hands,
+                                action_failures,
+                            )
+                        except Task2ServiceError as exc:
+                            navigation_state["target_id"] = None
+                            failure = self._failure(
+                                "place_prerequisite",
+                                target.product_name,
+                                target.hand,
+                                exc,
+                            )
+                            action_failures.append(failure)
+                            logger.event(
+                                "货架商品放置",
+                                "skipped",
+                                **failure,
+                                fallback="continue_next_target",
+                            )
+                            placed = False
+                        if placed:
+                            successful_placements += 1
+                            if successful_placements == 2:
+                                break
                 if successful_placements == 2:
                     break
 
@@ -332,6 +352,14 @@ class Task2Orchestrator:
             self.client.set_trace_callback(None)
 
     def _inspection_groups(self) -> list[list[str]]:
+        if self.settings.inspection_points and all(
+            re.fullmatch(r"H(?:1|12|2|23|3)_INSPECT", target_id)
+            for target_id in self.settings.inspection_points
+        ):
+            # The five new points observe one continuous three-shelf face.
+            # Inspect all of them before planning so a two-hand replenishment
+            # pair can be selected across shelf boundaries.
+            return [list(self.settings.inspection_points)]
         groups: list[list[str]] = []
         current_face: str | None = None
         for target_id in self.settings.inspection_points:
@@ -432,7 +460,9 @@ class Task2Orchestrator:
                     baseline_path=str(baseline_path),
                 )
                 try:
-                    names = await self.client.inspect(target_id, pose.value)
+                    detected_findings = await self.client.inspect(
+                        target_id, pose.value
+                    )
                 except Task2ServiceError as exc:
                     failure = self._failure("inspect", None, None, exc)
                     action_failures.append(failure)
@@ -454,30 +484,182 @@ class Task2Orchestrator:
                     location_id=target_id,
                     pose_type=pose.value,
                     baseline_path=str(baseline_path),
-                    findings=names,
+                    findings=[
+                        finding.model_dump(mode="json")
+                        for finding in detected_findings
+                    ],
                 )
-                for product_name in names:
-                    finding = FindingContext(product_name, target_id, pose)
+                for detected in detected_findings:
+                    finding = FindingContext(
+                        detected.shortage_product_name,
+                        target_id,
+                        pose,
+                        detected.slot_id,
+                    )
                     findings.append(finding)
                     logger.event(
                         "缺货记录",
                         "succeeded",
-                        product_name=product_name,
+                        product_name=finding.product_name,
+                        product_slot_id=finding.product_slot_id,
                         target_id=target_id,
                         pose_type=pose.value,
                         accumulated_count=len(findings),
                     )
         return findings
 
+    def _target_choices(self, finding: FindingContext) -> list[TargetItem]:
+        """Resolve one exact shortage slot into its valid target/hand choices."""
+
+        if finding.product_slot_id is None:
+            if self.settings.product_hand_options_schema_version == "2.0":
+                raise Task2ServiceError(
+                    "MISSING_SHORTAGE_SLOT_ID",
+                    "schema 2.0 shortage findings must include an exact slot_id",
+                    status_code=422,
+                )
+            return [
+                TargetItem(
+                    product_name=finding.product_name,
+                    product_slot_id=None,
+                    inspection_target_id=finding.inspection_target_id,
+                    inspection_pose_type=finding.inspection_pose_type,
+                    hand=hand,
+                )
+                for hand in self._allowed_hands(finding)
+            ]
+
+        option = self.settings.product_hand_options.get(finding.product_slot_id)
+        if option is None:
+            raise Task2ServiceError(
+                "UNKNOWN_PRODUCT_HAND_OPTIONS",
+                f"no hand configuration matches slot {finding.product_slot_id}",
+                status_code=422,
+            )
+        if normalize_product_name(option.product_name) != normalize_product_name(
+            finding.product_name
+        ):
+            raise Task2ServiceError(
+                "SLOT_PRODUCT_MISMATCH",
+                f"slot {finding.product_slot_id} is configured for "
+                f"{option.product_name}, not {finding.product_name}",
+                status_code=422,
+            )
+        level_number = int(finding.product_slot_id.split("_")[-2][1:])
+        pose = (
+            InspectionPose.UPPER
+            if level_number <= 2
+            else InspectionPose.LOWER
+        )
+        if pose != finding.inspection_pose_type:
+            raise Task2ServiceError(
+                "SLOT_POSE_MISMATCH",
+                f"slot {finding.product_slot_id} is not visible in "
+                f"{finding.inspection_pose_type.value}",
+                status_code=422,
+            )
+        choices = [
+            TargetItem(
+                product_name=finding.product_name,
+                product_slot_id=finding.product_slot_id,
+                inspection_target_id=grasp.target_id,
+                inspection_pose_type=pose,
+                hand=hand,
+            )
+            for grasp in option.grasp_options
+            for hand in grasp.hands
+        ]
+        if not choices:
+            raise Task2ServiceError(
+                "NO_SAFE_HAND_OPTION",
+                f"slot {finding.product_slot_id} has no configured grasp choice",
+                status_code=422,
+            )
+        return choices
+
+    @staticmethod
+    def _plan_target_batches(
+        candidate_sets: list[list[TargetItem]],
+    ) -> list[list[TargetItem]]:
+        """Prefer two distinct hands per replenishment-table visit."""
+
+        pending = [list(candidates) for candidates in candidate_sets if candidates]
+        batches: list[list[TargetItem]] = []
+        while pending:
+            best: tuple[int, int, int, TargetItem, TargetItem] | None = None
+            for first_index, first_choices in enumerate(pending):
+                for second_index in range(first_index + 1, len(pending)):
+                    for first in first_choices:
+                        for second in pending[second_index]:
+                            if first.hand == second.hand:
+                                continue
+                            if (
+                                first.product_slot_id is not None
+                                and first.product_slot_id == second.product_slot_id
+                            ):
+                                continue
+                            score = (
+                                0
+                                if first.inspection_target_id
+                                == second.inspection_target_id
+                                else 1
+                            )
+                            candidate = (
+                                score,
+                                first_index,
+                                second_index,
+                                first,
+                                second,
+                            )
+                            if best is None or candidate[:3] < best[:3]:
+                                best = candidate
+            if best is None:
+                batches.append([pending.pop(0)[0]])
+                continue
+            _, first_index, second_index, first, second = best
+            batches.append([first, second])
+            pending.pop(second_index)
+            pending.pop(first_index)
+        return batches
+
     def _allowed_hands(self, finding: FindingContext) -> list[Hand]:
+        if finding.product_slot_id is not None:
+            option = self.settings.product_hand_options.get(finding.product_slot_id)
+            if option is None or normalize_product_name(
+                option.product_name
+            ) != normalize_product_name(finding.product_name):
+                raise Task2ServiceError(
+                    "UNKNOWN_PRODUCT_HAND_OPTIONS",
+                    f"no hand configuration matches slot {finding.product_slot_id}",
+                    status_code=422,
+                )
+            exact_candidates = [
+                grasp.hands
+                for grasp in option.grasp_options
+                if grasp.target_id == finding.inspection_target_id
+            ]
+            allowed = list(
+                dict.fromkeys(
+                    hand for hands in exact_candidates for hand in hands
+                )
+            )
+            if allowed:
+                return allowed
+            raise Task2ServiceError(
+                "NO_SAFE_HAND_OPTION",
+                f"slot {finding.product_slot_id} has no grasp option at "
+                f"{finding.inspection_target_id}",
+                status_code=422,
+            )
         visible_levels = POSE_LEVELS[finding.inspection_pose_type]
         candidates = [
-            option.hands
+            grasp.hands
             for slot_id, option in self.settings.product_hand_options.items()
+            for grasp in option.grasp_options
             if normalize_product_name(option.product_name)
             == normalize_product_name(finding.product_name)
-            and option.target_id == finding.inspection_target_id
-            and slot_id.split("_")[2] in visible_levels
+            and grasp.target_id == finding.inspection_target_id
+            and f"L{int(slot_id.split('_')[-2][1:])}" in visible_levels
         ]
         if not candidates:
             raise Task2ServiceError(
@@ -752,6 +934,7 @@ class Task2Orchestrator:
                 target.inspection_target_id,
                 target.inspection_pose_type.value,
                 key,
+                target.product_slot_id,
             ),
             logger=logger,
             action_failures=action_failures,
@@ -1168,18 +1351,29 @@ class Task2Orchestrator:
             / "rgb.jpg"
         )
 
+    def _baseline_files(
+        self, target_id: str, pose: InspectionPose
+    ) -> tuple[Path, Path, Path]:
+        directory = self._baseline_path(target_id, pose).parent
+        return (
+            directory / "rgb.jpg",
+            directory / "depth_mm.npy",
+            directory / "meta.json",
+        )
+
     def _require_baselines(self) -> None:
         missing = [
-            str(self._baseline_path(target_id, pose))
+            str(path)
             for target_id in self.settings.inspection_points
             for pose in (InspectionPose.UPPER, InspectionPose.LOWER)
-            if not self._baseline_path(target_id, pose).is_file()
-            or self._baseline_path(target_id, pose).stat().st_size == 0
+            for path in self._baseline_files(target_id, pose)
+            if not path.is_file() or path.stat().st_size == 0
         ]
         if missing:
             raise Task2ServiceError(
                 "BASELINE_NOT_READY",
-                "Task0 baseline images are missing or empty: " + ", ".join(missing),
+                "Task0 baseline RGB-D files are missing or empty: "
+                + ", ".join(missing),
                 status_code=503,
             )
 

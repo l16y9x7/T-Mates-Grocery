@@ -36,7 +36,7 @@ from .visual_retrieval import (  # noqa: E402
 TaskType = Literal["SHORTAGE", "MISPLACED"]
 MisplacedStage = Literal["misplaced_product", "expected_product"]
 PoseType = Literal["", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
-INSPECTION_TARGET_PATTERN = re.compile(r"^H[12]_[FB]_[LR]_INSPECT$")
+INSPECTION_TARGET_PATTERN = re.compile(r"^H(?:1|12|2|23|3)_INSPECT$")
 TARGET_SIZE = (1280, 720)
 SKU_TIMEOUT_SECONDS = 8.0
 QWEN_TIMEOUT_SECONDS = float(os.getenv("QWEN_REQUEST_TIMEOUT_SECONDS", "30"))
