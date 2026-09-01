@@ -5,9 +5,9 @@ Run from the perception directory::
     python inspect/batch_inspect_shortage_new_version.py --workers 4
 
 The source records are converted into ``real_shortage_regression`` and only
-those imported records are processed by the current baseline/current SAM3
-front-row comparison pipeline.  Existing records from other datasets are not
-re-run.
+those imported records run through the complete local review pipeline:
+row_detection/export -> baseline/current shelf masking -> SAM3 front-row
+comparison.  Existing records from other datasets are not re-run.
 """
 
 from __future__ import annotations
@@ -26,7 +26,12 @@ from batch_front_row_compare import (
     web_server,
     write_json,
 )
+from batch_shelf_row_mask import (
+    DEFAULT_OUTPUT_ROOT as SHELF_OUTPUT_ROOT,
+    process_row as process_shelf_row,
+)
 from convert_shortage_output_for_review import convert_all, group_name, read_json
+from export_sam_rows import export_record as export_sam_row_record
 
 
 PERCEPTION_ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +39,108 @@ DEFAULT_SOURCE_ROOT = (
     PERCEPTION_ROOT / "test_data" / "inspect_shortage_new_version"
 )
 PRINT_LOCK = threading.Lock()
+
+
+def rebuild_rows_and_shelf_masks(
+    records: list[tuple[str, str]],
+    *,
+    workers: int,
+    overwrite: bool,
+) -> tuple[int, list[dict[str, str]]]:
+    """Rebuild row crops, then rebuild shelf masks for both image sources."""
+
+    tasks: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    for group, record in records:
+        try:
+            record_directory, pose_type = web_server.resolve_sam_row_record(
+                group,
+                record,
+            )
+            for source, rgb_name, depth_name in (
+                ("baseline", "baseline_rgb.jpg", "baseline_depth_mm.npy"),
+                ("current", "rgb.jpg", "depth_mm.npy"),
+            ):
+                output_directory = (
+                    web_server.REAL_SHORTAGE_SAM_ROWS_ROOT / group / record
+                )
+                if source == "baseline":
+                    output_directory = output_directory / "baseline"
+                if overwrite:
+                    metadata = export_sam_row_record(
+                        record_directory,
+                        output_directory,
+                        pose_type=pose_type,
+                        overwrite=True,
+                        rgb_filename=rgb_name,
+                        depth_filename=depth_name,
+                        source_variant=source,
+                    )
+                else:
+                    output_directory, metadata = web_server.ensure_sam_row_export(
+                        group,
+                        record,
+                        source,
+                    )
+                for row in metadata.get("rows", []):
+                    if isinstance(row, dict):
+                        tasks.append(
+                            {
+                                "group": group,
+                                "record": record,
+                                "source": source,
+                                "row_root": str(output_directory),
+                                "row": row,
+                            }
+                        )
+        except Exception as error:  # noqa: BLE001 - report every local record
+            errors.append(
+                {
+                    "group": group,
+                    "record": record,
+                    "error": f"row export: {type(error).__name__}: {error}",
+                }
+            )
+
+    SHELF_OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    completed = 0
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+        futures = {
+            executor.submit(
+                process_shelf_row,
+                task,
+                output_root=SHELF_OUTPUT_ROOT,
+                prompt="shelf",
+                detection_threshold=0.5,
+                retry_threshold=0.25,
+                mask_threshold=0.35,
+                max_edge_component_width_ratio=0.30,
+                edge_touch_tolerance_ratio=0.02,
+                edge_touch_min_tolerance_px=10,
+                min_spanning_component_width_ratio=0.60,
+                expansion_px=10,
+                overwrite=overwrite,
+            ): task
+            for task in tasks
+        }
+        for future in as_completed(futures):
+            task = futures[future]
+            try:
+                future.result()
+                completed += 1
+            except Exception as error:  # noqa: BLE001 - keep the batch running
+                errors.append(
+                    {
+                        "group": str(task["group"]),
+                        "record": str(task["record"]),
+                        "error": (
+                            f"shelf mask {task['source']} ROW "
+                            f"{task['row'].get('row_index')}: "
+                            f"{type(error).__name__}: {error}"
+                        ),
+                    }
+                )
+    return completed, errors
 
 
 def discover_source_records(source_root: Path) -> list[tuple[str, str]]:
@@ -164,11 +271,21 @@ def main() -> int:
         # complete overlays, masks, per-instance depth data and slot matching.
         None,
     )
+    print("phase 1/3: row_detection + row export")
+    print("phase 2/3: baseline/current shelf masks")
+    shelf_rows, preprocessing_errors = rebuild_rows_and_shelf_masks(
+        records,
+        workers=max(1, int(args.workers)),
+        overwrite=bool(args.overwrite),
+    )
+    print(f"shelf rows completed: {shelf_rows}")
+    print("phase 3/3: front-row comparison")
     completed, errors = run_records(
         records,
         workers=max(1, int(args.workers)),
         overwrite=bool(args.overwrite),
     )
+    errors = preprocessing_errors + errors
     manifest = {
         "schema_version": 1,
         "generated_at": datetime.now(UTC).isoformat(),
@@ -178,6 +295,7 @@ def main() -> int:
         "workers": max(1, int(args.workers)),
         "converted_records": converted_count,
         "completed_records": len(completed),
+        "completed_shelf_rows": shelf_rows,
         "failed_records": len(errors),
         "records": sorted(completed, key=lambda item: (item["group"], item["record"])),
         "errors": sorted(errors, key=lambda item: (item["group"], item["record"])),
