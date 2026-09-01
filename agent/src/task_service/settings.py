@@ -83,11 +83,9 @@ class TaskServiceSettings(BaseModel):
         task1 = document.task_section("task1", Task1Settings)
         task1["services"] = {
             "navigation": document.robot.navigation_url,
-            "perception": document.local_services.perception,
             "pose": document.robot.pose_url,
             "pick_place": document.local_services.pick_place,
             "sku": document.local_services.sku,
-            "camera": document.robot.camera_url,
         }
         if "log_dir" in task1:
             task1["log_dir"] = document.resolve(str(task1["log_dir"]))

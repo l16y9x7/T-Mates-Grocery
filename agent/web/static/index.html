@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1514" />
     <title>机器人任务控制台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260817-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260901-2" />
   </head>
   <body>
     <main class="shell">
@@ -55,6 +55,19 @@
             <strong id="taskTitle">采集准备</strong>
             <span id="taskDescription">采集货架巡检点的头部 RGB-D 基准数据</span>
           </div>
+          <section id="task1MockOrder" class="mock-order" aria-live="polite" hidden>
+            <div class="mock-order-heading">
+              <span>订单来源</span><strong id="mockOrderStatus">等待生成</strong>
+            </div>
+            <p>模拟点单系统将从当前 SKU 商品池中随机选择两件不同商品。</p>
+            <ul id="mockOrderProducts" class="mock-order-products" hidden></ul>
+            <p id="mockOrderEmpty" class="mock-order-empty">正在准备模拟订单...</p>
+            <div class="mock-order-meta">
+              <span>订单号</span><strong id="mockOrderId">-</strong>
+              <span>商品池</span><strong id="mockOrderCatalogSize">-</strong>
+            </div>
+            <button id="mockOrderRefreshButton" class="secondary-button mock-order-button" type="button">重新随机</button>
+          </section>
           <div class="task-action-row">
             <button id="taskSubmitButton" class="submit-button" type="submit"><span class="button-icon">→</span><span>开始 Task 0</span></button>
             <button id="taskTerminateButton" class="danger-button task-terminate-button" type="button" hidden><span class="button-icon" aria-hidden="true">■</span><span>终止任务</span></button>
@@ -76,6 +89,18 @@
               <span id="taskProgressBar"></span>
             </div>
           </div>
+          <section id="taskInterfaceMetrics" class="interface-metrics" hidden>
+            <div class="interface-metrics-heading"><span>Task 1 接口统计</span><strong id="taskInterfaceMetricsCount">0 个接口</strong></div>
+            <div class="interface-metrics-table-wrap">
+              <table>
+                <thead>
+                  <tr><th scope="col">接口</th><th scope="col">次数</th><th scope="col">HTTP 成功 / 失败</th><th scope="col">累计</th><th scope="col">平均</th><th scope="col">最近</th></tr>
+                </thead>
+                <tbody id="taskInterfaceMetricsBody"></tbody>
+              </table>
+            </div>
+            <p id="taskInterfaceMetricsEmpty" class="interface-metrics-empty">接口调用后显示统计</p>
+          </section>
           <div id="taskTimeline" class="timeline" hidden></div>
           <section id="taskCaptures" class="capture-results" hidden>
             <div class="capture-results-heading"><span>采集目录</span><strong id="taskCaptureCount">0 组</strong></div>
@@ -217,26 +242,8 @@
         </section>
       </section>
 
-      <section class="receipt-panel" aria-live="polite">
-        <div class="panel-heading"><span>小票识别</span><span class="panel-index">04</span></div>
-        <div class="receipt-layout">
-          <div>
-            <p class="receipt-summary">识别当前小票中的商品名称</p>
-            <button id="parseReceiptButton" class="secondary-button receipt-button" type="button">
-              <span class="button-icon">→</span><span>识别小票</span>
-            </button>
-          </div>
-          <div class="receipt-result">
-            <div class="receipt-result-heading"><span>识别结果</span><strong id="receiptStatus">尚未识别</strong></div>
-            <ul id="receiptProducts" class="product-list" hidden></ul>
-            <p id="receiptEmpty" class="receipt-empty">点击识别后显示商品名称</p>
-            <pre id="receiptOutput" class="robot-output">尚未发起小票识别请求</pre>
-          </div>
-        </div>
-      </section>
-
       <section class="robot-panel">
-        <div class="panel-heading"><span>机器人控制</span><span class="panel-index">05</span></div>
+        <div class="panel-heading"><span>机器人控制</span><span class="panel-index">04</span></div>
         <div class="robot-grid">
           <form id="poseForm" class="robot-form">
             <div class="robot-form-title">位姿准备</div>
@@ -320,6 +327,6 @@
       </dialog>
       <footer><span>8108 UNIFIED TASK SERVICE</span><span id="footerUrl">-</span></footer>
     </main>
-    <script src="/static/app.js?v=20260901-1" defer></script>
+    <script src="/static/app.js?v=20260901-2" defer></script>
   </body>
 </html>

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 import json
-from typing import Any, Callable, Literal
+from typing import Any, Callable
+from uuid import uuid4
 
 import httpx
 from pydantic import ValidationError
@@ -13,7 +16,7 @@ from task1_service.models import (
     ActionResponse,
     Hand,
     HealthResponse,
-    ParseReceiptResponse,
+    InterfaceMetric,
     SkuResponse,
     Task1ServiceError,
     Task1Settings,
@@ -23,7 +26,6 @@ from task1_service.models import (
 
 HEALTH_PATHS = {
     "navigation": "/navigation/health",
-    "perception": "/perception/health",
     "pose": "/pose/health",
     "pick_place": "/health",
     "sku": "/sku/health",
@@ -32,8 +34,25 @@ ACTION_RECONCILIATION_SECONDS = 15.0
 ACTION_RECONCILIATION_INTERVAL_SECONDS = 0.5
 
 
+@dataclass
+class _InterfaceTotals:
+    call_count: int = 0
+    success_count: int = 0
+    failure_count: int = 0
+    total_duration_ms: float = 0.0
+    metadata: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class _TraceContext:
+    callback: Callable[[dict[str, Any]], None]
+    session_id: str = field(default_factory=lambda: uuid4().hex)
+    next_call_index: int = 0
+    totals: dict[str, _InterfaceTotals] = field(default_factory=dict)
+
+
 class Task1Client:
-    """封装任务一所需的五个 HTTP 服务。"""
+    """封装任务一所需的导航、位姿、取放和 SKU HTTP 服务。"""
 
     def __init__(
         self,
@@ -43,7 +62,12 @@ class Task1Client:
     ) -> None:
         self.settings = settings
         self._client = httpx.AsyncClient(transport=transport)
-        self.trace_callback: Callable[[dict[str, Any]], None] | None = None
+        # The application owns one shared client. A ContextVar keeps metrics from
+        # concurrent readiness probes out of the currently running Task1 trace,
+        # while asyncio.gather children created by that run inherit its context.
+        self._trace_context: ContextVar[_TraceContext | None] = ContextVar(
+            f"task1_trace_context_{id(self)}", default=None
+        )
 
     async def __aenter__(self) -> "Task1Client":
         return self
@@ -55,7 +79,33 @@ class Task1Client:
         await self._client.aclose()
 
     def set_trace_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
-        self.trace_callback = callback
+        self._trace_context.set(_TraceContext(callback) if callback is not None else None)
+
+    def interface_metrics(self) -> list[InterfaceMetric]:
+        """Return the aggregate collected in the current Task1 trace context."""
+
+        trace_context = self._trace_context.get()
+        if trace_context is None:
+            return []
+        metrics: list[InterfaceMetric] = []
+        for interface, totals in trace_context.totals.items():
+            metadata = totals.metadata
+            metrics.append(
+                InterfaceMetric(
+                    interface=interface,
+                    service=metadata["service"],
+                    method=metadata["method"],
+                    url=metadata["url"],
+                    call_count=totals.call_count,
+                    success_count=totals.success_count,
+                    failure_count=totals.failure_count,
+                    total_duration_ms=totals.total_duration_ms,
+                    average_duration_ms=(
+                        totals.total_duration_ms / totals.call_count
+                    ),
+                )
+            )
+        return metrics
 
     def _trace(
         self,
@@ -70,9 +120,22 @@ class Task1Client:
         response: httpx.Response | None = None,
         error: str | None = None,
         attempt: int,
+        duration_ms: float,
     ) -> None:
-        if self.trace_callback is None:
+        trace_context = self._trace_context.get()
+        if trace_context is None:
             return
+        interface = f"{service}{path}"
+        succeeded = response is not None and response.is_success
+        totals = trace_context.totals.setdefault(interface, _InterfaceTotals())
+        totals.metadata = {"service": service, "method": method, "url": url}
+        totals.call_count += 1
+        if succeeded:
+            totals.success_count += 1
+        else:
+            totals.failure_count += 1
+        totals.total_duration_ms += duration_ms
+        trace_context.next_call_index += 1
         response_body: object = None
         response_headers: dict[str, str] = {}
         status_code: int | None = None
@@ -83,8 +146,9 @@ class Task1Client:
                 response_body = response.json()
             except (ValueError, json.JSONDecodeError):
                 response_body = response.text
-        self.trace_callback({
-            "interface": f"{service}{path}",
+        trace_context.callback({
+            "call_id": f"{trace_context.session_id}:{trace_context.next_call_index}",
+            "interface": interface,
             "service": service,
             "method": method,
             "url": url,
@@ -96,11 +160,33 @@ class Task1Client:
             "response_headers": response_headers,
             "response_body": response_body,
             "error": error,
+            "duration_ms": duration_ms,
+            "call_count": totals.call_count,
+            "success_count": totals.success_count,
+            "failure_count": totals.failure_count,
+            "total_duration_ms": totals.total_duration_ms,
+            "average_duration_ms": totals.total_duration_ms / totals.call_count,
         })
 
     async def check_all_health(self) -> None:
         services = tuple(HEALTH_PATHS)
-        results = await asyncio.gather(*(self._check_health(service) for service in services))
+        # Wait for every probe so all calls are measured before the run either
+        # proceeds or returns a health failure.
+        results = await asyncio.gather(
+            *(self._check_health(service) for service in services),
+            return_exceptions=True,
+        )
+        errors = [result for result in results if isinstance(result, BaseException)]
+        if errors:
+            first_error = errors[0]
+            if isinstance(first_error, asyncio.CancelledError):
+                raise first_error
+            if isinstance(first_error, Task1ServiceError):
+                raise first_error
+            raise Task1ServiceError(
+                "HEALTH_CHECK_FAILED",
+                f"capability health check failed: {first_error}",
+            ) from first_error
         not_ready = [service for service, ready in zip(services, results) if not ready]
         if not_ready:
             raise Task1ServiceError(
@@ -185,42 +271,33 @@ class Task1Client:
                 continue
             return
 
-    async def parse_receipt(self) -> list[str]:
+    async def list_product_names(self) -> list[str]:
+        """Return the selectable POS mock catalog from the active SKU service."""
+
         response = await self._request(
-            "perception",
-            "POST",
-            "/perception/parse",
-            timeout_seconds=self.settings.timeouts.receipt_seconds,
+            "sku",
+            "GET",
+            "/sku/get_all_names",
+            timeout_seconds=self.settings.timeouts.sku_seconds,
         )
         try:
-            result = ParseReceiptResponse.model_validate(response.json())
-        except (ValueError, ValidationError) as exc:
+            raw_names = response.json()
+        except ValueError as exc:
             raise Task1ServiceError(
-                "INVALID_RESPONSE", "receipt response must contain product_names"
+                "INVALID_RESPONSE", "SKU name list response must be a JSON array"
             ) from exc
-        names = list(
-            dict.fromkeys(
-                name.strip()
-                for name in result.product_names
-                if isinstance(name, str) and name.strip()
-            )
-        )[:2]
-        if not names:
+        if not isinstance(raw_names, list) or any(
+            not isinstance(name, str) or not name.strip() for name in raw_names
+        ):
             raise Task1ServiceError(
-                "INVALID_RECEIPT", "receipt must contain at least one non-empty product name",
-                status_code=422,
+                "INVALID_RESPONSE", "SKU name list must contain only non-empty strings"
+            )
+        names = list(dict.fromkeys(name.strip() for name in raw_names))
+        if len(names) < 2:
+            raise Task1ServiceError(
+                "INVALID_RESPONSE", "SKU name list must contain at least two unique names"
             )
         return names
-
-    async def set_head_resolution(self, resolution: Literal[720, 1080]) -> None:
-        await self._request(
-            "camera",
-            "POST",
-            "/camera/head/resolution",
-            json={"resolution": resolution},
-            timeout_seconds=self.settings.timeouts.resolution_seconds,
-            result_unknown_on_exhaustion=True,
-        )
 
     async def search_by_name(self, name: str) -> SkuResponse:
         last_error: Task1ServiceError | None = None
@@ -429,6 +506,7 @@ class Task1Client:
                 write=min(10.0, remaining),
                 pool=min(5.0, remaining),
             )
+            attempt_started_at = loop.time()
             try:
                 async with asyncio.timeout(remaining):
                     response = await self._client.request(
@@ -439,7 +517,23 @@ class Task1Client:
                         headers=headers,
                         timeout=timeout,
                     )
-            except (TimeoutError, httpx.TimeoutException, httpx.NetworkError) as exc:
+            except asyncio.CancelledError:
+                duration_ms = max(0.0, loop.time() - attempt_started_at) * 1000.0
+                self._trace(
+                    service=service,
+                    method=method,
+                    path=path,
+                    url=url,
+                    headers=headers,
+                    query=params,
+                    body=json,
+                    error="request cancelled",
+                    attempt=attempt + 1,
+                    duration_ms=duration_ms,
+                )
+                raise
+            except (TimeoutError, httpx.RequestError) as exc:
+                duration_ms = max(0.0, loop.time() - attempt_started_at) * 1000.0
                 self._trace(
                     service=service,
                     method=method,
@@ -450,6 +544,7 @@ class Task1Client:
                     body=json,
                     error=str(exc),
                     attempt=attempt + 1,
+                    duration_ms=duration_ms,
                 )
                 retry_remaining = deadline - loop.time()
                 if attempt == 0 and retry_remaining > 0:
@@ -457,6 +552,7 @@ class Task1Client:
                     continue
                 code = "ACTION_RESULT_UNKNOWN" if result_unknown_on_exhaustion else "NETWORK_ERROR"
                 raise Task1ServiceError(code, f"{service} request result could not be determined") from exc
+            duration_ms = max(0.0, loop.time() - attempt_started_at) * 1000.0
             if not response.is_success:
                 payload: dict[str, Any] = {}
                 try:
@@ -483,6 +579,7 @@ class Task1Client:
                     body=json,
                     response=response,
                     attempt=attempt + 1,
+                    duration_ms=duration_ms,
                 )
                 raise Task1ServiceError(
                     code if isinstance(code, str) else "EXECUTION_FAILED",
@@ -503,6 +600,7 @@ class Task1Client:
                 body=json,
                 response=response,
                 attempt=attempt + 1,
+                duration_ms=duration_ms,
             )
             return response
         raise AssertionError("unreachable retry state")

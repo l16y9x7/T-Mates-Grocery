@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import Body, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from task0_service.client import Task0Client
 from task0_service.models import Task0Result, Task0ServiceError
@@ -102,6 +103,14 @@ def create_app(
             content["failed_interface"] = exc.failed_interface
         if getattr(exc, "url", None):
             content["url"] = exc.url
+        interface_metrics = getattr(exc, "interface_metrics", None)
+        if interface_metrics:
+            content["interface_metrics"] = [
+                metric.model_dump(mode="json")
+                if isinstance(metric, BaseModel)
+                else metric
+                for metric in interface_metrics
+            ]
         return JSONResponse(status_code=exc.status_code, content=content)
 
     async def validation_error_handler(

@@ -44,12 +44,10 @@ tasks:
   task0:
     output_dir: ../output/task0
   task1:
-    receipt_viewpoint: receipt_viewpoint
     delivery_place: delivery_place
     skip_product_names: []
     defer_product_names: []
     timeouts:
-      receipt_seconds: 30
       navigation_seconds: 90
       pose_seconds: 30
       pick_seconds: 90

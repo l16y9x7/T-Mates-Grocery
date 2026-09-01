@@ -40,14 +40,11 @@ def test_one_robot_ip_drives_every_robot_service_url(tmp_path: Path) -> None:
         assert task.start_target_id == "start"
     assert tasks.tasks.task2.services.camera == f"http://{robot_ip}:8085"
     assert tasks.tasks.task3.services.camera == f"http://{robot_ip}:8085"
-    assert tasks.tasks.task1.services.camera == f"http://{robot_ip}:8085"
-    assert tasks.tasks.task1.timeouts.resolution_seconds == 60
     assert tasks.web.services.navigation_url == f"http://{robot_ip}:8081"
     assert tasks.web.services.pose_url == f"http://{robot_ip}:8084"
     assert pick_place.manipulation_url == f"http://{robot_ip}:8084"
     assert pick_place.camera_url == f"http://{robot_ip}:8085"
 
-    assert tasks.tasks.task1.services.perception == "http://127.0.0.1:8083"
     assert tasks.tasks.task1.services.pick_place == "http://127.0.0.1:8086"
     assert tasks.tasks.task1.services.sku == "http://127.0.0.1:25540"
     assert pick_place.pose_estimation_url == "http://127.0.0.1:8084"

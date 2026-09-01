@@ -32,7 +32,6 @@ async def test_config_exposes_navigation_targets_from_active_runtime(
             task1=SimpleNamespace(
                 task_boundary="configured_boundary",
                 start_target_id="configured_start",
-                receipt_viewpoint="configured_receipt",
                 delivery_place="configured_delivery",
             ),
             task2=SimpleNamespace(
@@ -64,7 +63,6 @@ async def test_config_exposes_navigation_targets_from_active_runtime(
     assert navigation_targets["task_points"] == [
         {"target_id": "configured_boundary", "label": "任务判定点"},
         {"target_id": "configured_start", "label": "起点"},
-        {"target_id": "configured_receipt", "label": "小票识别点"},
         {"target_id": "configured_delivery", "label": "交付台放货点"},
         {"target_id": "configured_replenishment", "label": "补货台取货点"},
     ]

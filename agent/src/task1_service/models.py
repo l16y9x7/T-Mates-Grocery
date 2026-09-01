@@ -100,11 +100,9 @@ class Task1Services(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     navigation: str = Field(min_length=1)
-    perception: str = Field(min_length=1)
     pose: str = Field(min_length=1)
     pick_place: str = Field(min_length=1)
     sku: str = Field(min_length=1)
-    camera: str = Field(min_length=1)
 
 
 class Task1Timeouts(BaseModel):
@@ -112,8 +110,6 @@ class Task1Timeouts(BaseModel):
 
     connect_seconds: float = Field(gt=0, default=3)
     health_seconds: float = Field(gt=0, default=5)
-    receipt_seconds: float = Field(gt=0, default=120)
-    resolution_seconds: float = Field(gt=0, default=60)
     sku_seconds: float = Field(gt=0, default=10)
     navigation_seconds: float = Field(gt=0, default=600)
     pose_seconds: float = Field(gt=0, default=300)
@@ -126,7 +122,6 @@ class Task1Settings(BaseModel):
 
     services: Task1Services
     timeouts: Task1Timeouts = Field(default_factory=Task1Timeouts)
-    receipt_viewpoint: str = Field(min_length=1, default="receipt_viewpoint")
     delivery_place: str = Field(min_length=1, default="delivery_place")
     task_boundary: str = Field(min_length=1, default="task_boundary")
     start_target_id: str = Field(min_length=1, default="start")
@@ -195,6 +190,23 @@ class Task1Settings(BaseModel):
     ) -> "Task1Settings":
         raw_config = dict(raw_config)
 
+        # These fields belonged to the removed receipt/camera stage.  Ignore
+        # them explicitly so a deployed runtime YAML can be upgraded without
+        # failing before the operator has removed the stale keys.
+        raw_config.pop("receipt_viewpoint", None)
+        raw_timeouts = raw_config.get("timeouts")
+        if isinstance(raw_timeouts, dict):
+            raw_timeouts = dict(raw_timeouts)
+            raw_timeouts.pop("receipt_seconds", None)
+            raw_timeouts.pop("resolution_seconds", None)
+            raw_config["timeouts"] = raw_timeouts
+        raw_services = raw_config.get("services")
+        if isinstance(raw_services, dict):
+            raw_services = dict(raw_services)
+            raw_services.pop("perception", None)
+            raw_services.pop("camera", None)
+            raw_config["services"] = raw_services
+
         options_file = raw_config.get("product_hand_options_file")
         if options_file:
             if raw_config.get("product_hand_options"):
@@ -225,23 +237,46 @@ class Task1Settings(BaseModel):
 
 
 class Task1Request(BaseModel):
-    """任务入口请求；任务一固定完成小票上的两件商品。"""
+    """Task1 order selected by the mock ordering-system adapter."""
 
     model_config = ConfigDict(extra="forbid")
 
-    pass
+    order_source: Literal["mock_random"] = "mock_random"
+    order_id: str | None = Field(default=None, min_length=1, max_length=200)
+    product_names: list[str] | None = None
+
+    @field_validator("order_id", mode="before")
+    @classmethod
+    def trim_order_id(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("product_names")
+    @classmethod
+    def valid_order_products(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        normalized = [name.strip() for name in value]
+        if len(normalized) != 2:
+            raise ValueError("mock order must contain exactly two products")
+        if any(not name for name in normalized):
+            raise ValueError("mock order product names must not be empty")
+        if len(set(normalized)) != 2:
+            raise ValueError("mock order products must be distinct")
+        return normalized
+
+    @model_validator(mode="after")
+    def complete_preview_order(self) -> "Task1Request":
+        if (self.order_id is None) != (self.product_names is None):
+            raise ValueError(
+                "mock order id and product names must be provided together"
+            )
+        return self
 
 
 class HealthResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     status: Literal["STARTING", "READY", "ERROR"]
-
-
-class ParseReceiptResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    product_names: list[str]
 
 
 class SkuResponse(BaseModel):
@@ -279,6 +314,33 @@ class TargetItem(BaseModel):
         return value
 
 
+class InterfaceMetric(BaseModel):
+    """One Task1 run's aggregate for a concrete downstream HTTP interface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    interface: str = Field(min_length=1)
+    service: str = Field(min_length=1)
+    method: str = Field(min_length=1)
+    url: str = Field(min_length=1)
+    call_count: int = Field(ge=0)
+    success_count: int = Field(ge=0)
+    failure_count: int = Field(ge=0)
+    total_duration_ms: float = Field(ge=0)
+    average_duration_ms: float = Field(ge=0)
+
+
+class MockOrderInfo(BaseModel):
+    """Order metadata returned with the Task1 result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    order_id: str = Field(min_length=1)
+    source: Literal["mock_random"]
+    catalog_size: int = Field(ge=2)
+    product_names: list[str] = Field(min_length=2, max_length=2)
+
+
 class Task1Result(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -288,6 +350,8 @@ class Task1Result(BaseModel):
     product_names: list[str]
     target_items: list[TargetItem]
     held_items: dict[Hand, str]
+    order: MockOrderInfo | None = None
+    interface_metrics: list[InterfaceMetric] = Field(default_factory=list)
 
 
 class Task1ServiceError(Exception):
@@ -303,6 +367,7 @@ class Task1ServiceError(Exception):
         failed_interface: str | None = None,
         url: str | None = None,
         pose: list[float] | None = None,
+        interface_metrics: list[InterfaceMetric] | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -312,3 +377,4 @@ class Task1ServiceError(Exception):
         self.failed_interface = failed_interface
         self.url = url
         self.pose = pose
+        self.interface_metrics = interface_metrics or []
