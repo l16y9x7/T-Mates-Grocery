@@ -1,7 +1,7 @@
 nohup: ignoring input
-INFO:     Started server process [16891]
+INFO:     Started server process [16776]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
-ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 25540): address already in use
+ERROR:    [Errno 98] error while attempting to bind on address ('0.0.0.0', 8083): address already in use
 INFO:     Waiting for application shutdown.
 INFO:     Application shutdown complete.

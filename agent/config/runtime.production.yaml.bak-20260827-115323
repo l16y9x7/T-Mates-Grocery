@@ -1,5 +1,5 @@
 robot:
-  ip: 192.168.200.66
+  ip: 192.168.3.226
   ports:
     navigation: 8081
     pose: 8084
