@@ -9,7 +9,7 @@ catalog before the order is accepted.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from random import Random
 from uuid import uuid4
 
@@ -27,6 +27,7 @@ class MockOrder:
     source: str
     catalog_size: int
     product_names: list[str]
+    available_product_names: list[str] = field(default_factory=list)
 
 
 class MockOrderSystem:
@@ -80,6 +81,7 @@ class MockOrderSystem:
             source="mock_random",
             catalog_size=len(catalog),
             product_names=product_names,
+            available_product_names=list(catalog),
         )
 
     @staticmethod

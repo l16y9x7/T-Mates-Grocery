@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1514" />
     <title>机器人任务控制台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260902-1" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260902-2" />
   </head>
   <body>
     <main class="shell">
@@ -59,14 +59,28 @@
             <div class="mock-order-heading">
               <span>订单来源</span><strong id="mockOrderStatus">等待生成</strong>
             </div>
-            <p>模拟点单系统将从当前 SKU 商品池中随机选择两件不同商品。</p>
+            <p>系统会先随机选择两件商品，也可以在下面手动选择。</p>
+            <div class="mock-order-selectors">
+              <label>
+                <span>商品 1</span>
+                <select id="mockOrderProduct1" disabled>
+                  <option value="">正在加载商品...</option>
+                </select>
+              </label>
+              <label>
+                <span>商品 2</span>
+                <select id="mockOrderProduct2" disabled>
+                  <option value="">正在加载商品...</option>
+                </select>
+              </label>
+            </div>
             <ul id="mockOrderProducts" class="mock-order-products" hidden></ul>
             <p id="mockOrderEmpty" class="mock-order-empty">正在准备模拟订单...</p>
             <div class="mock-order-meta">
               <span>订单号</span><strong id="mockOrderId">-</strong>
               <span>商品池</span><strong id="mockOrderCatalogSize">-</strong>
             </div>
-            <button id="mockOrderRefreshButton" class="secondary-button mock-order-button" type="button">重新随机</button>
+            <button id="mockOrderRefreshButton" class="secondary-button mock-order-button" type="button">重新随机两件</button>
           </section>
           <div class="task-action-row">
             <button id="taskSubmitButton" class="submit-button" type="submit"><span class="button-icon">→</span><span>开始 Task 0</span></button>
@@ -327,6 +341,6 @@
       </dialog>
       <footer><span>8108 UNIFIED TASK SERVICE</span><span id="footerUrl">-</span></footer>
     </main>
-    <script src="/static/app.js?v=20260902-2" defer></script>
+    <script src="/static/app.js?v=20260902-3" defer></script>
   </body>
 </html>

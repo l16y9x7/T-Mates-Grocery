@@ -1220,6 +1220,7 @@ async def create_task1_mock_order() -> dict[str, object]:
         "source": order.source,
         "catalog_size": order.catalog_size,
         "product_names": list(order.product_names),
+        "available_product_names": list(order.available_product_names),
     }
 
 

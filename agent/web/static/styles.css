@@ -95,6 +95,10 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 .mock-order-heading strong.success { color: var(--accent); }
 .mock-order-heading strong.failure { color: var(--red); }
 .mock-order > p { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.mock-order-selectors { display: grid; gap: 10px; margin-top: 12px; }
+.mock-order-selectors label { display: grid; gap: 6px; color: #9db4ac; font-size: 11px; }
+.mock-order-selectors select { min-width: 0; min-height: 40px; padding: 9px 10px; font-size: 11px; }
+.mock-order-selectors select:disabled { cursor: wait; opacity: .6; }
 .mock-order-products { display: grid; grid-template-columns: 1fr; gap: 7px; list-style: none; margin: 11px 0 0; padding: 0; }
 .mock-order-products li { min-width: 0; padding: 9px 10px; color: #e5f1ec; background: #122a24; border-left: 2px solid var(--accent); font-size: 11px; overflow-wrap: anywhere; }
 .mock-order-empty { color: var(--muted); }

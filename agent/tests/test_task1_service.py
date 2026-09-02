@@ -298,6 +298,7 @@ async def test_mock_order_selects_two_distinct_products_from_43_skus() -> None:
     assert len(order.product_names) == 2
     assert len(set(order.product_names)) == 2
     assert set(order.product_names) <= set(catalog)
+    assert order.available_product_names == catalog
 
 
 @pytest.mark.asyncio

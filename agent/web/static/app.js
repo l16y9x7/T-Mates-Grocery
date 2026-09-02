@@ -67,6 +67,9 @@ const task1MockOrder = document.querySelector("#task1MockOrder");
 const mockOrderStatus = document.querySelector("#mockOrderStatus");
 const mockOrderProducts = document.querySelector("#mockOrderProducts");
 const mockOrderEmpty = document.querySelector("#mockOrderEmpty");
+const mockOrderProduct1 = document.querySelector("#mockOrderProduct1");
+const mockOrderProduct2 = document.querySelector("#mockOrderProduct2");
+const mockOrderProductSelectors = [mockOrderProduct1, mockOrderProduct2];
 const mockOrderId = document.querySelector("#mockOrderId");
 const mockOrderCatalogSize = document.querySelector("#mockOrderCatalogSize");
 const mockOrderRefreshButton = document.querySelector("#mockOrderRefreshButton");
@@ -174,7 +177,7 @@ operationModeButtons.forEach((button) => {
 
 const TASK_INFO = {
   0: { title: "采集准备", description: "采集货架巡检点的头部 RGB-D 基准数据" },
-  1: { title: "订单分拣", description: "从模拟点单系统获取两件随机商品，并完成货架抓取和交付台放置" },
+  1: { title: "订单分拣", description: "从模拟点单系统选择两件商品，并完成货架抓取和交付台放置" },
   2: { title: "缺货补货", description: "巡检缺货商品并从补货台抓取后放回货架" },
   3: { title: "乱放纠正", description: "识别错放商品并交换两件商品的货架位置" },
 };
@@ -640,11 +643,23 @@ function selectedTaskId() {
 
 function task1OrderPayload() {
   if (!currentMockOrder) throw new Error("请先生成模拟订单");
+  const productNames = selectedMockOrderProducts();
+  if (productNames.some((name) => !name)) throw new Error("请选择商品 1 和商品 2");
+  if (new Set(productNames).size !== 2) throw new Error("商品 1 和商品 2 不能相同");
   return {
     order_source: "mock_random",
     order_id: currentMockOrder.order_id,
-    product_names: [...currentMockOrder.product_names],
+    product_names: productNames,
   };
+}
+
+function selectedMockOrderProducts() {
+  return mockOrderProductSelectors.map((select) => select.value.trim());
+}
+
+function mockOrderSelectionIsValid() {
+  const productNames = selectedMockOrderProducts();
+  return productNames.every(Boolean) && new Set(productNames).size === 2;
 }
 
 function setMockOrderStatus(message, state = "") {
@@ -660,39 +675,120 @@ function normalizeMockOrder(value) {
       .filter((name) => typeof name === "string" && name.trim())
       .map((name) => name.trim())
     : [];
+  const availableProducts = Array.isArray(value?.available_product_names)
+    ? value.available_product_names
+      .filter((name) => typeof name === "string" && name.trim())
+      .map((name) => name.trim())
+    : [];
   const catalogSize = Number(value?.catalog_size);
-  if (!orderIdValue || source !== "mock_random" || products.length !== 2) {
+  if (
+    !orderIdValue
+    || source !== "mock_random"
+    || products.length !== 2
+    || availableProducts.length < 2
+    || new Set(availableProducts).size !== availableProducts.length
+  ) {
     throw new Error("模拟点单接口返回格式不正确");
   }
   if (new Set(products).size !== products.length) {
     throw new Error("模拟点单接口返回了重复商品");
+  }
+  if (products.some((name) => !availableProducts.includes(name))) {
+    throw new Error("随机商品不在当前 SKU 商品池中");
   }
   return {
     order_id: orderIdValue,
     source,
     catalog_size: Number.isFinite(catalogSize) && catalogSize > 0 ? catalogSize : null,
     product_names: products,
+    available_product_names: availableProducts,
+    selection_mode: value?.selection_mode === "manual" ? "manual" : "random",
   };
 }
 
-function renderMockOrder(order) {
+function renderMockOrderProducts(productNames) {
   mockOrderProducts.replaceChildren();
-  order.product_names.forEach((name) => {
+  productNames.forEach((name) => {
     const item = document.createElement("li");
     item.textContent = name;
     mockOrderProducts.append(item);
   });
   mockOrderProducts.hidden = false;
   mockOrderEmpty.hidden = true;
+}
+
+function populateMockOrderSelectors(order) {
+  mockOrderProductSelectors.forEach((select, index) => {
+    const options = order.available_product_names.map((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      return option;
+    });
+    select.replaceChildren(...options);
+    select.value = order.product_names[index] || "";
+  });
+  updateMockOrderOptionAvailability();
+}
+
+function updateMockOrderOptionAvailability() {
+  const [firstProduct, secondProduct] = selectedMockOrderProducts();
+  [...mockOrderProduct1.options].forEach((option) => {
+    option.disabled = Boolean(
+      option.value && option.value === secondProduct && option.value !== firstProduct
+    );
+  });
+  [...mockOrderProduct2.options].forEach((option) => {
+    option.disabled = Boolean(
+      option.value && option.value === firstProduct && option.value !== secondProduct
+    );
+  });
+}
+
+function renderMockOrder(order) {
+  populateMockOrderSelectors(order);
+  renderMockOrderProducts(order.product_names);
   mockOrderId.textContent = order.order_id;
   mockOrderCatalogSize.textContent = order.catalog_size === null ? "-" : `${order.catalog_size} 个 SKU`;
-  setMockOrderStatus("已生成 · 2 件", "success");
+  setMockOrderStatus(
+    order.selection_mode === "manual" ? "手动选择 · 2 件" : "已随机 · 2 件",
+    "success",
+  );
+}
+
+function applyManualMockOrderSelection() {
+  if (!currentMockOrder) return;
+  updateMockOrderOptionAvailability();
+  const productNames = selectedMockOrderProducts();
+  if (productNames.some((name) => !name)) {
+    setMockOrderStatus("请选择两件商品", "failure");
+    setTaskError("请选择商品 1 和商品 2");
+  } else if (new Set(productNames).size !== 2) {
+    setMockOrderStatus("商品不能重复", "failure");
+    setTaskError("商品 1 和商品 2 不能相同");
+  } else {
+    currentMockOrder = {
+      ...currentMockOrder,
+      product_names: productNames,
+      selection_mode: "manual",
+    };
+    renderMockOrderProducts(productNames);
+    setMockOrderStatus("手动选择 · 2 件", "success");
+    setTaskError();
+  }
+  syncTaskControls();
 }
 
 function showMockOrderError(message) {
   currentMockOrder = null;
   mockOrderProducts.hidden = true;
   mockOrderProducts.replaceChildren();
+  mockOrderProductSelectors.forEach((select) => {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "商品列表加载失败";
+    select.replaceChildren(option);
+  });
   mockOrderEmpty.hidden = false;
   mockOrderEmpty.textContent = message;
   mockOrderId.textContent = "-";
@@ -702,12 +798,17 @@ function showMockOrderError(message) {
 
 function syncTaskControls() {
   const taskId = selectedTaskId();
-  taskSubmitButton.disabled = taskBusy || (taskId === "1" && (mockOrderLoading || !currentMockOrder));
+  const task1OrderReady = Boolean(currentMockOrder) && mockOrderSelectionIsValid();
+  taskSubmitButton.disabled = taskBusy
+    || (taskId === "1" && (mockOrderLoading || !task1OrderReady));
   taskTerminateButton.hidden = !taskBusy || !currentTaskRunId;
   taskTerminateButton.disabled = !taskBusy || !currentTaskRunId;
   taskTerminateButton.querySelector("span:last-child").textContent = "终止任务";
   taskForm.querySelectorAll('input[name="task_id"]').forEach((input) => { input.disabled = taskBusy; });
   mockOrderRefreshButton.disabled = taskBusy || mockOrderLoading;
+  mockOrderProductSelectors.forEach((select) => {
+    select.disabled = taskBusy || mockOrderLoading || !currentMockOrder;
+  });
   taskSubmitButton.querySelector("span:last-child").textContent = taskBusy
     ? "执行中"
     : `开始 Task ${taskId}`;
@@ -906,6 +1007,8 @@ function showMockOrderEvent(event) {
     source: "mock_random",
     catalog_size: event.catalog_size ?? currentMockOrder?.catalog_size,
     product_names: productNames,
+    available_product_names: currentMockOrder?.available_product_names || productNames,
+    selection_mode: currentMockOrder?.selection_mode,
   };
   try {
     currentMockOrder = normalizeMockOrder(candidate);
@@ -1272,6 +1375,10 @@ mockOrderRefreshButton.addEventListener("click", () => {
 });
 
 taskForm.addEventListener("change", (event) => {
+  if (event.target.matches("#mockOrderProduct1, #mockOrderProduct2")) {
+    applyManualMockOrderSelection();
+    return;
+  }
   if (event.target.matches('input[name="task_id"]')) {
     resetTaskView();
     updateTaskSelection();

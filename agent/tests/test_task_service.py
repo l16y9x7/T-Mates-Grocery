@@ -88,11 +88,17 @@ class FakeOrchestrator:
 
     async def create_mock_order(self):
         assert self.task_id == "1"
+        available_product_names = [
+            "可口可乐罐装",
+            "百事可乐瓶装",
+            *(f"商品-{index:02d}" for index in range(41)),
+        ]
         return SimpleNamespace(
             order_id="preview-order",
             source="mock_random",
-            catalog_size=43,
-            product_names=["可口可乐罐装", "百事可乐瓶装"],
+            catalog_size=len(available_product_names),
+            product_names=available_product_names[:2],
+            available_product_names=available_product_names,
         )
 
 
@@ -352,6 +358,8 @@ async def test_web_uses_one_task_panel_and_common_sse_routes() -> None:
     assert 'id="robotIpForm"' in page.text
     assert 'id="taskTerminateButton"' in page.text
     assert 'id="task1MockOrder"' in page.text
+    assert 'id="mockOrderProduct1"' in page.text
+    assert 'id="mockOrderProduct2"' in page.text
     assert 'id="taskInterfaceMetrics"' in page.text
     assert "含 8086 内部模块" in page.text
     assert 'id="parseReceiptButton"' not in page.text
@@ -361,11 +369,16 @@ async def test_web_uses_one_task_panel_and_common_sse_routes() -> None:
     assert "setOperationMode(button.dataset.operationMode)" in script
     assert "/api/task-runs/${runId}/terminate" in script
     assert 'fetch("/api/task1/mock-order"' in script
+    assert "selectedMockOrderProducts()" in script
+    assert "order.available_product_names.map((name) =>" in script
+    assert 'selection_mode: "manual"' in script
+    assert "task1OrderReady = Boolean(currentMockOrder) && mockOrderSelectionIsValid()" in script
+    assert 'event.target.matches("#mockOrderProduct1, #mockOrderProduct2")' in script
     assert "applyInterfaceCall(flowEvent)" in script
     assert "taskInterfaceCallValues.get(call.call_id)" in script
     assert "每次接口调用结束后显示本次耗时" in page.text
-    assert "/static/app.js?v=20260902-2" in page.text
-    assert "/static/styles.css?v=20260902-1" in page.text
+    assert "/static/app.js?v=20260902-3" in page.text
+    assert "/static/styles.css?v=20260902-2" in page.text
     assert page.headers["cache-control"] == "no-store"
     assert started.status_code == 200
     assert started.json()["task_id"] == "3"
@@ -381,12 +394,16 @@ async def test_web_starts_task1_through_the_unified_route() -> None:
         base_url="http://tasks.local",
     ) as client:
         preview = await client.post("/api/task1/mock-order", json={})
+        manual_products = [
+            preview.json()["available_product_names"][2],
+            preview.json()["available_product_names"][-1],
+        ]
         started = await client.post(
             "/api/tasks/1/start",
             json={
                 "order_source": "mock_random",
                 "order_id": preview.json()["order_id"],
-                "product_names": preview.json()["product_names"],
+                "product_names": manual_products,
             },
         )
         event_stream = await client.get(started.json()["events_url"])
@@ -394,6 +411,12 @@ async def test_web_starts_task1_through_the_unified_route() -> None:
     assert preview.status_code == 200
     assert preview.json()["catalog_size"] == 43
     assert len(preview.json()["product_names"]) == 2
+    assert len(preview.json()["available_product_names"]) == 43
+    assert len(set(preview.json()["product_names"])) == 2
+    assert set(preview.json()["product_names"]) <= set(
+        preview.json()["available_product_names"]
+    )
+    assert manual_products != preview.json()["product_names"]
     assert started.status_code == 200
     assert started.json()["task_id"] == "1"
     assert started.json()["events_url"].startswith("/api/task-runs/")
@@ -401,4 +424,4 @@ async def test_web_starts_task1_through_the_unified_route() -> None:
     assert '"task_type": "SORTING"' in event_stream.text
     request = bindings["1"].last_request
     assert request.order_id == "preview-order"
-    assert request.product_names == ["可口可乐罐装", "百事可乐瓶装"]
+    assert request.product_names == manual_products
