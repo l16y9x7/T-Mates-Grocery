@@ -353,6 +353,7 @@ async def test_web_uses_one_task_panel_and_common_sse_routes() -> None:
     assert 'id="taskTerminateButton"' in page.text
     assert 'id="task1MockOrder"' in page.text
     assert 'id="taskInterfaceMetrics"' in page.text
+    assert "含 8086 内部模块" in page.text
     assert 'id="parseReceiptButton"' not in page.text
     assert "elapsedTimers.task.start()" in script
     assert "elapsedTimers.pick.start()" in script
@@ -363,7 +364,7 @@ async def test_web_uses_one_task_panel_and_common_sse_routes() -> None:
     assert "applyInterfaceCall(flowEvent)" in script
     assert "taskInterfaceCallValues.get(call.call_id)" in script
     assert "每次接口调用结束后显示本次耗时" in page.text
-    assert "/static/app.js?v=20260902-1" in page.text
+    assert "/static/app.js?v=20260902-2" in page.text
     assert "/static/styles.css?v=20260902-1" in page.text
     assert page.headers["cache-control"] == "no-store"
     assert started.status_code == 200

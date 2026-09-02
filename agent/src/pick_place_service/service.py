@@ -14,6 +14,7 @@ import mimetypes
 import re
 import struct
 import tempfile
+import time
 import zlib
 from collections.abc import Awaitable, Callable
 from contextlib import ExitStack
@@ -40,6 +41,12 @@ from pick_place_service.place_pose import synthesize_place_pose
 LOGGER = logging.getLogger(__name__)
 _ACTIVE_LOG_DIR: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
     "pick_place_active_log_dir", default=None
+)
+_ACTIVE_OPERATION_KEY: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "pick_place_active_operation_key", default=None
+)
+_INTERFACE_CALL_INDEX: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "pick_place_interface_call_index", default=0
 )
 
 
@@ -243,22 +250,40 @@ class CameraFrameProvider:
             raise
 
     async def _snapshot(self, camera: str, image_type: str) -> bytes:
+        snapshot_url = f"{self.settings.camera_url.rstrip('/')}/camera/snapshot"
+        interface_log_name = f"camera_snapshot_{image_type}"
+        request_log: dict[str, object] = {
+            "method": "GET",
+            "url": snapshot_url,
+            "params": {"camera": camera, "type": image_type},
+        }
+        _save_log_json(f"interfaces/{interface_log_name}/request.json", request_log)
         try:
-            response = await self.client.get(
-                f"{self.settings.camera_url.rstrip('/')}/camera/snapshot",
-                params={"camera": camera, "type": image_type},
-                timeout=_http_timeout(self.settings, self.settings.timeouts.camera_seconds),
+            response = await _timed_http_request(
+                lambda: self.client.get(
+                    snapshot_url,
+                    params={"camera": camera, "type": image_type},
+                    timeout=_http_timeout(
+                        self.settings, self.settings.timeouts.camera_seconds
+                    ),
+                ),
+                service="camera",
+                method="GET",
+                path="/camera/snapshot",
+                url=snapshot_url,
+                interface_log_name=interface_log_name,
+                request=request_log,
+                response_summary=lambda item: {
+                    "status_code": item.status_code,
+                    "headers": dict(item.headers),
+                    "bytes": len(item.content),
+                },
             )
             response.raise_for_status()
             if not response.content:
                 raise ServiceError("VISION_INPUT_UNAVAILABLE", "RGB snapshot returned no data")
-            snapshot_url = f"{self.settings.camera_url.rstrip('/')}/camera/snapshot"
             _save_log_json(
-                f"interfaces/camera_snapshot_{image_type}/request.json",
-                {"method": "GET", "url": snapshot_url, "params": {"camera": camera, "type": image_type}},
-            )
-            _save_log_json(
-                f"interfaces/camera_snapshot_{image_type}/response.json",
+                f"interfaces/{interface_log_name}/response.json",
                 {
                     "status_code": response.status_code,
                     "headers": dict(response.headers),
@@ -281,10 +306,37 @@ class CameraFrameProvider:
     async def _depth_frame(self, camera: str) -> bytes:
         """从长连接深度流读取一帧；兼容 JPEG 帧流和单帧二进制响应。"""
 
+        stream_url = f"{self.settings.camera_url.rstrip('/')}/camera/stream"
+        interface_log_name = "camera_stream_depth"
+        request_log: dict[str, object] = {
+            "method": "GET",
+            "url": stream_url,
+            "params": {"camera": camera, "type": "depth"},
+            "headers": {"Accept": "multipart/x-mixed-replace"},
+        }
+        _save_log_json(f"interfaces/{interface_log_name}/request.json", request_log)
+        trace = _InterfaceCallTrace(
+            service="camera",
+            method="GET",
+            path="/camera/stream",
+            url=stream_url,
+            interface_log_name=interface_log_name,
+            request=request_log,
+        )
+        response: httpx.Response | None = None
+        data = bytearray()
+
+        def response_summary() -> dict[str, object]:
+            return {
+                "status_code": response.status_code if response is not None else None,
+                "headers": dict(response.headers) if response is not None else {},
+                "bytes": len(data),
+            }
+
         try:
             async with self.client.stream(
                 "GET",
-                f"{self.settings.camera_url.rstrip('/')}/camera/stream",
+                stream_url,
                 params={"camera": camera, "type": "depth"},
                 headers={"Accept": "multipart/x-mixed-replace"},
                 timeout=_http_timeout(self.settings, self.settings.timeouts.camera_seconds),
@@ -296,7 +348,6 @@ class CameraFrameProvider:
                     response.headers.get("content-type", "unknown"),
                 )
                 content_type = response.headers.get("content-type", "")
-                data = bytearray()
                 frame: bytes | None = None
                 async for chunk in response.aiter_bytes():
                     data.extend(chunk)
@@ -307,20 +358,17 @@ class CameraFrameProvider:
                     raise ServiceError("VISION_INPUT_UNAVAILABLE", "depth stream returned no frame")
                 if frame is None:
                     frame = _extract_stream_frame(bytes(data), content_type) or bytes(data)
-                _save_log_json(
-                    "interfaces/camera_stream_depth/request.json",
-                    {
-                        "method": "GET",
-                        "url": f"{self.settings.camera_url.rstrip('/')}/camera/stream",
-                        "params": {"camera": camera, "type": "depth"},
-                        "headers": {"Accept": "multipart/x-mixed-replace"},
-                    },
+                trace.complete(
+                    status="succeeded",
+                    status_code=response.status_code,
+                    response=response_summary(),
+                    error=None,
                 )
                 _save_log_json(
-                    "interfaces/camera_stream_depth/response.json",
-                    {"status_code": response.status_code, "headers": dict(response.headers), "bytes": len(data)},
+                    f"interfaces/{interface_log_name}/response.json",
+                    response_summary(),
                 )
-                _save_log_file("interfaces/camera_stream_depth/frame.bin", frame)
+                _save_log_file(f"interfaces/{interface_log_name}/frame.bin", frame)
                 LOGGER.info(
                     "相机 depth 首帧提取完成 camera=%s stream_bytes=%d frame_bytes=%d",
                     camera,
@@ -328,9 +376,29 @@ class CameraFrameProvider:
                     len(frame),
                 )
                 return frame
-        except ServiceError:
+        except asyncio.CancelledError as exc:
+            trace.complete(
+                status="cancelled",
+                status_code=response.status_code if response is not None else None,
+                response=response_summary(),
+                error=_interface_error(exc),
+            )
+            raise
+        except ServiceError as exc:
+            trace.complete(
+                status="failed",
+                status_code=response.status_code if response is not None else None,
+                response=response_summary(),
+                error=_interface_error(exc),
+            )
             raise
         except (httpx.HTTPError, TimeoutError) as exc:
+            trace.complete(
+                status="failed",
+                status_code=response.status_code if response is not None else None,
+                response=response_summary(),
+                error=_interface_error(exc),
+            )
             raise ServiceError("VISION_INPUT_UNAVAILABLE", str(exc), status_code=502) from exc
 
 
@@ -406,6 +474,7 @@ class SubagentClient:
             f"/perception/{kind}/locate",
             payload,
             self.settings.timeouts.locate_seconds,
+            service="perception",
         )
         try:
             located = LocateResponse.model_validate(response.json())
@@ -448,6 +517,7 @@ class SubagentClient:
             "/perception/place/locate",
             payload,
             self.settings.timeouts.locate_seconds,
+            service="perception",
         )
         try:
             located = PlaceLocateResponse.model_validate(response.json())
@@ -481,6 +551,7 @@ class SubagentClient:
             "/pose/prepare",
             {"pose_type": "SHELF_PLACE_READY", "shelf_level": level},
             self.settings.timeouts.action_seconds,
+            service="pose",
             headers={"Idempotency-Key": f"{operation_key}:place-ready"},
         )
         self._validate_status(response, "shelf place pose preparation")
@@ -526,31 +597,42 @@ class SubagentClient:
                     for field, path in paths.items()
                 }
                 data = {"product_name": request.product_name}
-                response = await self.client.post(
-                    f"{pose_estimation_url.rstrip('/')}/manipulation/{kind}_pose",
-                    files=files,
-                    data=data,
-                    timeout=self.settings.timeouts.pose_seconds,
-                )
-                pose_log_dir = "interfaces/manipulation_%s_pose" % kind
+                pose_path = f"/manipulation/{kind}_pose"
+                pose_url = f"{pose_estimation_url.rstrip('/')}{pose_path}"
+                interface_log_name = f"manipulation_{kind}_pose"
                 if log_suffix:
-                    pose_log_dir += "_" + re.sub(r"[^A-Za-z0-9_.-]+", "_", log_suffix)
-                _save_log_json(
-                    f"{pose_log_dir}/request.json",
-                    {
-                        "method": "POST",
-                        "url": f"{pose_estimation_url.rstrip('/')}/manipulation/{kind}_pose",
-                        "data": data,
-                        "files": {
-                            field: {
-                                "filename": path.name,
-                                "bytes": path.stat().st_size,
-                                "mime": mimetypes.guess_type(path.name)[0]
-                                or "application/octet-stream",
-                            }
-                            for field, path in paths.items()
-                        },
+                    interface_log_name += "_" + re.sub(
+                        r"[^A-Za-z0-9_.-]+", "_", log_suffix
+                    )
+                pose_log_dir = f"interfaces/{interface_log_name}"
+                request_log: dict[str, object] = {
+                    "method": "POST",
+                    "url": pose_url,
+                    "data": data,
+                    "files": {
+                        field: {
+                            "filename": path.name,
+                            "bytes": path.stat().st_size,
+                            "mime": mimetypes.guess_type(path.name)[0]
+                            or "application/octet-stream",
+                        }
+                        for field, path in paths.items()
                     },
+                }
+                _save_log_json(f"{pose_log_dir}/request.json", request_log)
+                response = await _timed_http_request(
+                    lambda: self.client.post(
+                        pose_url,
+                        files=files,
+                        data=data,
+                        timeout=self.settings.timeouts.pose_seconds,
+                    ),
+                    service="pose_estimation",
+                    method="POST",
+                    path=pose_path,
+                    url=pose_url,
+                    interface_log_name=interface_log_name,
+                    request=request_log,
                 )
                 _save_http_response(f"{pose_log_dir}/response.json", response)
                 if not response.is_success:
@@ -622,6 +704,7 @@ class SubagentClient:
             endpoint,
             payload,
             self.settings.timeouts.action_seconds,
+            service="manipulation",
             headers={"Idempotency-Key": f"{operation_key}:execute"},
         )
         self._validate_status(response, f"{kind} execution")
@@ -638,6 +721,7 @@ class SubagentClient:
                 "hand": request.normalized_hand,
             },
             self.settings.timeouts.check_seconds,
+            service="perception",
         )
         self._validate_status(response, f"{kind} visual check")
         LOGGER.info("校验步骤成功 kind=%s product=%s", kind, request.product_name)
@@ -649,6 +733,7 @@ class SubagentClient:
         payload: dict[str, object],
         timeout_seconds: float,
         *,
+        service: str,
         headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         # 所有 JSON 下游请求统一在这里处理 HTTP 错误、超时和网络异常，
@@ -656,16 +741,27 @@ class SubagentClient:
         url = f"{base_url.rstrip('/')}{path}"
         interface_name = path.strip("/").replace("/", "_") or "root"
         log_dir = f"interfaces/{interface_name}"
-        _save_log_json(
-            f"{log_dir}/request.json",
-            {"method": "POST", "url": url, "headers": headers or {}, "body": payload},
-        )
+        request_log: dict[str, object] = {
+            "method": "POST",
+            "url": url,
+            "headers": headers or {},
+            "body": payload,
+        }
+        _save_log_json(f"{log_dir}/request.json", request_log)
         try:
-            response = await self.client.post(
-                url,
-                json=payload,
-                headers=headers,
-                timeout=timeout_seconds,
+            response = await _timed_http_request(
+                lambda: self.client.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    timeout=timeout_seconds,
+                ),
+                service=service,
+                method="POST",
+                path=path,
+                url=url,
+                interface_log_name=interface_name,
+                request=request_log,
             )
             _save_http_response(f"{log_dir}/response.json", response)
             if not response.is_success:
@@ -753,6 +849,8 @@ class PickPlaceOrchestrator:
         execution_pose: PoseResponse | None = None
         log_dir = _create_operation_log(self.settings, request, kind, operation_key)
         log_token = _ACTIVE_LOG_DIR.set(log_dir)
+        operation_token = _ACTIVE_OPERATION_KEY.set(operation_key)
+        call_index_token = _INTERFACE_CALL_INDEX.set(0)
         try:
             _append_log_event(
                 "operation",
@@ -944,6 +1042,8 @@ class PickPlaceOrchestrator:
                     _remove_directory(Path(cleanup_path))
             elif "frame" in locals() and frame.cleanup_path:
                 _remove_directory(Path(frame.cleanup_path))
+            _INTERFACE_CALL_INDEX.reset(call_index_token)
+            _ACTIVE_OPERATION_KEY.reset(operation_token)
             _ACTIVE_LOG_DIR.reset(log_token)
 
 
@@ -1243,6 +1343,132 @@ def _append_log_event(event: str, status: str, **details: Any) -> None:
         LOGGER.exception("持久化流程事件失败 event=%s status=%s", event, status)
 
 
+class _InterfaceCallTrace:
+    """Record one completed downstream HTTP attempt in the operation timeline."""
+
+    def __init__(
+        self,
+        *,
+        service: str,
+        method: str,
+        path: str,
+        url: str,
+        interface_log_name: str,
+        request: dict[str, object],
+    ) -> None:
+        call_index = _INTERFACE_CALL_INDEX.get() + 1
+        _INTERFACE_CALL_INDEX.set(call_index)
+        log_dir = _ACTIVE_LOG_DIR.get()
+        operation_key = _ACTIVE_OPERATION_KEY.get()
+        if operation_key is None:
+            operation_key = log_dir.name if log_dir is not None else "unscoped"
+        self.call_id = f"{operation_key}:{call_index}"
+        self.operation_key = operation_key
+        self.service = service
+        self.method = method
+        self.url = url
+        self.interface = f"{service}{path}"
+        self.interface_log_name = interface_log_name
+        self.request = request
+        self.started_at = time.monotonic()
+        self.completed = False
+
+    def complete(
+        self,
+        *,
+        status: str,
+        status_code: int | None,
+        response: dict[str, object] | None,
+        error: str | None,
+    ) -> None:
+        if self.completed:
+            return
+        self.completed = True
+        response_payload = dict(response or {})
+        response_payload.setdefault("status_code", status_code)
+        response_payload.setdefault("headers", {})
+        response_payload["error"] = error
+        _append_log_event(
+            "接口调用",
+            status,
+            call_id=self.call_id,
+            operation_key=self.operation_key,
+            interface=self.interface,
+            interface_log_name=self.interface_log_name,
+            service=self.service,
+            method=self.method,
+            url=self.url,
+            attempt=1,
+            status_code=status_code,
+            duration_ms=max(0.0, time.monotonic() - self.started_at) * 1000.0,
+            error=error,
+            request=self.request,
+            response=response_payload,
+        )
+
+
+def _interface_error(exc: BaseException) -> str:
+    if isinstance(exc, asyncio.CancelledError):
+        return "request cancelled"
+    detail = str(exc).strip()
+    return f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
+
+
+async def _timed_http_request(
+    request_call: Callable[[], Awaitable[httpx.Response]],
+    *,
+    service: str,
+    method: str,
+    path: str,
+    url: str,
+    interface_log_name: str,
+    request: dict[str, object],
+    response_summary: Callable[[httpx.Response], dict[str, object]] | None = None,
+) -> httpx.Response:
+    trace = _InterfaceCallTrace(
+        service=service,
+        method=method,
+        path=path,
+        url=url,
+        interface_log_name=interface_log_name,
+        request=request,
+    )
+    try:
+        response = await request_call()
+    except asyncio.CancelledError as exc:
+        error = _interface_error(exc)
+        trace.complete(
+            status="cancelled",
+            status_code=None,
+            response=None,
+            error=error,
+        )
+        raise
+    except Exception as exc:
+        error = _interface_error(exc)
+        trace.complete(
+            status="failed",
+            status_code=None,
+            response=None,
+            error=error,
+        )
+        raise
+
+    summary = (
+        response_summary(response)
+        if response_summary is not None
+        else _http_response_payload(response)
+    )
+    error = None if response.is_success else f"HTTP {response.status_code}"
+    trace.complete(
+        status="succeeded" if response.is_success else "failed",
+        status_code=response.status_code,
+        response=summary,
+        error=error,
+    )
+    return response
+
+
 def _save_log_file(relative_path: str, content: bytes) -> None:
     """保存二进制输入文件，例如 RGB、depth、mask 和标定文件。"""
 
@@ -1257,23 +1483,23 @@ def _save_log_file(relative_path: str, content: bytes) -> None:
         LOGGER.exception("持久化二进制日志失败 path=%s", relative_path)
 
 
+def _http_response_payload(response: httpx.Response) -> dict[str, object]:
+    try:
+        body: object = response.json()
+    except (AttributeError, TypeError, ValueError):
+        body = response.text
+    return {
+        "status_code": response.status_code,
+        "headers": dict(response.headers),
+        "body": body,
+    }
+
+
 def _save_http_response(relative_path: str, response: httpx.Response) -> None:
     """保存下游 HTTP 状态、响应头和 JSON/文本响应。"""
 
     try:
-        body: Any
-        try:
-            body = response.json()
-        except (AttributeError, TypeError, ValueError):
-            body = response.text
-        _save_log_json(
-            relative_path,
-            {
-                "status_code": response.status_code,
-                "headers": dict(response.headers),
-                "body": body,
-            },
-        )
+        _save_log_json(relative_path, _http_response_payload(response))
     except Exception:
         LOGGER.exception("持久化 HTTP 响应日志失败 path=%s", relative_path)
 

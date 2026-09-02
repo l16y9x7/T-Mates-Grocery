@@ -538,7 +538,7 @@ async function stopVisualPolling(kind = "pick", refresh = false) {
 }
 
 function eventLabel(event) {
-  const labels = { started: "开始", succeeded: "完成", failed: "失败" };
+  const labels = { started: "开始", succeeded: "完成", failed: "失败", cancelled: "已取消" };
   return labels[event.status] || event.status || "更新";
 }
 
@@ -831,8 +831,10 @@ function normalizeInterfaceCall(value) {
   const statusCode = Number.isInteger(parsedStatusCode) && parsedStatusCode >= 100
     ? parsedStatusCode
     : null;
-  const succeeded = value?.status === "succeeded"
-    || (statusCode !== null && statusCode >= 200 && statusCode < 300);
+  const explicitStatus = typeof value?.status === "string" ? value.status.trim() : "";
+  const succeeded = explicitStatus
+    ? explicitStatus === "succeeded"
+    : statusCode !== null && statusCode >= 200 && statusCode < 300;
   const error = typeof value?.error === "string"
     ? value.error
     : typeof value?.response?.error === "string"

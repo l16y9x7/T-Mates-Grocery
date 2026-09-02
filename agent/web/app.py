@@ -790,6 +790,20 @@ def _interface_events(log_dir: Path | None, emitted: set[str]) -> list[dict[str,
     return events
 
 
+def _mark_explicit_interface_event(
+    log_dir: Path,
+    event: dict[str, object],
+    emitted: set[str],
+) -> None:
+    """Suppress the legacy request/response fallback for a canonical trace event."""
+
+    if event.get("event") != "接口调用":
+        return
+    interface_log_name = event.get("interface_log_name")
+    if isinstance(interface_log_name, str) and interface_log_name.strip():
+        emitted.add(f"{log_dir.name}/{interface_log_name.strip()}")
+
+
 async def _run_pick_place(task_state: PickTask, request: PickRequest, target_url: str) -> None:
     payload = request.model_dump(mode="json")
     try:
@@ -1115,6 +1129,9 @@ async def _event_stream(state: PickTask):
                             except json.JSONDecodeError:
                                 continue
                             if isinstance(event, dict):
+                                _mark_explicit_interface_event(
+                                    log_dir, event, emitted_interfaces
+                                )
                                 pending_events.append(event)
                 except OSError:
                     pass

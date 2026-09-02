@@ -38,6 +38,17 @@ from pick_place_service.place_pose import synthesize_place_pose
 PICK_CAMERAS = {"left": "left_wrist", "right": "right_wrist"}
 
 
+def interface_call_events(log_dir: Path) -> list[dict[str, object]]:
+    return [
+        event
+        for event in (
+            json.loads(line)
+            for line in (log_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+        )
+        if event.get("event") == "接口调用"
+    ]
+
+
 class FakeSubagents:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
@@ -588,7 +599,7 @@ async def test_sorting_place_skips_vision_and_uses_fixed_release_payload() -> No
 
 
 @pytest.mark.asyncio
-async def test_sorting_release_preserves_robot_planning_error() -> None:
+async def test_sorting_release_preserves_robot_planning_error(tmp_path: Path) -> None:
     async def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             500,
@@ -608,19 +619,34 @@ async def test_sorting_release_preserves_robot_planning_error() -> None:
     request = PickPlaceRequest(
         task_type="SORTING", product_name="水溶C100瓶装", hand="RIGHT"
     )
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        with pytest.raises(ServiceError) as error:
-            await SubagentClient(settings, client).execute(
-                request,
-                "place",
-                PoseResponse(pose=[0, 0, 0, 0, 0, 0]),
-                "task1-place",
-            )
+    log_token = service_module._ACTIVE_LOG_DIR.set(tmp_path)
+    operation_token = service_module._ACTIVE_OPERATION_KEY.set("http-failure")
+    call_index_token = service_module._INTERFACE_CALL_INDEX.set(0)
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(ServiceError) as error:
+                await SubagentClient(settings, client).execute(
+                    request,
+                    "place",
+                    PoseResponse(pose=[0, 0, 0, 0, 0, 0]),
+                    "task1-place",
+                )
+    finally:
+        service_module._INTERFACE_CALL_INDEX.reset(call_index_token)
+        service_module._ACTIVE_OPERATION_KEY.reset(operation_token)
+        service_module._ACTIVE_LOG_DIR.reset(log_token)
 
     assert error.value.code == "EXECUTION_FAILED"
     assert error.value.message == "/manipulation/release: MoveL 规划失败，错误码 -1022"
     assert error.value.failed_interface == "manipulation_release"
     assert error.value.url == "http://robot:8084/manipulation/release"
+    [event] = interface_call_events(tmp_path)
+    assert event["call_id"] == "http-failure:1"
+    assert event["status"] == "failed"
+    assert event["status_code"] == 500
+    assert event["error"] == "HTTP 500"
+    assert event["response"]["status_code"] == 500
+    assert event["response"]["error"] == "HTTP 500"
 
 
 @pytest.mark.asyncio
@@ -760,6 +786,140 @@ async def test_camera_provider_uses_color_snapshot_and_depth_stream(tmp_path: Pa
     for child in cleanup.iterdir():
         child.unlink()
     cleanup.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_pick_records_one_timed_event_for_every_internal_http_call(
+    tmp_path: Path,
+) -> None:
+    jpeg = b"\xff\xd8\xff\xc0\x00\x11\x08\x00\x02\x00\x03\x03\x01\x11\x00\xff\xd9"
+    calibration = tmp_path / "camera.json"
+    calibration.write_text('{"cam_K":[1,0,0,0,1,0,0,0,1]}', encoding="utf-8")
+
+    async def handler(http_request: httpx.Request) -> httpx.Response:
+        if http_request.url.path == "/perception/pick/locate":
+            return httpx.Response(
+                200,
+                json={"product_name": "可口可乐", "bbox": [0, 0, 1000, 1000]},
+            )
+        if http_request.url.path == "/camera/snapshot":
+            return httpx.Response(200, content=jpeg)
+        if http_request.url.path == "/camera/stream":
+            return httpx.Response(200, content=jpeg)
+        if http_request.url.path == "/manipulation/pick_pose":
+            return httpx.Response(200, json={"pose": [1, 2, 3, 4, 5, 6]})
+        if http_request.url.path == "/manipulation/grasp":
+            return httpx.Response(200, json={"status": "SUCCEEDED"})
+        return httpx.Response(404)
+
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        pose_estimation_url="http://pose-estimation",
+        manipulation_url="http://robot",
+        camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
+        calibration_file=str(calibration),
+        temp_dir=str(tmp_path / "staging"),
+        log_dir=str(tmp_path / "logs"),
+    )
+    request = PickPlaceRequest(
+        task_type="SORTING", product_name="可口可乐", hand="left"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        orchestrator = PickPlaceOrchestrator(
+            settings,
+            SubagentClient(settings, client),
+            CameraFrameProvider(settings, client),
+        )
+        result = await orchestrator.run(request, "pick", "timed-pick")
+
+    assert result.status == "SUCCEEDED"
+    [log_dir] = (tmp_path / "logs").iterdir()
+    events = interface_call_events(log_dir)
+    assert [event["interface"] for event in events] == [
+        "perception/perception/pick/locate",
+        "camera/camera/snapshot",
+        "camera/camera/stream",
+        "pose_estimation/manipulation/pick_pose",
+        "manipulation/manipulation/grasp",
+    ]
+    assert [event["interface_log_name"] for event in events] == [
+        "perception_pick_locate",
+        "camera_snapshot_color",
+        "camera_stream_depth",
+        "manipulation_pick_pose",
+        "manipulation_grasp",
+    ]
+    assert [event["call_id"] for event in events] == [
+        f"timed-pick:{index}" for index in range(1, 6)
+    ]
+    assert all(event["operation_key"] == "timed-pick" for event in events)
+    assert all(event["attempt"] == 1 for event in events)
+    assert all(event["status"] == "succeeded" for event in events)
+    assert all(event["status_code"] == 200 for event in events)
+    assert all(event["duration_ms"] >= 0 for event in events)
+    assert all(event["error"] is None for event in events)
+    assert all(isinstance(event["request"], dict) for event in events)
+    assert all(isinstance(event["response"], dict) for event in events)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_depth_stream_records_terminal_interface_event(
+    tmp_path: Path,
+) -> None:
+    stream_started = asyncio.Event()
+    never_complete = asyncio.Event()
+
+    class BlockingStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            stream_started.set()
+            await never_complete.wait()
+            yield b"unreachable"
+
+        async def aclose(self) -> None:
+            return None
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "multipart/x-mixed-replace"},
+            stream=BlockingStream(),
+        )
+
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://manipulation",
+        camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
+        calibration_file="camera.json",
+    )
+    log_token = service_module._ACTIVE_LOG_DIR.set(tmp_path)
+    operation_token = service_module._ACTIVE_OPERATION_KEY.set("cancelled-depth")
+    call_index_token = service_module._INTERFACE_CALL_INDEX.set(0)
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            execution = asyncio.create_task(
+                CameraFrameProvider(settings, client)._depth_frame("head")
+            )
+            await stream_started.wait()
+            execution.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+    finally:
+        service_module._INTERFACE_CALL_INDEX.reset(call_index_token)
+        service_module._ACTIVE_OPERATION_KEY.reset(operation_token)
+        service_module._ACTIVE_LOG_DIR.reset(log_token)
+
+    [event] = interface_call_events(tmp_path)
+    assert event["call_id"] == "cancelled-depth:1"
+    assert event["interface"] == "camera/camera/stream"
+    assert event["interface_log_name"] == "camera_stream_depth"
+    assert event["status"] == "cancelled"
+    assert event["status_code"] == 200
+    assert event["error"] == "request cancelled"
+    assert event["duration_ms"] >= 0
+    assert event["response"]["status_code"] == 200
+    assert event["response"]["error"] == "request cancelled"
 
 
 @pytest.mark.asyncio
@@ -995,13 +1155,17 @@ async def test_connection_failure_records_interface_url_and_transport_error(tmp_
     async def handler(http_request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused", request=http_request)
 
-    token = service_module._ACTIVE_LOG_DIR.set(tmp_path)
+    log_token = service_module._ACTIVE_LOG_DIR.set(tmp_path)
+    operation_token = service_module._ACTIVE_OPERATION_KEY.set("network-failure")
+    call_index_token = service_module._INTERFACE_CALL_INDEX.set(0)
     try:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             with pytest.raises(ServiceError) as error:
                 await SubagentClient(settings, client).execute(request, "pick", pose, "operation")
     finally:
-        service_module._ACTIVE_LOG_DIR.reset(token)
+        service_module._INTERFACE_CALL_INDEX.reset(call_index_token)
+        service_module._ACTIVE_OPERATION_KEY.reset(operation_token)
+        service_module._ACTIVE_LOG_DIR.reset(log_token)
 
     assert error.value.code == "NETWORK_ERROR"
     assert error.value.failed_interface == "manipulation_grasp"
@@ -1014,6 +1178,69 @@ async def test_connection_failure_records_interface_url_and_transport_error(tmp_
     assert logged_response["status_code"] == 502
     assert logged_response["body"]["transport_error"] is True
     assert logged_response["body"]["url"] == error.value.url
+    [event] = interface_call_events(tmp_path)
+    assert event["call_id"] == "network-failure:1"
+    assert event["operation_key"] == "network-failure"
+    assert event["interface"] == "manipulation/manipulation/grasp"
+    assert event["interface_log_name"] == "manipulation_grasp"
+    assert event["status"] == "failed"
+    assert event["status_code"] is None
+    assert event["duration_ms"] >= 0
+    assert "connection refused" in event["error"]
+    assert event["response"]["status_code"] is None
+    assert "connection refused" in event["response"]["error"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_json_request_records_terminal_interface_event(
+    tmp_path: Path,
+) -> None:
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://robot:8084",
+        camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
+        calibration_file="camera.json",
+    )
+    request = PickPlaceRequest(
+        task_type="SORTING", product_name="可口可乐", hand="right"
+    )
+    pose = PoseResponse(pose=[1, 2, 3, 4, 5, 6])
+    request_started = asyncio.Event()
+    never_complete = asyncio.Event()
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        request_started.set()
+        await never_complete.wait()
+        return httpx.Response(200, json={"status": "SUCCEEDED"})
+
+    log_token = service_module._ACTIVE_LOG_DIR.set(tmp_path)
+    operation_token = service_module._ACTIVE_OPERATION_KEY.set("cancelled-call")
+    call_index_token = service_module._INTERFACE_CALL_INDEX.set(0)
+    try:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            execution = asyncio.create_task(
+                SubagentClient(settings, client).execute(
+                    request, "pick", pose, "cancelled-call"
+                )
+            )
+            await request_started.wait()
+            execution.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await execution
+    finally:
+        service_module._INTERFACE_CALL_INDEX.reset(call_index_token)
+        service_module._ACTIVE_OPERATION_KEY.reset(operation_token)
+        service_module._ACTIVE_LOG_DIR.reset(log_token)
+
+    [event] = interface_call_events(tmp_path)
+    assert event["call_id"] == "cancelled-call:1"
+    assert event["status"] == "cancelled"
+    assert event["status_code"] is None
+    assert event["error"] == "request cancelled"
+    assert event["duration_ms"] >= 0
+    assert event["response"]["status_code"] is None
+    assert event["response"]["error"] == "request cancelled"
 
 
 def test_action_payload_matches_8084_execution_contract() -> None:

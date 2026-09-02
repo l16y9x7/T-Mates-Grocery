@@ -264,3 +264,70 @@ async def test_task_event_stream_includes_every_pick_place_child_log(
     assert stream.count('"interface": "manipulation_grasp"') == 2
     assert stream.index('"sequence": 1') < stream.index('"sequence": 2')
     assert "event: result" in stream
+
+
+@pytest.mark.asyncio
+async def test_task_event_stream_prefers_explicit_interface_timing_event(
+    monkeypatch, tmp_path: Path
+) -> None:
+    operation_key = "web-task1-interface-timing"
+    main_dir = tmp_path / f"20260101-000000-000001-{operation_key}"
+    child_dir = tmp_path / (
+        f"20260101-000001-000001-{operation_key}_task1.pick.0.pick"
+    )
+    main_dir.mkdir()
+    child_dir.mkdir()
+    (main_dir / "events.jsonl").write_text("", encoding="utf-8")
+
+    interface_dir = child_dir / "interfaces" / "manipulation_grasp"
+    interface_dir.mkdir(parents=True)
+    (interface_dir / "request.json").write_text(
+        json.dumps(
+            {
+                "method": "POST",
+                "url": "http://robot:8084/manipulation/grasp",
+                "body": {"product_name": "可口可乐"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (interface_dir / "response.json").write_text(
+        json.dumps({"status_code": 200, "body": {"status": "SUCCEEDED"}}),
+        encoding="utf-8",
+    )
+    explicit_event = {
+        "timestamp": "2026-01-01T00:00:01.000",
+        "event": "接口调用",
+        "status": "succeeded",
+        "call_id": "pick-place:web-task1-interface-timing:1",
+        "operation_key": f"{operation_key}_task1.pick.0.pick",
+        "interface_log_name": "manipulation_grasp",
+        "interface": "manipulation/manipulation/grasp",
+        "service": "manipulation",
+        "method": "POST",
+        "url": "http://robot:8084/manipulation/grasp",
+        "attempt": 1,
+        "status_code": 200,
+        "duration_ms": 123.4,
+        "request": {"method": "POST"},
+        "response": {"status_code": 200},
+    }
+    (child_dir / "events.jsonl").write_text(
+        json.dumps(explicit_event, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+
+    monkeypatch.setattr(web_app, "LOG_ROOT", tmp_path)
+    state = web_app.PickTask(
+        task_id="run-interface-timing",
+        operation_key=operation_key,
+        workflow="task1",
+        finished=True,
+        result={"ok": True},
+    )
+
+    stream = "".join([chunk async for chunk in web_app._event_stream(state)])
+
+    assert stream.count('"event": "接口调用"') == 1
+    assert stream.count('"call_id": "pick-place:web-task1-interface-timing:1"') == 1
+    assert '"duration_ms": 123.4' in stream
+    assert '"interface": "manipulation/manipulation/grasp"' in stream
