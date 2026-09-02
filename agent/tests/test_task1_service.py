@@ -316,6 +316,9 @@ async def test_interface_metrics_count_remote_protocol_errors() -> None:
 
     assert error.value.code == "NETWORK_ERROR"
     assert len(events) == 2
+    assert [event["attempt"] for event in events] == [1, 2]
+    assert len({event["call_id"] for event in events}) == 2
+    assert all(event["duration_ms"] >= 0 for event in events)
     [metric] = client.interface_metrics()
     assert metric.call_count == 2
     assert metric.failure_count == 2
@@ -342,6 +345,9 @@ async def test_interface_metrics_count_cancelled_in_flight_request() -> None:
             await request_task
 
     assert len(events) == 1
+    assert events[0]["attempt"] == 1
+    assert events[0]["error"] == "request cancelled"
+    assert events[0]["duration_ms"] >= 0
     [metric] = client.interface_metrics()
     assert metric.call_count == 1
     assert metric.failure_count == 1
@@ -1240,6 +1246,16 @@ async def test_task1_writes_pickplace_style_operation_log(tmp_path) -> None:
     assert '"duration_ms":' in events
     assert '"call_count":' in events
     assert '"event": "operation"' in events
+    interface_events = [
+        event
+        for line in events.splitlines()
+        if (event := json.loads(line))["event"] == "接口调用"
+    ]
+    assert interface_events
+    assert len({event["call_id"] for event in interface_events}) == len(
+        interface_events
+    )
+    assert all(event["duration_ms"] >= 0 for event in interface_events)
 
 
 @pytest.mark.asyncio

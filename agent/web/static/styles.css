@@ -137,11 +137,11 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 .interface-metrics-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #79928a; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
 .interface-metrics-heading strong { color: var(--accent); font-weight: 600; }
 .interface-metrics-table-wrap { margin-top: 11px; overflow-x: auto; }
-.interface-metrics table { width: 100%; min-width: 690px; border-collapse: collapse; font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.interface-metrics table { width: 100%; min-width: 620px; border-collapse: collapse; font: 10px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .interface-metrics th, .interface-metrics td { padding: 8px 9px; border-bottom: 1px solid #20362f; text-align: right; white-space: nowrap; }
 .interface-metrics th { color: #688179; font-weight: 600; text-transform: uppercase; }
 .interface-metrics td { color: #b8ccc5; }
-.interface-metrics th:first-child, .interface-metrics td:first-child { max-width: 320px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.interface-metrics th:nth-child(2), .interface-metrics td:nth-child(2) { max-width: 320px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
 .interface-metrics-empty { margin: 11px 0 0; color: var(--muted); font-size: 11px; }
 .error-details { margin-top: 12px; padding: 14px; border: 1px solid rgba(255,143,131,.55); background: rgba(91,30,28,.28); }
 .error-details-heading { display: flex; justify-content: space-between; gap: 12px; color: var(--red); font: 600 10px ui-monospace, monospace; text-transform: uppercase; }

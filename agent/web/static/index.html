@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1514" />
     <title>机器人任务控制台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260901-2" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260902-1" />
   </head>
   <body>
     <main class="shell">
@@ -90,16 +90,16 @@
             </div>
           </div>
           <section id="taskInterfaceMetrics" class="interface-metrics" hidden>
-            <div class="interface-metrics-heading"><span>Task 1 接口统计</span><strong id="taskInterfaceMetricsCount">0 个接口</strong></div>
+            <div class="interface-metrics-heading"><span>Task 1 接口逐次耗时</span><strong id="taskInterfaceMetricsCount">0 次调用</strong></div>
             <div class="interface-metrics-table-wrap">
               <table>
                 <thead>
-                  <tr><th scope="col">接口</th><th scope="col">次数</th><th scope="col">HTTP 成功 / 失败</th><th scope="col">累计</th><th scope="col">平均</th><th scope="col">最近</th></tr>
+                  <tr><th scope="col">序号</th><th scope="col">接口</th><th scope="col">尝试</th><th scope="col">结果</th><th scope="col">HTTP</th><th scope="col">本次耗时</th></tr>
                 </thead>
                 <tbody id="taskInterfaceMetricsBody"></tbody>
               </table>
             </div>
-            <p id="taskInterfaceMetricsEmpty" class="interface-metrics-empty">接口调用后显示统计</p>
+            <p id="taskInterfaceMetricsEmpty" class="interface-metrics-empty">每次接口调用结束后显示本次耗时</p>
           </section>
           <div id="taskTimeline" class="timeline" hidden></div>
           <section id="taskCaptures" class="capture-results" hidden>
@@ -327,6 +327,6 @@
       </dialog>
       <footer><span>8108 UNIFIED TASK SERVICE</span><span id="footerUrl">-</span></footer>
     </main>
-    <script src="/static/app.js?v=20260901-2" defer></script>
+    <script src="/static/app.js?v=20260902-1" defer></script>
   </body>
 </html>

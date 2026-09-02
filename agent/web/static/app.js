@@ -110,7 +110,7 @@ let currentTaskRunId = null;
 let currentMockOrder = null;
 let taskBusy = false;
 let mockOrderLoading = false;
-const taskInterfaceMetricValues = new Map();
+const taskInterfaceCallValues = new Map();
 const visualPollers = { pick: null, place: null, task: null };
 const visualRefreshers = { pick: null, place: null, task: null };
 
@@ -818,87 +818,75 @@ function formatDuration(milliseconds) {
   return value >= 1000 ? `${(value / 1000).toFixed(2)} s` : `${value.toFixed(1)} ms`;
 }
 
-function normalizeInterfaceMetric(value, fallbackInterface = "") {
-  // Legacy pick/place interface log events do not carry counters. They remain
-  // visible in the timeline, but must not create fake 0-call metric rows.
-  if (value?.call_count === undefined || value?.call_count === null) return null;
-  const interfaceName = typeof value?.interface === "string" && value.interface.trim()
-    ? value.interface.trim()
-    : fallbackInterface;
-  if (!interfaceName) return null;
+function normalizeInterfaceCall(value) {
+  // Only completed HTTP-attempt events have both a unique call id and the
+  // elapsed time for that attempt. Aggregate result metrics must not be
+  // converted into fake per-call rows.
+  const callId = typeof value?.call_id === "string" ? value.call_id.trim() : "";
+  const interfaceName = typeof value?.interface === "string" ? value.interface.trim() : "";
+  if (!callId || !interfaceName || value?.duration_ms === undefined || value?.duration_ms === null) return null;
   const method = typeof value?.method === "string" ? value.method.trim().toUpperCase() : "";
-  const callCount = metricNumber(value?.call_count);
-  const totalDuration = metricNumber(value?.total_duration_ms);
+  const rawStatusCode = value?.status_code ?? value?.response?.status_code;
+  const parsedStatusCode = Number(rawStatusCode);
+  const statusCode = Number.isInteger(parsedStatusCode) && parsedStatusCode >= 100
+    ? parsedStatusCode
+    : null;
+  const succeeded = value?.status === "succeeded"
+    || (statusCode !== null && statusCode >= 200 && statusCode < 300);
+  const error = typeof value?.error === "string"
+    ? value.error
+    : typeof value?.response?.error === "string"
+      ? value.response.error
+      : "";
   return {
+    call_id: callId,
     interface: interfaceName,
     method,
-    call_count: callCount,
-    success_count: metricNumber(value?.success_count),
-    failure_count: metricNumber(value?.failure_count),
-    duration_ms: value?.duration_ms === undefined || value?.duration_ms === null
-      ? null
-      : metricNumber(value.duration_ms),
-    total_duration_ms: totalDuration,
-    average_duration_ms: metricNumber(
-      value?.average_duration_ms,
-      callCount ? totalDuration / callCount : 0,
-    ),
+    url: typeof value?.url === "string" ? value.url : "",
+    attempt: Math.max(1, Math.trunc(metricNumber(value?.attempt, 1))),
+    status_code: statusCode,
+    succeeded,
+    error,
+    duration_ms: metricNumber(value.duration_ms),
   };
 }
 
 function renderInterfaceMetricTable() {
   taskInterfaceMetricsBody.replaceChildren();
-  [...taskInterfaceMetricValues.values()]
-    .sort((left, right) => `${left.method} ${left.interface}`.localeCompare(`${right.method} ${right.interface}`))
-    .forEach((metric) => {
+  [...taskInterfaceCallValues.values()]
+    .sort((left, right) => left.sequence - right.sequence)
+    .forEach((call) => {
       const row = document.createElement("tr");
       const values = [
-        [metric.method, metric.interface].filter(Boolean).join(" "),
-        String(metric.call_count),
-        `${metric.success_count} / ${metric.failure_count}`,
-        formatDuration(metric.total_duration_ms),
-        formatDuration(metric.average_duration_ms),
-        formatDuration(metric.duration_ms),
+        `#${call.sequence}`,
+        [call.method, call.interface].filter(Boolean).join(" "),
+        String(call.attempt),
+        call.succeeded ? "成功" : "失败",
+        call.status_code === null ? "-" : String(call.status_code),
+        formatDuration(call.duration_ms),
       ];
-      values.forEach((value) => {
+      values.forEach((value, index) => {
         const cell = document.createElement("td");
         cell.textContent = value;
+        if (index === 1 && call.url) cell.title = call.url;
+        if (index === 3 && call.error) cell.title = call.error;
         row.append(cell);
       });
       taskInterfaceMetricsBody.append(row);
     });
-  const count = taskInterfaceMetricValues.size;
-  taskInterfaceMetricsCount.textContent = `${count} 个接口`;
+  const count = taskInterfaceCallValues.size;
+  taskInterfaceMetricsCount.textContent = `${count} 次调用`;
   taskInterfaceMetricsEmpty.hidden = count > 0;
   taskInterfaceMetricsBody.closest(".interface-metrics-table-wrap").hidden = count === 0;
 }
 
-function applyInterfaceMetric(value, fallbackInterface = "") {
-  const metric = normalizeInterfaceMetric(value, fallbackInterface);
-  if (!metric) return;
-  const key = `${metric.method}:${metric.interface}`;
-  const previous = taskInterfaceMetricValues.get(key);
-  if (previous && metric.call_count < previous.call_count) return;
-  if (previous && value?.duration_ms === undefined) {
-    metric.duration_ms = previous.duration_ms;
-  }
-  taskInterfaceMetricValues.set(key, metric);
+function applyInterfaceCall(value) {
+  const call = normalizeInterfaceCall(value);
+  if (!call) return;
+  const previous = taskInterfaceCallValues.get(call.call_id);
+  call.sequence = previous?.sequence ?? taskInterfaceCallValues.size + 1;
+  taskInterfaceCallValues.set(call.call_id, call);
   renderInterfaceMetricTable();
-}
-
-function applyInterfaceMetrics(metrics) {
-  if (Array.isArray(metrics)) {
-    metrics.forEach((metric) => applyInterfaceMetric(metric));
-    return;
-  }
-  if (!metrics || typeof metrics !== "object") return;
-  if (Array.isArray(metrics.metrics)) {
-    metrics.metrics.forEach((metric) => applyInterfaceMetric(metric));
-    return;
-  }
-  Object.entries(metrics).forEach(([interfaceName, metric]) => {
-    if (metric && typeof metric === "object") applyInterfaceMetric(metric, interfaceName);
-  });
 }
 
 function showMockOrderEvent(event) {
@@ -987,7 +975,7 @@ function resetTaskView() {
   taskCaptures.hidden = true;
   taskCaptureList.replaceChildren();
   taskCaptureCount.textContent = "0 组";
-  taskInterfaceMetricValues.clear();
+  taskInterfaceCallValues.clear();
   renderInterfaceMetricTable();
   taskDetails.hidden = true;
   taskDetailsList.replaceChildren();
@@ -1050,7 +1038,6 @@ function showTaskResult(taskId, result) {
   const body = result.body ?? result;
   const terminated = body?.error_code === "TASK_TERMINATED";
   if (taskId === "1" && body && typeof body === "object") {
-    applyInterfaceMetrics(body.interface_metrics);
     if (Array.isArray(body.product_names)) {
       showMockOrderEvent({
         ...currentMockOrder,
@@ -1319,7 +1306,7 @@ taskForm.addEventListener("submit", async (event) => {
       try {
         const flowEvent = JSON.parse(message.data);
         if (taskId === "1" && flowEvent.event === "接口调用") {
-          applyInterfaceMetric(flowEvent);
+          applyInterfaceCall(flowEvent);
         }
         addFlowEvent(flowEvent, taskTimeline);
         updateTaskLiveStatus(flowEvent, taskId);

@@ -360,7 +360,11 @@ async def test_web_uses_one_task_panel_and_common_sse_routes() -> None:
     assert "setOperationMode(button.dataset.operationMode)" in script
     assert "/api/task-runs/${runId}/terminate" in script
     assert 'fetch("/api/task1/mock-order"' in script
-    assert "applyInterfaceMetric(flowEvent)" in script
+    assert "applyInterfaceCall(flowEvent)" in script
+    assert "taskInterfaceCallValues.get(call.call_id)" in script
+    assert "每次接口调用结束后显示本次耗时" in page.text
+    assert "/static/app.js?v=20260902-1" in page.text
+    assert "/static/styles.css?v=20260902-1" in page.text
     assert page.headers["cache-control"] == "no-store"
     assert started.status_code == 200
     assert started.json()["task_id"] == "3"
