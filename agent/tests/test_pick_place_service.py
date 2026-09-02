@@ -1100,7 +1100,12 @@ async def test_subagent_locate_uses_formal_locate_contract() -> None:
         calibration_file="camera.json",
     )
     request = PickPlaceRequest(
-        task_type="SORTING", product_name="可口可乐", hand="LEFT", level="L2"
+        task_type="SORTING",
+        product_name="可口可乐",
+        hand="LEFT",
+        level="L2",
+        slot_id="H2_L02_C03",
+        location_id="H12_INSPECT",
     )
 
     async def handler(http_request: httpx.Request) -> httpx.Response:
@@ -1108,7 +1113,8 @@ async def test_subagent_locate_uses_formal_locate_contract() -> None:
         assert http_request.headers["content-type"] == "application/json"
         assert http_request.content.decode("utf-8") == (
             '{"task_type":"SORTING","product_name":"可口可乐",'
-            '"hand":"left","level":"L2"}'
+            '"hand":"left","level":"L2","slot_id":"H2_L02_C03",'
+            '"target_id":"H12_INSPECT"}'
         )
         return httpx.Response(
             200,

@@ -395,6 +395,12 @@ class SubagentClient:
         }
         if kind == "pick" and request.level is not None:
             payload["level"] = request.level
+        if kind == "pick" and request.slot_id is not None:
+            payload["slot_id"] = request.slot_id
+        if kind == "pick" and request.location_id is not None:
+            # 8086 的 location_id 表示机器人当前实际到达的导航点；8083
+            # 的抓取定位契约使用 target_id 表示同一上下文。
+            payload["target_id"] = request.location_id
         response = await self._post(
             locate_url,
             f"/perception/{kind}/locate",

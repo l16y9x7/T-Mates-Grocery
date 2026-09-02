@@ -1,0 +1,60 @@
+{
+  "slot_groups": {
+    "alien_energy": [
+      "H2_L03_C01",
+      "H2_L03_C02",
+      "H2_L03_C03"
+    ],
+    "maiydong": [
+      "H2_L04_C01",
+      "H2_L04_C02",
+      "H2_L04_C03",
+      "H2_L05_C01",
+      "H2_L05_C02"
+    ]
+  },
+  "views": [
+    {
+      "target_id": "H2_INSPECT",
+      "hand": "left",
+      "level": "L3",
+      "group_id": "alien_energy",
+      "visible_slot_order": ["H2_L03_C01", "H2_L03_C02", "H2_L03_C03"]
+    },
+    {
+      "target_id": "H12_INSPECT",
+      "hand": "right",
+      "level": "L3",
+      "group_id": "alien_energy",
+      "visible_slot_order": ["H2_L03_C01", "H2_L03_C02", "H2_L03_C03"]
+    },
+    {
+      "target_id": "H2_INSPECT",
+      "hand": "left",
+      "level": "L4",
+      "group_id": "maiydong",
+      "visible_slot_order": ["H2_L04_C01", "H2_L04_C02", "H2_L04_C03"]
+    },
+    {
+      "target_id": "H12_INSPECT",
+      "hand": "right",
+      "level": "L4",
+      "group_id": "maiydong",
+      "visible_slot_order": ["H2_L04_C01", "H2_L04_C02", "H2_L04_C03"]
+    },
+    {
+      "target_id": "H2_INSPECT",
+      "hand": "left",
+      "level": "L5",
+      "group_id": "maiydong",
+      "visible_slot_order": ["H2_L05_C01", "H2_L05_C02"]
+    },
+    {
+      "target_id": "H12_INSPECT",
+      "hand": "right",
+      "level": "L5",
+      "group_id": "maiydong",
+      "visible_slot_order": ["H2_L05_C01", "H2_L05_C02"]
+    }
+  ]
+}

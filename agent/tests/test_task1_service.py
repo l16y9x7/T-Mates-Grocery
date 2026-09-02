@@ -214,6 +214,27 @@ def test_production_config_loads_complete_product_hand_options() -> None:
     assert task_settings.product_hand_options["H3_L01_C01"] == ["LEFT", "RIGHT"]
     assert task_settings.product_target_ids["H3_L01_C01"] == "H3_INSPECT"
     assert len(task_settings.product_grasp_options["H1_L01_C04"]) == 2
+    assert [
+        (option.target_id, [hand.value for hand in option.hands])
+        for option in task_settings.product_grasp_options["H2_L03_C03"]
+    ] == [
+        ("H2_INSPECT", ["LEFT"]),
+        ("H12_INSPECT", ["RIGHT"]),
+    ]
+    assert [
+        (option.target_id, [hand.value for hand in option.hands])
+        for option in task_settings.product_grasp_options["H2_L04_C03"]
+    ] == [
+        ("H2_INSPECT", ["LEFT"]),
+        ("H12_INSPECT", ["RIGHT"]),
+    ]
+    assert [
+        (option.target_id, [hand.value for hand in option.hands])
+        for option in task_settings.product_grasp_options["H2_L04_C04"]
+    ] == [
+        ("H2_INSPECT", ["RIGHT"]),
+        ("H23_INSPECT", ["LEFT"]),
+    ]
     assert task_settings.services.pose.endswith(":8084")
 
     catalog = json.loads(
@@ -340,6 +361,15 @@ async def test_task1_runs_full_pick_place_flow() -> None:
     assert result.held_items == {}
     assert [payload(request)["hand"] for request in mock.requests if request.url.path == "/pick"] == ["LEFT", "RIGHT"]
     assert [payload(request)["level"] for request in mock.requests if request.url.path == "/pick"] == ["L1", "L1"]
+    pick_requests = [request for request in mock.requests if request.url.path == "/pick"]
+    assert [payload(request)["slot_id"] for request in pick_requests] == [
+        result.target_items[0].product_slot_id,
+        result.target_items[1].product_slot_id,
+    ]
+    assert [payload(request)["location_id"] for request in pick_requests] == [
+        result.target_items[0].target_id,
+        result.target_items[1].target_id,
+    ]
     [release_both] = [
         request
         for request in mock.requests
@@ -358,6 +388,65 @@ async def test_task1_runs_full_pick_place_flow() -> None:
     assert result.order.catalog_size == 2
     assert result.order.product_names == list(mock.names)
     assert "/sku/get_all_names" in paths(mock)
+
+
+@pytest.mark.asyncio
+async def test_task1_forwards_exact_connector_slot_target_and_hand() -> None:
+    fixed_left_product = "固定左手商品"
+    connector_product = "外星人电解质水白桃口味0糖"
+    fixed_left_slot = "H2_L03_C01"
+    connector_slot = "H2_L03_C03"
+    mock = Task1Mock()
+    mock.names = {
+        fixed_left_product: fixed_left_slot,
+        connector_product: connector_slot,
+    }
+    task_settings = settings().model_copy(
+        update={
+            "product_grasp_options": {
+                fixed_left_slot: [
+                    GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT")
+                ],
+                connector_slot: [
+                    GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT"),
+                    GraspOption(hands=[Hand.RIGHT], target_id="H12_INSPECT"),
+                ],
+            }
+        }
+    )
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(
+            Task1Request(
+                order_id="connector-context-test",
+                product_names=[fixed_left_product, connector_product],
+            )
+        )
+
+    assert [item.product_slot_id for item in result.target_items] == [
+        fixed_left_slot,
+        connector_slot,
+    ]
+    assert [item.hand for item in result.target_items] == [Hand.LEFT, Hand.RIGHT]
+    assert [item.target_id for item in result.target_items] == [
+        "H2_INSPECT",
+        "H12_INSPECT",
+    ]
+    connector_pick = next(
+        request
+        for request in mock.requests
+        if request.url.path == "/pick"
+        and payload(request)["product_name"] == connector_product
+    )
+    assert payload(connector_pick) == {
+        "task_type": "SORTING",
+        "product_name": connector_product,
+        "hand": "RIGHT",
+        "level": "L3",
+        "slot_id": connector_slot,
+        "location_id": "H12_INSPECT",
+    }
     assert "/perception/parse" not in paths(mock)
     assert "/camera/head/resolution" not in paths(mock)
     assert all(

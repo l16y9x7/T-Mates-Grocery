@@ -350,16 +350,25 @@ class Task1Client:
         hand: Hand,
         level: str,
         idempotency_key: str,
+        *,
+        slot_id: str | None = None,
+        target_id: str | None = None,
     ) -> None:
+        payload = {
+            "task_type": TaskType.SORTING.value,
+            "product_name": product_name,
+            "hand": hand.value,
+            "level": level,
+        }
+        if slot_id is not None:
+            payload["slot_id"] = slot_id
+        if target_id is not None:
+            # 8086 沿用 PickPlaceRequest.location_id 承载实际导航点。
+            payload["location_id"] = target_id
         await self._physical_action(
             "pick_place",
             "/pick",
-            {
-                "task_type": TaskType.SORTING.value,
-                "product_name": product_name,
-                "hand": hand.value,
-                "level": level,
-            },
+            payload,
             idempotency_key,
             self.settings.timeouts.pick_seconds,
         )

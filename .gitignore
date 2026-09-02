@@ -1,6 +1,10 @@
 .DS_Store
 __pycache__/
-*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+*.out
+*.log
 
 test_data/
 *.zip

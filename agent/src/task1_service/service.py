@@ -740,7 +740,12 @@ class Task1Orchestrator:
             hand=target.hand,
             action_key=f"{task_run_id}:task1.pick.{index}.pick",
             action=lambda key: self.client.pick(
-                target.product_name, target.hand, target.shelf_level, key
+                target.product_name,
+                target.hand,
+                target.shelf_level,
+                key,
+                slot_id=target.product_slot_id,
+                target_id=target.target_id,
             ),
             logger=logger,
             action_failures=action_failures,

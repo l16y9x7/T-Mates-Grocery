@@ -119,7 +119,8 @@ Task3 由统一任务服务 `0.0.0.0:8108` 编排，领域配置为 `config/runt
 Task1 使用 `task_type=SORTING`：
 
 ```json
-{"task_type":"SORTING","product_name":"商品名","hand":"LEFT","level":"L2"}
+{"task_type":"SORTING","product_name":"商品名","hand":"RIGHT","level":"L3",
+ "slot_id":"H2_L03_C03","location_id":"H12_INSPECT"}
 ```
 
 Task2 在补货台完成 `REPLENISHMENT_TABLE_PICK_READY` 姿态准备后，使用 `task_type=SHORTAGE` 调用同一个 `8086 /pick` 接口：
@@ -134,7 +135,7 @@ Task3 使用来源货位的层号调用同一个接口，例如：
 {"task_type":"MISPLACED","product_name":"商品名","hand":"RIGHT","level":"L4"}
 ```
 
-三种任务进入 8086 后执行相同的定位、取图、位姿估计和抓取步骤；`task_type` 保持原值并传给定位和机器人抓取接口。Task1 和 Task3 的 `level` 也会继续传给抓取定位接口；Task2 在补货台抓取，没有货架层号，因此省略该字段。相机选择不同：`SHORTAGE` 无论左手还是右手都使用 `head`；`SORTING` 和 `MISPLACED` 按手臂使用左/右腕相机：
+三种任务进入 8086 后执行相同的定位、取图、位姿估计和抓取步骤；`task_type` 保持原值并传给定位和机器人抓取接口。Task1 还会传递规划出的精确 `slot_id`，并以 `location_id` 携带实际导航点；8086 调用抓取定位时将后者转为 `target_id`。Task1 和 Task3 的 `level` 也会继续传给抓取定位接口；Task2 在补货台抓取，没有货架层号，因此省略该字段。相机选择不同：`SHORTAGE` 无论左手还是右手都使用 `head`；`SORTING` 和 `MISPLACED` 按手臂使用左/右腕相机：
 
 ```text
 Task1 (SORTING) / Task2 (SHORTAGE) / Task3 (MISPLACED) -> POST 127.0.0.1:8086/pick
@@ -225,7 +226,7 @@ POST 127.0.0.1:8108/tasks/1/run {}
        POST <robot_ip>:8084/pose/prepare {"pose_type":"START_POSITION"}
        POST <robot_ip>:8081/navigation/navigate {"target_id":"<货位对应导航点>"}
        POST <robot_ip>:8084/pose/prepare {"pose_type":"SHELF_PICK_READY","shelf_level":"Lx"}
-       POST 127.0.0.1:8086/pick {"task_type":"SORTING","level":"Lx", ...}
+       POST 127.0.0.1:8086/pick {"task_type":"SORTING","level":"Lx","slot_id":"H..._C..","location_id":"<实际导航点>", ...}
   -> POST <robot_ip>:8084/pose/prepare {"pose_type":"START_POSITION"}
   -> POST <robot_ip>:8081/navigation/navigate {"target_id":"delivery_place"}
   -> POST <robot_ip>:8084/pose/prepare {"pose_type":"DELIVERY_TABLE_PLACE_READY"}
