@@ -1,0 +1,33 @@
+{
+  "sam3": {
+    "api_url": "http://127.0.0.1:18003/infer",
+    "timeout_s": 300.0,
+    "threshold": 0.41,
+    "mask_threshold": 0.50,
+    "default_prompt": "white plastic tray"
+  },
+  "vlm": {
+    "missing_prompt": "You are a professional supermarket shelf inspector. Your job is to find out-of-stock goods.\nGoods placement rule: The same goods are placed vertically.\nCheck if there are empty positions with missing goods on the outermost row (the row closest to the shelf edge).\nThe missing goods name is the Chinese name of the goods sitting directly behind that empty outermost position.\nDo not name goods that are already present on the outermost row.\nOnly output the Chinese name of the missing goods.",
+    "sam3_prompt": {
+      "provider": "openai",
+      "api_url": "http://127.0.0.1:8000/v1/chat/completions",
+      "model": "qwen3-vl-4b",
+      "timeout_s": 60.0,
+      "temperature": 0.1,
+      "max_tokens": 128
+    },
+    "reason": {
+      "provider": "anthropic",
+      "api_url": "https://api.minimaxi.com/anthropic",
+      "model": "MiniMax-M3",
+      "timeout_s": 120.0,
+      "temperature": 0.2,
+      "max_tokens": 1024
+    }
+  },
+  "genpose2": {
+    "score_ckpt": "results/ckpts/ScoreNet/scorenet.pth",
+    "energy_ckpt": "results/ckpts/EnergyNet/energynet.pth",
+    "scale_ckpt": "results/ckpts/ScaleNet/scalenet.pth"
+  }
+}

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
+from random import Random
 
 import httpx
 import pytest
@@ -9,9 +11,13 @@ import yaml
 
 import task1_service.service as task1_service_module
 from task1_service.client import Task1Client
+from task1_service.mock_order import MockOrderSystem
 from task1_service.models import (
     ActionResponse,
+    GraspOption,
+    Hand,
     ProductHandOptionsFile,
+    TargetItem,
     Task1Request,
     Task1ServiceError,
     Task1Settings,
@@ -28,7 +34,7 @@ CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 class Task1Mock:
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
-        self.health = {"navigation": "READY", "perception": "READY", "pose": "READY", "pick_place": "READY", "sku": "READY"}
+        self.health = {"navigation": "READY", "pose": "READY", "pick_place": "READY", "sku": "READY"}
         self.names = {
             "可口可乐罐装": "H2_F_L1_C01",
             "百事可乐瓶装": "H2_F_L1_C04",
@@ -45,10 +51,6 @@ class Task1Mock:
         self.nudge_return_failures = 0
         self.pose_failure_keys: set[str] = set()
         self.navigation_failure = False
-        self.perception_failure = False
-        self.receipt_results: list[list[str]] = []
-        self.receipt_attempts = 0
-        self.resolution_failures: set[int] = set()
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -59,40 +61,18 @@ class Task1Mock:
         host = request.url.host
         service = {
             "navigation.local": "navigation",
-            "perception.local": "perception",
             "pose.local": "pose",
             "pick-place.local": "pick_place",
             "sku.local": "sku",
-            "camera.local": "camera",
         }[host]
         path = request.url.path
-        if path == "/camera/head/resolution":
-            resolution = json.loads(request.content)["resolution"]
-            if resolution in self.resolution_failures:
-                return httpx.Response(
-                    500, json={"error_code": "RESOLUTION_SWITCH_FAILED"}
-                )
-            return httpx.Response(200, json={"resolution": resolution})
         if path == "/" + service + "/health" or (service == "pick_place" and path == "/health"):
             payload: dict[str, object] = {"status": self.health[service]}
             if service == "pose":
                 payload["current_pose"] = {"pose_type": "START_POSITION"}
             return httpx.Response(200, json=payload)
-        if path == "/perception/parse":
-            if self.perception_failure:
-                return httpx.Response(
-                    500, json={"error_code": "RECEIPT_PARSE_FAILED"}
-                )
-            if self.receipt_results:
-                result_index = min(
-                    self.receipt_attempts, len(self.receipt_results) - 1
-                )
-                self.receipt_attempts += 1
-                return httpx.Response(
-                    200,
-                    json={"product_names": self.receipt_results[result_index]},
-                )
-            return httpx.Response(200, json={"product_names": list(self.names)})
+        if path == "/sku/get_all_names":
+            return httpx.Response(200, json=list(self.names))
         if path == "/sku/search_by_name":
             name = request.url.params["name"]
             return httpx.Response(
@@ -176,17 +156,13 @@ def settings() -> Task1Settings:
     return Task1Settings(
         services={
             "navigation": "http://navigation.local",
-            "perception": "http://perception.local",
             "pose": "http://pose.local",
             "pick_place": "http://pick-place.local",
             "sku": "http://sku.local",
-            "camera": "http://camera.local",
         },
         timeouts=Task1Timeouts(
             connect_seconds=0.1,
             health_seconds=0.2,
-            receipt_seconds=0.2,
-            resolution_seconds=0.2,
             sku_seconds=0.2,
             navigation_seconds=0.2,
             pose_seconds=0.2,
@@ -197,13 +173,6 @@ def settings() -> Task1Settings:
             "H2_F_L1_C01": ["LEFT", "RIGHT"],
             "H2_F_L1_C04": ["LEFT", "RIGHT"],
         },
-    )
-
-
-@pytest.fixture(autouse=True)
-def disable_receipt_exposure_wait(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        task1_service_module, "RECEIPT_EXPOSURE_SETTLE_SECONDS", 0.0
     )
 
 
@@ -234,18 +203,53 @@ def test_production_config_loads_complete_product_hand_options() -> None:
     with options_path.open("r", encoding="utf-8") as options_file:
         options = ProductHandOptionsFile.model_validate(yaml.safe_load(options_file))
 
-    assert len(options.product_hand_options) == 122
-    assert options.product_hand_options["H1_F_L1_C01"].product_name == "NFC桔汁"
-    assert options.product_hand_options["H2_B_L5_C02"].product_name == "心相印厨房纸巾"
+    assert len(options.product_hand_options) == 74
+    assert options.product_hand_options["H3_L01_C01"].product_name == "NFC桔汁"
+    assert options.product_hand_options["H1_L04_C02"].product_name == "心相印厨房纸巾"
 
     task_settings = TaskServiceSettings.load(
         CONFIG_DIR / "runtime.production.yaml"
     ).tasks.task1
-    assert len(task_settings.product_hand_options) == 122
-    assert task_settings.product_hand_options["H1_F_L1_C01"] == ["LEFT"]
-    assert task_settings.product_target_ids["H1_F_L1_C01"] == "H1_F_L_INSPECT"
-    assert task_settings.product_target_ids["H1_F_L1_C04"] == "H1_F_R_INSPECT"
+    assert len(task_settings.product_hand_options) == 74
+    assert task_settings.product_hand_options["H3_L01_C01"] == ["LEFT", "RIGHT"]
+    assert task_settings.product_target_ids["H3_L01_C01"] == "H3_INSPECT"
+    assert len(task_settings.product_grasp_options["H1_L01_C04"]) == 2
+    assert [
+        (option.target_id, [hand.value for hand in option.hands])
+        for option in task_settings.product_grasp_options["H2_L03_C03"]
+    ] == [
+        ("H2_INSPECT", ["LEFT"]),
+        ("H12_INSPECT", ["RIGHT"]),
+    ]
+    assert [
+        (option.target_id, [hand.value for hand in option.hands])
+        for option in task_settings.product_grasp_options["H2_L04_C03"]
+    ] == [
+        ("H2_INSPECT", ["LEFT"]),
+        ("H12_INSPECT", ["RIGHT"]),
+    ]
+    assert [
+        (option.target_id, [hand.value for hand in option.hands])
+        for option in task_settings.product_grasp_options["H2_L04_C04"]
+    ] == [
+        ("H2_INSPECT", ["RIGHT"]),
+        ("H23_INSPECT", ["LEFT"]),
+    ]
     assert task_settings.services.pose.endswith(":8084")
+
+    catalog = json.loads(
+        (CONFIG_DIR.parents[1] / "perception" / "sku" / "products.json").read_text(
+            encoding="utf-8"
+        )
+    )["products"]
+    assert len(catalog) == 43
+    assert all(
+        any(
+            task_settings.product_grasp_options.get(location)
+            for location in product["locations"]
+        )
+        for product in catalog
+    )
 
 
 def test_action_response_accepts_pose_execution_metadata() -> None:
@@ -253,7 +257,7 @@ def test_action_response_accepts_pose_execution_metadata() -> None:
         {
             "status": "SUCCEEDED",
             "executed": True,
-            "current_pose": {"pose_type": "RECEIPT_VIEW"},
+            "current_pose": {"pose_type": "START_POSITION"},
         }
     )
 
@@ -270,24 +274,77 @@ async def test_health_accepts_pose_metadata() -> None:
 
 
 @pytest.mark.asyncio
-async def test_head_resolution_client_uses_camera_endpoint() -> None:
+async def test_mock_order_catalog_uses_active_sku_service() -> None:
     mock = Task1Mock()
     client = Task1Client(settings(), transport=mock.transport)
 
     async with client:
-        await client.set_head_resolution(1080)
-        await client.set_head_resolution(720)
+        names = await client.list_product_names()
 
-    resolution_requests = [
-        request
-        for request in mock.requests
-        if request.url.path == "/camera/head/resolution"
-    ]
-    assert [request.method for request in resolution_requests] == ["POST", "POST"]
-    assert [payload(request) for request in resolution_requests] == [
-        {"resolution": 1080},
-        {"resolution": 720},
-    ]
+    assert names == list(mock.names)
+    assert paths(mock) == ["/sku/get_all_names"]
+
+
+@pytest.mark.asyncio
+async def test_mock_order_selects_two_distinct_products_from_43_skus() -> None:
+    catalog = [f"商品-{index:02d}" for index in range(43)]
+
+    async def load_catalog() -> list[str]:
+        return catalog
+
+    order = await MockOrderSystem(load_catalog, rng=Random(7)).create_order()
+
+    assert order.catalog_size == 43
+    assert len(order.product_names) == 2
+    assert len(set(order.product_names)) == 2
+    assert set(order.product_names) <= set(catalog)
+
+
+@pytest.mark.asyncio
+async def test_interface_metrics_count_remote_protocol_errors() -> None:
+    async def fail_with_protocol_error(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection closed", request=request)
+
+    client = Task1Client(
+        settings(), transport=httpx.MockTransport(fail_with_protocol_error)
+    )
+    events: list[dict[str, object]] = []
+    client.set_trace_callback(events.append)
+    async with client:
+        with pytest.raises(Task1ServiceError) as error:
+            await client.list_product_names()
+
+    assert error.value.code == "NETWORK_ERROR"
+    assert len(events) == 2
+    [metric] = client.interface_metrics()
+    assert metric.call_count == 2
+    assert metric.failure_count == 2
+
+
+@pytest.mark.asyncio
+async def test_interface_metrics_count_cancelled_in_flight_request() -> None:
+    request_started = asyncio.Event()
+    never_finish = asyncio.Event()
+
+    async def wait_forever(request: httpx.Request) -> httpx.Response:
+        request_started.set()
+        await never_finish.wait()
+        return httpx.Response(200, json=[])
+
+    client = Task1Client(settings(), transport=httpx.MockTransport(wait_forever))
+    events: list[dict[str, object]] = []
+    client.set_trace_callback(events.append)
+    async with client:
+        request_task = asyncio.create_task(client.list_product_names())
+        await request_started.wait()
+        request_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request_task
+
+    assert len(events) == 1
+    [metric] = client.interface_metrics()
+    assert metric.call_count == 1
+    assert metric.failure_count == 1
 
 
 @pytest.mark.asyncio
@@ -304,6 +361,15 @@ async def test_task1_runs_full_pick_place_flow() -> None:
     assert result.held_items == {}
     assert [payload(request)["hand"] for request in mock.requests if request.url.path == "/pick"] == ["LEFT", "RIGHT"]
     assert [payload(request)["level"] for request in mock.requests if request.url.path == "/pick"] == ["L1", "L1"]
+    pick_requests = [request for request in mock.requests if request.url.path == "/pick"]
+    assert [payload(request)["slot_id"] for request in pick_requests] == [
+        result.target_items[0].product_slot_id,
+        result.target_items[1].product_slot_id,
+    ]
+    assert [payload(request)["location_id"] for request in pick_requests] == [
+        result.target_items[0].target_id,
+        result.target_items[1].target_id,
+    ]
     [release_both] = [
         request
         for request in mock.requests
@@ -317,149 +383,142 @@ async def test_task1_runs_full_pick_place_flow() -> None:
     assert not [request for request in mock.requests if request.url.path == "/place"]
     navigation = [payload(request).get("target_id") for request in mock.requests if request.url.path == "/navigation/navigate"]
     assert navigation[-2:] == ["delivery_place", "task_boundary"]
+    assert result.order is not None
+    assert result.order.source == "mock_random"
+    assert result.order.catalog_size == 2
+    assert result.order.product_names == list(mock.names)
+    assert "/sku/get_all_names" in paths(mock)
 
-    resolution_requests = [
+
+@pytest.mark.asyncio
+async def test_task1_forwards_exact_connector_slot_target_and_hand() -> None:
+    fixed_left_product = "固定左手商品"
+    connector_product = "外星人电解质水白桃口味0糖"
+    fixed_left_slot = "H2_L03_C01"
+    connector_slot = "H2_L03_C03"
+    mock = Task1Mock()
+    mock.names = {
+        fixed_left_product: fixed_left_slot,
+        connector_product: connector_slot,
+    }
+    task_settings = settings().model_copy(
+        update={
+            "product_grasp_options": {
+                fixed_left_slot: [
+                    GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT")
+                ],
+                connector_slot: [
+                    GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT"),
+                    GraspOption(hands=[Hand.RIGHT], target_id="H12_INSPECT"),
+                ],
+            }
+        }
+    )
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(
+            Task1Request(
+                order_id="connector-context-test",
+                product_names=[fixed_left_product, connector_product],
+            )
+        )
+
+    assert [item.product_slot_id for item in result.target_items] == [
+        fixed_left_slot,
+        connector_slot,
+    ]
+    assert [item.hand for item in result.target_items] == [Hand.LEFT, Hand.RIGHT]
+    assert [item.target_id for item in result.target_items] == [
+        "H2_INSPECT",
+        "H12_INSPECT",
+    ]
+    connector_pick = next(
         request
         for request in mock.requests
-        if request.url.path == "/camera/head/resolution"
-    ]
-    assert [payload(request)["resolution"] for request in resolution_requests] == [
-        1080,
-        720,
-    ]
-    switch_index = mock.requests.index(resolution_requests[0])
-    receipt_navigation_index = next(
-        index
-        for index, request in enumerate(mock.requests)
-        if request.url.path == "/navigation/navigate"
-        and payload(request).get("target_id") == "receipt_viewpoint"
+        if request.url.path == "/pick"
+        and payload(request)["product_name"] == connector_product
     )
-    receipt_pose_index = next(
-        index
-        for index, request in enumerate(mock.requests)
-        if request.url.path == "/pose/prepare"
-        and payload(request).get("pose_type") == "RECEIPT_VIEW"
-    )
-    parse_index = paths(mock).index("/perception/parse")
-    restore_index = mock.requests.index(resolution_requests[1])
-    sku_index = paths(mock).index("/sku/search_by_name")
-    assert (
-        switch_index
-        < receipt_navigation_index
-        < receipt_pose_index
-        < parse_index
-        < restore_index
-        < sku_index
-    )
-
-
-@pytest.mark.asyncio
-async def test_task1_only_waits_for_unelapsed_exposure_time(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    mock = Task1Mock()
-    waited: list[float] = []
-    times = iter((10.0, 10.2))
-
-    async def fake_sleep(seconds: float) -> None:
-        waited.append(seconds)
-
-    monkeypatch.setattr(
-        task1_service_module, "RECEIPT_EXPOSURE_SETTLE_SECONDS", 0.5
-    )
-    monkeypatch.setattr(task1_service_module, "monotonic", lambda: next(times))
-    monkeypatch.setattr(task1_service_module, "sleep", fake_sleep)
-    client = Task1Client(settings(), transport=mock.transport)
-
-    async with client:
-        await Task1Orchestrator(settings(), client).run(Task1Request())
-
-    assert waited == [pytest.approx(0.3)]
-
-
-@pytest.mark.asyncio
-async def test_task1_restores_720_when_receipt_parse_fails() -> None:
-    mock = Task1Mock()
-    mock.perception_failure = True
-    client = Task1Client(settings(), transport=mock.transport)
-
-    async with client:
-        result = await Task1Orchestrator(settings(), client).run(Task1Request())
-
-    assert result.status == "SUCCEEDED"
-    assert result.product_names == []
-    assert [
-        payload(request)["resolution"]
-        for request in mock.requests
-        if request.url.path == "/camera/head/resolution"
-    ] == [1080, 720]
-    assert "/sku/search_by_name" not in paths(mock)
-    assert "/pick" not in paths(mock)
-    assert [
-        payload(request)["target_id"]
+    assert payload(connector_pick) == {
+        "task_type": "SORTING",
+        "product_name": connector_product,
+        "hand": "RIGHT",
+        "level": "L3",
+        "slot_id": connector_slot,
+        "location_id": "H12_INSPECT",
+    }
+    assert "/perception/parse" not in paths(mock)
+    assert "/camera/head/resolution" not in paths(mock)
+    assert all(
+        payload(request).get("target_id") != "receipt_viewpoint"
         for request in mock.requests
         if request.url.path == "/navigation/navigate"
-    ][-1] == "task_boundary"
+    )
+    metrics = {metric.interface: metric for metric in result.interface_metrics}
+    assert metrics["sku/sku/get_all_names"].call_count == 1
+    assert metrics["sku/sku/get_all_names"].success_count == 1
+    assert metrics["sku/sku/get_all_names"].total_duration_ms >= 0
 
 
 @pytest.mark.asyncio
-async def test_task1_uses_receipt_result_after_it_appears_twice() -> None:
+async def test_task1_executes_the_order_previewed_in_the_web_console() -> None:
     mock = Task1Mock()
-    mock.receipt_results = [
-        [f"错误商品{attempt}"] for attempt in range(1, 6)
-    ] + [
-        ["可口可乐罐装", "百事可乐瓶装"],
-        ["百事可乐瓶装", "可口可乐罐装"],
-    ]
     client = Task1Client(settings(), transport=mock.transport)
+    request = Task1Request(
+        order_id="preview-order",
+        product_names=["百事可乐瓶装", "可口可乐罐装"],
+    )
 
     async with client:
-        result = await Task1Orchestrator(settings(), client).run(Task1Request())
+        result = await Task1Orchestrator(settings(), client).run(request)
 
     assert result.product_names == ["百事可乐瓶装", "可口可乐罐装"]
-    assert mock.receipt_attempts == 7
-    assert [target.product_name for target in result.target_items] == [
-        "百事可乐瓶装",
-        "可口可乐罐装",
-    ]
+    assert result.order is not None
+    assert result.order.order_id == "preview-order"
+    assert [target.product_name for target in result.target_items] == result.product_names
 
 
-@pytest.mark.asyncio
-async def test_task1_uses_current_resolution_when_1080_switch_fails() -> None:
-    mock = Task1Mock()
-    mock.resolution_failures.add(1080)
-    client = Task1Client(settings(), transport=mock.transport)
-
-    async with client:
-        result = await Task1Orchestrator(settings(), client).run(Task1Request())
-
-    assert result.status == "SUCCEEDED"
-    assert [
-        payload(request)["resolution"]
-        for request in mock.requests
-        if request.url.path == "/camera/head/resolution"
-    ] == [1080, 720]
-    assert [
-        request
-        for request in mock.requests
-        if request.url.path == "/navigation/navigate"
-        and payload(request).get("target_id") == "receipt_viewpoint"
-    ]
-    assert "/perception/parse" in paths(mock)
+@pytest.mark.parametrize(
+    "product_names",
+    [[], ["可口可乐罐装"], ["可口可乐罐装", "可口可乐罐装"]],
+)
+def test_task1_request_rejects_invalid_mock_orders(product_names: list[str]) -> None:
+    with pytest.raises(ValueError):
+        Task1Request(product_names=product_names)
 
 
-@pytest.mark.asyncio
-async def test_task1_continues_when_720_restore_fails() -> None:
-    mock = Task1Mock()
-    mock.resolution_failures.add(720)
-    client = Task1Client(settings(), transport=mock.transport)
+def test_task1_request_rejects_blank_mock_order_id() -> None:
+    with pytest.raises(ValueError):
+        Task1Request(order_id="   ")
 
-    async with client:
-        result = await Task1Orchestrator(settings(), client).run(Task1Request())
 
-    assert result.status == "SUCCEEDED"
-    assert "/sku/search_by_name" in paths(mock)
-    assert "/pick" in paths(mock)
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"order_id": "preview-order"},
+        {"product_names": ["可口可乐罐装", "百事可乐瓶装"]},
+    ],
+)
+def test_task1_request_requires_complete_preview_order(payload: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        Task1Request.model_validate(payload)
+
+
+def test_task1_settings_ignore_removed_receipt_stage_keys() -> None:
+    raw_settings = settings().model_dump(mode="json")
+    raw_settings["receipt_viewpoint"] = "receipt_viewpoint"
+    raw_settings["services"].update(
+        perception="http://perception.local",
+        camera="http://camera.local",
+    )
+    raw_settings["timeouts"].update(
+        receipt_seconds=30,
+        resolution_seconds=10,
+    )
+
+    migrated = Task1Settings.from_mapping(raw_settings, CONFIG_DIR)
+
+    assert migrated == settings()
 
 
 @pytest.mark.asyncio
@@ -472,6 +531,89 @@ async def test_task1_uses_first_location_when_sku_has_multiple_locations() -> No
 
     assert result.target_items[0].product_slot_id == "H2_F_L1_C01"
     assert result.target_items[0].picked is True
+
+
+def test_task1_rejects_unmapped_new_style_slot_with_business_error() -> None:
+    orchestrator = Task1Orchestrator(settings(), None)  # type: ignore[arg-type]
+    target = TargetItem(
+        product_name="未配置商品",
+        product_slot_id="H1_L01_C99",
+        target_id="",
+        shelf_level="L1",
+        hand=Hand.LEFT,
+    )
+
+    with pytest.raises(Task1ServiceError) as error:
+        orchestrator._plan_grasps([target])
+
+    assert error.value.code == "NO_FEASIBLE_HAND_ASSIGNMENT"
+
+
+@pytest.mark.asyncio
+async def test_task1_reselects_overlapping_sku_location_to_keep_slots_distinct(
+    tmp_path: Path,
+) -> None:
+    mock = Task1Mock()
+    mock.sku_locations = {
+        "可口可乐罐装": ["H3_L01_C03", "H3_L01_C04"],
+        "百事可乐瓶装": ["H3_L01_C03"],
+    }
+    task_settings = settings().model_copy(
+        update={
+            "log_dir": str(tmp_path),
+            "product_grasp_options": {
+                "H3_L01_C03": [
+                    GraspOption(hands=[Hand.LEFT], target_id="H3_INSPECT")
+                ],
+                "H3_L01_C04": [
+                    GraspOption(hands=[Hand.RIGHT], target_id="H3_INSPECT")
+                ],
+            }
+        }
+    )
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
+
+    assert [item.product_slot_id for item in result.target_items] == [
+        "H3_L01_C04",
+        "H3_L01_C03",
+    ]
+    assert [item.hand for item in result.target_items] == [Hand.RIGHT, Hand.LEFT]
+    assert all(item.picked and item.placed for item in result.target_items)
+
+
+def test_task1_rejects_two_products_when_only_same_slot_is_available() -> None:
+    shared_slot = "H3_L01_C03"
+    task_settings = settings().model_copy(
+        update={
+            "product_grasp_options": {
+                shared_slot: [
+                    GraspOption(
+                        hands=[Hand.LEFT, Hand.RIGHT], target_id="H3_INSPECT"
+                    )
+                ]
+            }
+        }
+    )
+    orchestrator = Task1Orchestrator(task_settings, None)  # type: ignore[arg-type]
+    targets = [
+        TargetItem(
+            product_name=product_name,
+            product_slot_id=shared_slot,
+            target_id="",
+            shelf_level="L1",
+            hand=Hand.LEFT,
+        )
+        for product_name in ("商品一", "商品二")
+    ]
+
+    with pytest.raises(Task1ServiceError) as error:
+        orchestrator._plan_grasps(targets, [[shared_slot], [shared_slot]])
+
+    assert error.value.code == "NO_FEASIBLE_HAND_ASSIGNMENT"
+    assert "distinct physical slot" in error.value.message
 
 
 @pytest.mark.parametrize(
@@ -523,26 +665,33 @@ async def test_task1_selects_sku_location_by_shelf_priority(
 @pytest.mark.asyncio
 async def test_task1_skips_configured_product_before_sku_lookup() -> None:
     mock = Task1Mock()
+    mock.names["雪碧罐装"] = "H2_F_L1_C02"
     task_settings = settings().model_copy(
-        update={"skip_product_names": ["可口可乐罐装"]}
+        update={
+            "skip_product_names": ["可口可乐罐装"],
+            "product_hand_options": {
+                **settings().product_hand_options,
+                "H2_F_L1_C02": ["LEFT", "RIGHT"],
+            },
+        }
     )
     client = Task1Client(task_settings, transport=mock.transport)
 
     async with client:
         result = await Task1Orchestrator(task_settings, client).run(Task1Request())
 
-    assert result.product_names == ["可口可乐罐装", "百事可乐瓶装"]
-    assert [target.product_name for target in result.target_items] == ["百事可乐瓶装"]
+    assert result.product_names == ["百事可乐瓶装", "雪碧罐装"]
+    assert [target.product_name for target in result.target_items] == result.product_names
     assert [
         request.url.params["name"]
         for request in mock.requests
         if request.url.path == "/sku/search_by_name"
-    ] == ["百事可乐瓶装"]
+    ] == result.product_names
     assert [
         payload(request)["product_name"]
         for request in mock.requests
         if request.url.path == "/pick"
-    ] == ["百事可乐瓶装"]
+    ] == result.product_names
 
 
 @pytest.mark.asyncio
@@ -569,19 +718,16 @@ async def test_task1_defers_configured_product_until_after_other_product() -> No
 
 
 @pytest.mark.asyncio
-async def test_task1_still_picks_deferred_product_when_it_is_the_only_product() -> None:
+async def test_task1_mock_order_requires_at_least_two_catalog_products() -> None:
     mock = Task1Mock()
     mock.names = {"可口可乐罐装": "H2_F_L1_C01"}
-    task_settings = settings().model_copy(
-        update={"defer_product_names": ["可口可乐罐装"]}
-    )
-    client = Task1Client(task_settings, transport=mock.transport)
+    client = Task1Client(settings(), transport=mock.transport)
 
     async with client:
-        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
+        with pytest.raises(Task1ServiceError) as error:
+            await Task1Orchestrator(settings(), client).create_mock_order()
 
-    assert [target.product_name for target in result.target_items] == ["可口可乐罐装"]
-    assert result.target_items[0].placed is True
+    assert error.value.code == "INVALID_RESPONSE"
 
 
 @pytest.mark.parametrize(
@@ -624,7 +770,6 @@ async def test_task1_navigates_by_inspection_target_and_reuses_same_target() -> 
         if request.url.path == "/navigation/navigate"
     ]
     assert navigation == [
-        "receipt_viewpoint",
         "H2_F_L_INSPECT",
         "delivery_place",
         "task_boundary",
@@ -1035,12 +1180,17 @@ async def test_task1_health_failure_returns_start() -> None:
         request for request in mock.requests if request.url.path == "/navigation/navigate"
     ]
     assert [payload(request)["target_id"] for request in navigation_requests] == ["start"]
+    assert error.value.interface_metrics
+    assert any(
+        metric.interface == "navigation/navigation/navigate"
+        for metric in error.value.interface_metrics
+    )
 
 
 @pytest.mark.asyncio
 async def test_task1_reports_failure_recovery_error_when_start_navigation_fails() -> None:
     mock = Task1Mock()
-    mock.health["perception"] = "ERROR"
+    mock.health["sku"] = "ERROR"
     mock.navigation_failure = True
     client = Task1Client(settings(), transport=mock.transport)
     async with client:
@@ -1058,12 +1208,18 @@ async def test_task1_retries_pick_with_same_idempotency_key() -> None:
     mock.pick_timeout_once = True
     client = Task1Client(settings(), transport=mock.transport)
     async with client:
-        await Task1Orchestrator(settings(), client).run(Task1Request())
+        result = await Task1Orchestrator(settings(), client).run(Task1Request())
 
     pick_requests = [request for request in mock.requests if request.url.path == "/pick"]
     assert mock.pick_attempts == 3
     assert len(pick_requests) == 3
     assert pick_requests[0].headers["Idempotency-Key"] == pick_requests[1].headers["Idempotency-Key"]
+    metrics = {metric.interface: metric for metric in result.interface_metrics}
+    pick_metric = metrics["pick_place/pick"]
+    assert pick_metric.call_count == 3
+    assert pick_metric.success_count == 2
+    assert pick_metric.failure_count == 1
+    assert pick_metric.average_duration_ms >= 0
 
 
 @pytest.mark.asyncio
@@ -1078,9 +1234,11 @@ async def test_task1_writes_pickplace_style_operation_log(tmp_path) -> None:
     assert len(directories) == 1
     assert (directories[0] / "operation.json").exists()
     events = (directories[0] / "events.jsonl").read_text(encoding="utf-8")
-    assert '"event": "小票识别"' in events
+    assert '"event": "模拟点单"' in events
     assert '"event": "SKU货位转换"' in events
     assert '"event": "抓取"' in events
+    assert '"duration_ms":' in events
+    assert '"call_count":' in events
     assert '"event": "operation"' in events
 
 

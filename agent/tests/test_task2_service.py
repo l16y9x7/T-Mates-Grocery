@@ -131,6 +131,8 @@ def create_baselines(task_settings: Task2Settings) -> None:
             path = Path(task_settings.baseline_dir) / f"{target_id}_{pose.directory_suffix}" / "rgb.jpg"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(b"baseline")
+            (path.parent / "depth_mm.npy").write_bytes(b"depth")
+            (path.parent / "meta.json").write_text("{}", encoding="utf-8")
 
 
 def ready_settings(tmp_path: Path) -> Task2Settings:
@@ -141,6 +143,10 @@ def ready_settings(tmp_path: Path) -> Task2Settings:
 
 def shortage(*names: str) -> list[dict[str, str]]:
     return [{"shortage_product_name": name} for name in names]
+
+
+def shortage_slot(name: str, slot_id: str) -> dict[str, str]:
+    return {"shortage_product_name": name, "slot_id": slot_id}
 
 
 def payload(request: httpx.Request) -> dict[str, object]:
@@ -360,6 +366,62 @@ async def test_task2_unknown_pick_disables_hand_and_finishes_inspection(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_task2_tries_the_other_hand_when_one_hand_becomes_uncertain(
+    tmp_path: Path,
+) -> None:
+    mock = Task2Mock(
+        [
+            shortage("商品一", "商品二", "商品三"),
+            [],
+            shortage("右侧商品"),
+            [],
+        ]
+    )
+    task_settings = ready_settings(tmp_path)
+    task_settings.product_hand_options["H1_F_L1_C02"] = ProductHandOption(
+        product_name="商品二",
+        hands=["RIGHT"],
+        target_id="H1_F_L_INSPECT",
+    )
+    first_left_pick = True
+
+    async def unknown_first_left_pick(request: httpx.Request) -> httpx.Response:
+        nonlocal first_left_pick
+        if request.url.path == "/pick" and first_left_pick:
+            first_left_pick = False
+            mock.requests.append(request)
+            return httpx.Response(
+                502,
+                json={
+                    "error_code": "ACTION_RESULT_UNKNOWN",
+                    "message": "left pick result unknown",
+                },
+            )
+        return await mock.handle(request)
+
+    async with Task2Client(
+        task_settings,
+        transport=httpx.MockTransport(unknown_first_left_pick),
+    ) as client:
+        result = await Task2Orchestrator(task_settings, client).run(Task2Request())
+
+    assert [item.product_name for item in result.target_items] == [
+        "商品一",
+        "商品二",
+        "右侧商品",
+    ]
+    assert [item.product_name for item in result.target_items if item.placed] == [
+        "商品二",
+        "右侧商品",
+    ]
+    assert [payload(request)["product_name"] for request in requests_for(mock, "/pick")] == [
+        "商品一",
+        "商品二",
+        "右侧商品",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_task2_matches_normalized_product_name(tmp_path: Path) -> None:
     configured_name = "Lays乐事薯片墨西哥鸡汁番茄味"
     detected_name = "Lay's乐事薯片墨西哥鸡汁番茄味"
@@ -391,17 +453,104 @@ def test_task2_production_config_has_its_own_face_order() -> None:
     task_settings = TaskServiceSettings.load(CONFIG_DIR / "runtime.production.yaml")
 
     assert task_settings.tasks.task2.inspection_points == [
-        "H2_F_L_INSPECT",
-        "H2_F_R_INSPECT",
-        "H1_F_L_INSPECT",
-        "H1_F_R_INSPECT",
-        "H1_B_L_INSPECT",
-        "H1_B_R_INSPECT",
-        "H2_B_L_INSPECT",
-        "H2_B_R_INSPECT",
+        "H1_INSPECT",
+        "H12_INSPECT",
+        "H2_INSPECT",
+        "H23_INSPECT",
+        "H3_INSPECT",
     ]
-    assert task_settings.tasks.task0.inspection_points[0] == "H1_F_L_INSPECT"
-    assert task_settings.tasks.task3.inspection_points[0].target_id == "H1_F_L_INSPECT"
+    assert task_settings.tasks.task0.inspection_points[0] == "H1_INSPECT"
+    assert task_settings.tasks.task3.inspection_points[0].target_id == "H1_INSPECT"
+    assert task_settings.tasks.task2.product_hand_options_schema_version == "2.0"
+
+
+@pytest.mark.asyncio
+async def test_task2_v2_picks_two_exact_slots_in_one_two_hand_batch(
+    tmp_path: Path,
+) -> None:
+    task_settings = settings(tmp_path)
+    task_settings.inspection_points = [
+        "H1_INSPECT",
+        "H12_INSPECT",
+        "H2_INSPECT",
+    ]
+    task_settings.product_hand_options_schema_version = "2.0"
+    task_settings.product_hand_options = {
+        "H1_L01_C05": ProductHandOption.model_validate(
+            {
+                "product_name": "汰渍肥皂",
+                "grasp_options": [
+                    {"hands": ["RIGHT"], "target_id": "H1_INSPECT"},
+                    {"hands": ["LEFT"], "target_id": "H12_INSPECT"},
+                ],
+            }
+        ),
+        "H2_L01_C01": ProductHandOption.model_validate(
+            {
+                "product_name": "可口可乐罐装",
+                "grasp_options": [
+                    {"hands": ["LEFT"], "target_id": "H2_INSPECT"},
+                    {"hands": ["RIGHT"], "target_id": "H12_INSPECT"},
+                ],
+            }
+        ),
+    }
+    create_baselines(task_settings)
+    mock = Task2Mock(
+        [
+            [shortage_slot("汰渍肥皂", "H1_L01_C05")],
+            [],
+            [shortage_slot("汰渍肥皂", "H1_L01_C05")],
+            [],
+            [shortage_slot("可口可乐罐装", "H2_L01_C01")],
+            [],
+        ]
+    )
+
+    async with Task2Client(task_settings, transport=mock.transport) as client:
+        result = await Task2Orchestrator(task_settings, client).run(Task2Request())
+
+    assert [item.product_slot_id for item in result.target_items] == [
+        "H1_L01_C05",
+        "H2_L01_C01",
+    ]
+    assert [item.hand.value for item in result.target_items] == ["LEFT", "RIGHT"]
+    assert {
+        item.inspection_target_id for item in result.target_items
+    } == {"H12_INSPECT"}
+    picks = requests_for(mock, "/pick")
+    places = requests_for(mock, "/place")
+    assert len(picks) == 2
+    assert len(places) == 2
+    assert max(mock.requests.index(request) for request in picks) < min(
+        mock.requests.index(request) for request in places
+    )
+    assert [payload(request)["slot_id"] for request in places] == [
+        "H1_L01_C05",
+        "H2_L01_C01",
+    ]
+    replenishment_navigations = [
+        request
+        for request in requests_for(mock, "/navigation/navigate")
+        if payload(request)["target_id"] == task_settings.replenishment_pickup
+    ]
+    assert len(replenishment_navigations) == 1
+
+
+@pytest.mark.asyncio
+async def test_task2_v2_rejects_a_shortage_without_exact_slot_id(
+    tmp_path: Path,
+) -> None:
+    task_settings = settings(tmp_path)
+    task_settings.product_hand_options_schema_version = "2.0"
+    create_baselines(task_settings)
+    mock = Task2Mock([shortage("商品一"), [], [], []])
+
+    async with Task2Client(task_settings, transport=mock.transport) as client:
+        result = await Task2Orchestrator(task_settings, client).run(Task2Request())
+
+    assert result.target_items == []
+    assert not requests_for(mock, "/pick")
 
 
 @pytest.mark.asyncio

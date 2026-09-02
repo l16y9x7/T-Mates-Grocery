@@ -71,6 +71,8 @@ class OptionalLevelTest(unittest.TestCase):
             product_name="脉动菠萝口味",
             level="L4",
             hand="left",
+            slot_id="H2_L04_C03",
+            target_id="H2_INSPECT",
             image_name="rgb.jpg",
             image_base64="aW1hZ2U=",
         )
@@ -79,7 +81,11 @@ class OptionalLevelTest(unittest.TestCase):
             patch.object(
                 locate_main,
                 "lookup_sku_by_name",
-                return_value={"sku_id": "SKU_TEST", "name": "脉动菠萝口味"},
+                return_value={
+                    "sku_id": "SKU_TEST",
+                    "name": "脉动菠萝口味",
+                    "locations": ["H2_L04_C03"],
+                },
             ),
             patch.object(
                 locate_main,
@@ -91,6 +97,14 @@ class OptionalLevelTest(unittest.TestCase):
 
         self.assertIs(response, expected_response)
         self.assertIsNone(locate_product_in_image.call_args.kwargs["depth_image"])
+        self.assertEqual(
+            locate_product_in_image.call_args.kwargs["slot_id"],
+            "H2_L04_C03",
+        )
+        self.assertEqual(
+            locate_product_in_image.call_args.kwargs["target_id"],
+            "H2_INSPECT",
+        )
 
     def test_shortage_never_requires_hard_case_level(self) -> None:
         self.assertFalse(

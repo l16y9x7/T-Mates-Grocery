@@ -45,9 +45,11 @@ scripts/setup.sh
 | Web | `127.0.0.1:8108` | `GET /` | 统一任务、取放和机器人接口控制台 |
 | pick-place | `127.0.0.1:8086` | `POST /pick`、`POST /place` | 完成单次定位、取图、位姿估计和抓放 |
 
-四个任务请求体均为 `{}`，支持可选请求头 `Idempotency-Key`。`GET /health` 返回
-四个任务的聚合健康状态；任一 Task0-3 正在执行时，启动其他任务会返回 HTTP
-`409 TASK_IN_PROGRESS`。
+Task0、Task2、Task3 的请求体为 `{}`。Task1 也可用 `{}` 让服务端从当前 SKU 商品池
+随机生成订单；Web 会先调用 `POST /api/task1/mock-order` 展示两件不同商品，允许重新随机，
+再把同一 `order_id` 和 `product_names` 交给 Task1 执行。所有任务均支持可选请求头
+`Idempotency-Key`。`GET /health` 返回四个任务的聚合健康状态；任一 Task0-3 正在执行时，
+启动其他任务会返回 HTTP `409 TASK_IN_PROGRESS`。
 
 完整流程、真实端口及请求响应见
 [`doc/任务流程与pick-place真实端口接口清单.md`](doc/任务流程与pick-place真实端口接口清单.md)。
@@ -62,9 +64,9 @@ scripts/tasks.sh start
 也可以用一个地址统一启动、停止或重启两个服务；地址只对本次启动的进程生效，不会改写生产配置：
 
 ```bash
-scripts/services.sh start 192.168.3.226
-scripts/health-check.sh 192.168.3.226
-scripts/services.sh restart 192.168.3.226
+scripts/services.sh start 192.168.200.66
+scripts/health-check.sh 192.168.200.66
+scripts/services.sh restart 192.168.200.66
 scripts/services.sh stop
 ```
 
@@ -113,26 +115,30 @@ uv run --frozen python -m test1_service \
 ```
 
 命令启动后会立即驱动机器人完成整套采集流程，成功或失败后自动退出。机器人从
-`start` 出发，按 Task0 的八个巡检点顺序导航，并在每次导航前执行
+`start` 出发，按 Task0 的五个巡检点顺序导航，并在每次导航前执行
 `START_POSITION` 复位。每个巡检点固定按 L1-L5 调整位姿，每层等待 2 秒后依次采集
 左、右腕部相机的彩色图和深度图，最后复位并返回 `start`。
 
 每次运行的数据保存在独立的 `output/test1/<时间-运行ID>/` 批次目录中。单次成功
-运行生成 80 个采集目录，命名格式为 `<导航点>-<层数>-<LEFT|RIGHT>`，例如
-`H1_F_L_INSPECT-L1-LEFT`；每个目录包含 `rgb.jpg`（相机返回 PNG 时为
+运行生成 50 个采集目录，命名格式为 `<导航点>-<层数>-<LEFT|RIGHT>`，例如
+`H1_INSPECT-L1-LEFT`；每个目录包含 `rgb.jpg`（相机返回 PNG 时为
 `rgb.png`）和 `depth.png`。运行事件及接口调用记录保存在 `log/`。
 
 ## 任务说明
 
-- Task0 先到 `start`，再以蛇形姿态顺序巡检八个点；每次拍摄前等待 2 秒，完成后
+- Task0 先到 `start`，再依次巡检五个点；每次拍摄前等待 2 秒，完成后
   返回 `start`，并将 RGB-D 数据保存到 `output/task0/`。
-- Task1 识别小票并完成 SKU 货位转换、两件商品抓取、交付台放置和任务收尾；运行中单件
-  商品失败时保留已得分步骤并继续处理另一件。
-- Task2 按货架2正面、货架1正面、货架1背面、货架2背面分批巡检；每面识别完成后
-  逐件尝试补货，单个巡检点、候选或机械手失败时继续后续候选和货架，成功抓取并放置
-  两件后立即结束。
+- Task1 从 SKU 服务 `GET /sku/get_all_names` 返回的当前商品池（现为 43 个 SKU）中模拟
+  点单两个不同商品；Web 可预览并重新随机，执行时会重新读取目录并复核同一订单。通过
+  navigation、pose、pick-place、SKU 四项健康检查后，继续完成 SKU 货位转换、左右手联合
+  规划、抓取、交付台放置和任务收尾。单件失败时保留已得分步骤并继续处理另一件。
+- Task1 对每个真实下游 HTTP 尝试分别统计调用次数、成功/失败次数、本次耗时、累计耗时和
+  平均耗时；重试和失败尝试也计数，并在 Web 的“Task 1 接口统计”中实时展示。
+- Task2 先巡检 `H1/H12/H2/H23/H3` 五个点并按精确 `slot_id` 去重；若两件缺货商品
+  可分配给左右手，则一次到补货台各抓一件后依次放回，不能分配不同手时退化为两次
+  往返。单个巡检点、候选或机械手失败时继续后续候选，成功放置两件后结束。
 - Task3 由感知服务自行取图识别一对乱放商品，校验安全手能力后交换货位。
-- test1 按八个巡检点和 L1-L5 固定顺序采集左右腕部相机的 80 组 RGB-D 数据，仅通过
+- test1 按五个巡检点和 L1-L5 固定顺序采集左右腕部相机的 50 组 RGB-D 数据，仅通过
   上述一次性命令启动。
 
 Task2 和 Task3 运行前必须先成功完成一次 Task0 基准采集。

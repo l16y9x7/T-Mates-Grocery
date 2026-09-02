@@ -40,14 +40,11 @@ def test_one_robot_ip_drives_every_robot_service_url(tmp_path: Path) -> None:
         assert task.start_target_id == "start"
     assert tasks.tasks.task2.services.camera == f"http://{robot_ip}:8085"
     assert tasks.tasks.task3.services.camera == f"http://{robot_ip}:8085"
-    assert tasks.tasks.task1.services.camera == f"http://{robot_ip}:8085"
-    assert tasks.tasks.task1.timeouts.resolution_seconds == 60
     assert tasks.web.services.navigation_url == f"http://{robot_ip}:8081"
     assert tasks.web.services.pose_url == f"http://{robot_ip}:8084"
     assert pick_place.manipulation_url == f"http://{robot_ip}:8084"
     assert pick_place.camera_url == f"http://{robot_ip}:8085"
 
-    assert tasks.tasks.task1.services.perception == "http://127.0.0.1:8083"
     assert tasks.tasks.task1.services.pick_place == "http://127.0.0.1:8086"
     assert tasks.tasks.task1.services.sku == "http://127.0.0.1:25540"
     assert pick_place.pose_estimation_url == "http://127.0.0.1:8084"
@@ -79,19 +76,9 @@ def test_production_runtime_uses_one_yaml_and_external_product_map() -> None:
         "left": "left_wrist",
         "right": "right_wrist",
     }
-    assert len(settings.tasks.task1.product_hand_options) == 122
-    assert settings.tasks.task1.skip_product_names == [
-        "慢碳十色糙米",
-        "高纤七色糙米",
-        "山西黄小米",
-    ]
-    assert settings.tasks.task1.defer_product_names == [
-        "中盐精制盐",
-        "小苏打",
-        "镇江香醋",
-        "蒸鱼豉油",
-        "薄盐生抽",
-    ]
+    assert len(settings.tasks.task1.product_hand_options) == 74
+    assert settings.tasks.task1.skip_product_names == []
+    assert settings.tasks.task1.defer_product_names == []
     assert Path(pick_place.calibration_files["head"]) == CONFIG_DIR / "camera/head.json"
 
 
@@ -102,14 +89,11 @@ def test_production_runtime_uses_task2_specific_inspection_order() -> None:
 
     assert settings.task0.inspection_points == shared["inspection_points"]
     assert settings.task2.inspection_points == [
-        "H2_F_L_INSPECT",
-        "H2_F_R_INSPECT",
-        "H1_F_L_INSPECT",
-        "H1_F_R_INSPECT",
-        "H1_B_L_INSPECT",
-        "H1_B_R_INSPECT",
-        "H2_B_L_INSPECT",
-        "H2_B_R_INSPECT",
+        "H1_INSPECT",
+        "H12_INSPECT",
+        "H2_INSPECT",
+        "H23_INSPECT",
+        "H3_INSPECT",
     ]
     assert [point.target_id for point in settings.task3.inspection_points] == shared[
         "inspection_points"

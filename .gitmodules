@@ -1,3 +1,0 @@
-[submodule "manipulation/pose_estimation/GenPose2"]
-	path = manipulation/pose_estimation/GenPose2
-	url = git@github.com:chenwen0511/GenPose2.git

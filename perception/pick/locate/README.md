@@ -36,13 +36,16 @@ python main.py
 
 ### `POST /perception/pick/locate`
 
-请求包含商品名称和左右手信息：
+请求包含商品名称和左右手信息。Task1 的正式 SORTING 抓取还会传递精确货位和实际导航点：
 
 ```json
 {
   "task_type": "SORTING",
-  "product_name": "蒙牛纯牛奶",
-  "hand": "left"
+  "product_name": "外星人电解质水白桃口味0糖",
+  "hand": "right",
+  "level": "L3",
+  "slot_id": "H2_L03_C03",
+  "target_id": "H12_INSPECT"
 }
 ```
 
@@ -63,6 +66,7 @@ python main.py
 - `image_name` 用于标识上传图片并原样写入响应，只允许不包含路径的 JPG/PNG 文件名。
 - `image_name` 不用于服务器端查找文件；指定它时必须同时提供 `image_base64`。
 - `level` 默认可省略；仅当 `SORTING` 的商品名和 `hand` 命中 `hard_case_config.json` 中的顺序定位特例时必须提供。
+- 电解质和非猫薄荷脉动的 hard case 必须同时提供 `slot_id` 和 `target_id`；服务会校验商品、层、货位、手和导航点一致。
 
 处理流程：
 
@@ -78,14 +82,15 @@ python main.py
 
 ### SORTING hard case 顺序定位
 
-以下同品牌易混淆商品只在 `SORTING` 下启用顺序定位：脉动、外星人电解质水、
-草原红太阳烧烤料/烧烤酱、镇江香醋/蒸鱼豉油/薄盐生抽。其他 SKU 以及
+以下同品牌易混淆商品只在 `SORTING` 下启用顺序定位：非猫薄荷脉动、外星人电解质水、
+舒克牙膏柠檬百香果、草原红太阳烧烤料/烧烤酱、镇江香醋/蒸鱼豉油/薄盐生抽。脉动猫薄荷瓶以及其他 SKU、
 `SHORTAGE`、`MISPLACED` 保持上述原流程不变。
 
-是否进入 hard case 由 `perception/hard_case_config.json` 中的
-`商品名 + level + hand` 精确组合决定。请求传入的 `level` 用于从 SKU `locations`
-中定位对应层并查询从左到右的标准 SKU 顺序，不再自动选择最高层。未命中的组合按
-普通 case 运行。左手相机从标准顺序左端开始对应，右手相机从右端开始对应。
+电解质与非猫薄荷脉动的目标物理槽位及腕部视角由
+`perception/hard_case_view_layout.json` 配置。服务按 `slot_id` 确认目标列，再按
+`target_id + hand + level + group` 取得图像从左到右的可见槽序；右手在连接点不再被
+推断为整排右侧后缀。检测列数与配置不一致、目标槽不在该视角内，或商品/层/槽不一致时
+直接拒绝定位。`hard_case_config.json` 继续声明合法商品、层和手，并保留舒克牙膏等旧特例。
 
 SAM3 实例优先按 Qwen 陈列堆来源组成陈列列；Qwen 只返回一个合并区域时，使用过滤后的
 第一排 SAM 实例作为可见列。hard case 不使用深度做跨列筛选；系统拟合原图中红色货架
@@ -97,20 +102,18 @@ SAM3 实例优先按 Qwen 陈列堆来源组成陈列列；Qwen 只返回一个�
 `HARD_CASE_FRONT_UPPER_TOLERANCE_RATIO`、
 `HARD_CASE_FRONT_MAX_UPPER_TOLERANCE_RATIO` 和
 `HARD_CASE_FRONT_DISTANCE_GAP_RATIO` 调整。hard case 会先筛第一排，再对第一排中的重叠 SAM mask 去重，避免
-后排或局部 mask 把相邻商品传递性合并。Debug 响应的 `hard_case` 给出目标 location、顺序和
-陈列组映射；最终 `instances` 带有 `mapped_product_name`、
-`hard_case_group_index`、`is_selected`。正式接口只返回 `is_selected=true` 的目标实例。
-不要求当前图片检测到标准库中的全部品牌列：左手检测结果对应标准顺序最左侧的可见
-前缀，右手检测结果对应标准顺序最右侧的可见后缀。只有目标 SKU 不在当前可见列范围
-内时才拒识。
+后排或局部 mask 把相邻商品传递性合并。Debug 响应的 `hard_case` 给出目标 location、
+`target_slot_id`、`target_id`、`visible_slot_order` 和陈列组映射；最终 `instances` 带有
+`mapped_product_name`、`mapped_slot_id`、`hard_case_group_index`、`is_selected`。
+正式接口只返回 `is_selected=true` 的目标实例。
 
 若某个商品、层数和相机方向对应的实体货架存在标准库没有记录的重复列，可在
 `perception/hard_case_layout_overrides.json` 中按
 `商品名 + level + hand` 配置从相机保证的货架边缘开始的
 实际可见顺序：左手使用 `visible_order_from_left`，右手使用
 `visible_order_from_right`。重复的实体列必须在数组中重复填写。
-只有三个条件全部命中时才使用覆盖顺序，与输入图片文件无关；其他 hard case
-仍使用标准库顺序。
+只有三个条件全部命中时才使用覆盖顺序，与输入图片文件无关；该旧覆盖机制只用于尚未
+迁移到精确 slot/view 配置的 hard case。
 
 成功响应：
 

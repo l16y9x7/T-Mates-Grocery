@@ -11,7 +11,7 @@ from PIL import Image, UnidentifiedImageError
 ROOT = Path(__file__).resolve().parent
 IMAGES_ROOT = ROOT / "images_new"
 SKU_PATTERN = re.compile(r"^SKU_\d{3}$")
-LOCATION_PATTERN = re.compile(r"^H[12]_[FB]_L[1-5]_C\d{2}$")
+LOCATION_PATTERN = re.compile(r"^H[1-3]_L0[1-5]_C\d{2}$")
 PRODUCT_FIELDS = {"sku_id", "name", "images", "locations"}
 
 
@@ -27,6 +27,13 @@ def require(condition: bool, message: str) -> None:
 def main() -> None:
     catalog = load_json("products.json")
     products = catalog.get("products", [])
+
+    require(catalog.get("schema_version") == "2.0", "schema_version 必须是 2.0")
+    require(
+        isinstance(catalog.get("catalog_version"), str)
+        and bool(catalog["catalog_version"]),
+        "catalog_version 不能为空",
+    )
 
     sku_ids = [item.get("sku_id") for item in products]
     names = [item.get("name") for item in products]
@@ -102,6 +109,17 @@ def main() -> None:
         location for location, count in Counter(all_locations).items() if count > 1
     ]
     require(not duplicate_locations, f"位置被多个 SKU 占用: {duplicate_locations}")
+
+    row_columns: dict[str, list[int]] = {}
+    for location in all_locations:
+        row_id, column = location.rsplit("_C", 1)
+        row_columns.setdefault(row_id, []).append(int(column))
+    for row_id, columns in row_columns.items():
+        ordered = sorted(columns)
+        require(
+            ordered == list(range(1, ordered[-1] + 1)),
+            f"{row_id} 的列号不连续: {ordered}",
+        )
 
     print(
         f"校验通过：{len(products)} 个 SKU，{image_count} 张图片，"

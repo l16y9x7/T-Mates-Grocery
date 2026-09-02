@@ -9,7 +9,7 @@ BASE_URL="http://${TASKS_HOST}:${TASKS_PORT}"
 
 TASK_NAMES=(
   [0]="Task0 基准采集"
-  [1]="Task1 小票分拣"
+  [1]="Task1 模拟订单分拣"
   [2]="Task2 缺货补货"
   [3]="Task3 乱放交换"
 )
@@ -19,7 +19,7 @@ usage() {
 用法: $0 [--ensure-services] {0|1|2|3|health}
 
   0       启动 Task0 基准采集
-  1       启动 Task1 小票分拣
+  1       启动 Task1 模拟订单分拣（从当前 SKU 商品池随机选择两个不同商品）
   2       启动 Task2 缺货补货（需先成功完成 Task0）
   3       启动 Task3 乱放交换（需先成功完成 Task0）
   health  查询聚合健康状态

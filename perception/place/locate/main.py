@@ -149,6 +149,7 @@ class PlaceReferenceMaskRequest(BaseModel):
 
     task_type: TaskType = "SHORTAGE"
     product_name: str = Field(min_length=1)
+    slot_id: str | None = Field(default=None, min_length=1)
     location_id: str = Field(min_length=1)
     current_image_base64: str = Field(min_length=1)
     current_depth_image_base64: str = Field(min_length=1)
@@ -200,6 +201,7 @@ class PlaceLocateRequest(BaseModel):
     pose_type: PoseType
     reference_item_area: float | None = Field(default=None, gt=0)
     product_name: str = Field(min_length=1)
+    slot_id: str | None = Field(default=None, min_length=1)
 
     @field_validator("product_name", "location_id")
     @classmethod
@@ -207,6 +209,16 @@ class PlaceLocateRequest(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("value must not be blank")
+        return normalized
+
+    @field_validator("slot_id")
+    @classmethod
+    def normalize_optional_slot_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if re.fullmatch(r"H[1-3]_L0[1-5]_C\d{2}", normalized) is None:
+            raise ValueError("invalid slot_id")
         return normalized
 
 
@@ -218,6 +230,7 @@ class PlaceLocateResponse(BaseModel):
     """Current-image references consumed by downstream place pose estimation."""
 
     name: str
+    slot_id: str | None = None
     bbox: list[list[int]]
     mask: list[str]
     direction: ReferenceDirection
@@ -1636,8 +1649,13 @@ def locate_shortage_place_from_rgbd(
             current_rgb=current_rgb,
             current_depth_mm=current_depth_mm,
             product_name_filter=request.product_name,
+            slot_id_filter=request.slot_id,
         )
-        selection = select_place_references(analysis, request.product_name)
+        selection = select_place_references(
+            analysis,
+            request.product_name,
+            request.slot_id,
+        )
     except SamShortageError as error:
         message = str(error)
         status_code = 502 if message.startswith("SAM3 ") else 422
@@ -1688,6 +1706,7 @@ def locate_shortage_place_from_rgbd(
     current_image_path = (artifact_directory / "current_rgb.jpg").resolve()
     response = PlaceLocateResponse(
         name=request.product_name,
+        slot_id=request.slot_id,
         bbox=bboxes,
         mask=[encode_png_base64(mask) for mask in full_masks],
         direction=selection.direction,
@@ -1717,6 +1736,14 @@ def locate_shortage_place_from_rgbd(
 
 @router.post("/perception/place/locate", response_model=PlaceLocateResponse)
 def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
+    if request.task_type == "SHORTAGE" and request.slot_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "type": "missing_slot_id",
+                "message": "SHORTAGE place requires an exact slot_id",
+            },
+        )
     try:
         with inspection_temporary_directory() as temporary_directory:
             current = capture_head_rgbd(temporary_directory)
@@ -1733,6 +1760,7 @@ def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
             debug_request = PlaceLocateDebugRequest(
                 task_type=request.task_type,
                 product_name=request.product_name,
+                slot_id=request.slot_id,
                 location_id=request.location_id,
                 pose_type=request.pose_type,
                 current_image_name=current.rgb_path.name,
@@ -1760,6 +1788,7 @@ def locate_place(request: PlaceLocateRequest) -> PlaceLocateResponse:
         ) from error
     return PlaceLocateResponse(
         name=debug.name,
+        slot_id=request.slot_id,
         bbox=debug.bbox,
         mask=debug.mask,
         direction=debug.direction,

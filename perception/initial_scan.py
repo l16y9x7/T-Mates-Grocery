@@ -22,11 +22,11 @@ DEFAULT_SLOT_MAPPING_PATH = (
 INITIAL_SCAN_ROOT_ENVIRONMENT = "INITIAL_SCAN_ROOT"
 SLOT_MAPPING_ENVIRONMENT = "PRODUCT_HAND_OPTIONS_PATH"
 
-SLOT_PATTERN = re.compile(r"^H[12]_[FB]_L(?P<level>[1-5])_C\d{2}$")
-INSPECTION_TARGET_PATTERN = re.compile(r"^H[12]_[FB]_[LR]_INSPECT$")
+SLOT_PATTERN = re.compile(r"^H[1-3]_L0?(?P<level>[1-5])_C\d{2}$")
+INSPECTION_TARGET_PATTERN = re.compile(r"^H(?:1|12|2|23|3)_INSPECT$")
 MAPPING_LINE_PATTERN = re.compile(
-    r"^\s*(?P<slot>H[12]_[FB]_L[1-5]_C\d{2})\s*:.*?"
-    r"\btarget_id\s*:\s*(?P<target>H[12]_[FB]_[LR]_INSPECT)\s*[},]"
+    r"^\s*(?P<slot>H[1-3]_L0[1-5]_C\d{2})\s*:.*?"
+    r"\btarget_id\s*:\s*(?P<target>H(?:1|12|2|23|3)_INSPECT)\s*[},]"
 )
 
 

@@ -22,13 +22,14 @@ from uuid import uuid4
 
 import httpx
 import yaml
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import Body, FastAPI, HTTPException, Header
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from task_service.coordinator import TaskCoordinator, TaskServiceError
 from pick_place_service.models import PickPlaceSettings
+from task1_service.models import Task1ServiceError as Task1DomainError
 from task_service.settings import TaskServiceSettings
 
 from .settings import LOCATE_IMAGE_ROOTS, LOG_ROOT, SETTINGS, UNIFIED_SETTINGS
@@ -72,12 +73,6 @@ class PickRequest(BaseModel):
         if not value:
             raise ValueError("字段不能为空")
         return value
-
-
-class UnifiedTaskRequest(BaseModel):
-    """Task0-Task3 currently share an empty request body."""
-
-    model_config = {"extra": "forbid"}
 
 
 class PosePrepareRequest(BaseModel):
@@ -160,6 +155,54 @@ def configure_runtime(
     LOG_ROOT = settings.web.paths.log_dir
     LOCATE_IMAGE_ROOTS = tuple(settings.web.paths.locate_image_roots)
     COORDINATOR_GETTER = coordinator_getter
+
+
+def _navigation_target_config(
+    settings: TaskServiceSettings,
+) -> dict[str, list[dict[str, str]]]:
+    """Expose the active task target IDs without duplicating them in HTML."""
+
+    task_roles: dict[str, list[str]] = {}
+
+    def add_task_target(target_id: str, role: str) -> None:
+        roles = task_roles.setdefault(target_id, [])
+        if role not in roles:
+            roles.append(role)
+
+    for task in (settings.tasks.task1, settings.tasks.task2, settings.tasks.task3):
+        add_task_target(task.task_boundary, "任务判定点")
+    for task in (
+        settings.tasks.task0,
+        settings.tasks.task1,
+        settings.tasks.task2,
+        settings.tasks.task3,
+    ):
+        add_task_target(task.start_target_id, "起点")
+    add_task_target(settings.tasks.task1.delivery_place, "交付台放货点")
+    add_task_target(settings.tasks.task2.replenishment_pickup, "补货台取货点")
+
+    inspection_target_ids = list(
+        dict.fromkeys(
+            [
+                *settings.tasks.task0.inspection_points,
+                *settings.tasks.task2.inspection_points,
+                *(
+                    point.target_id
+                    for point in settings.tasks.task3.inspection_points
+                ),
+            ]
+        )
+    )
+    return {
+        "task_points": [
+            {"target_id": target_id, "label": " / ".join(roles)}
+            for target_id, roles in task_roles.items()
+        ],
+        "inspection_points": [
+            {"target_id": target_id, "label": f"{index}号巡检点"}
+            for index, target_id in enumerate(inspection_target_ids, start=1)
+        ],
+    }
 
 
 def _coordinator() -> TaskCoordinator:
@@ -724,7 +767,11 @@ def _interface_events(log_dir: Path | None, emitted: set[str]) -> list[dict[str,
         if response is None:
             continue
         status_code = response.get("status_code") if isinstance(response, dict) else None
-        status = "succeeded" if isinstance(status_code, int) and status_code < 400 else "failed"
+        status = (
+            "succeeded"
+            if isinstance(status_code, int) and 200 <= status_code < 300
+            else "failed"
+        )
         try:
             timestamp = datetime.fromtimestamp(response_path.stat().st_mtime).isoformat(
                 timespec="milliseconds"
@@ -799,6 +846,14 @@ async def _finish_unified_task(
             content["failed_interface"] = exc.failed_interface
         if getattr(exc, "url", None):
             content["url"] = exc.url
+        interface_metrics = getattr(exc, "interface_metrics", None)
+        if interface_metrics:
+            content["interface_metrics"] = [
+                metric.model_dump(mode="json")
+                if isinstance(metric, BaseModel)
+                else metric
+                for metric in interface_metrics
+            ]
         task_state.result = {
             "status_code": getattr(exc, "status_code", 500),
             "ok": False,
@@ -828,6 +883,7 @@ async def config() -> dict[str, object]:
         "perception_url": SERVICES.perception_url,
         "log_dir": str(LOG_ROOT),
         "robot_ip": ROBOT_IP,
+        "navigation_targets": _navigation_target_config(RUNTIME_SETTINGS),
         "restart_supported": restart_supported,
         "restart_unavailable_reason": restart_reason,
     }
@@ -1130,16 +1186,37 @@ async def place_visual(task_id: str) -> dict[str, object]:
     return _operation_visual(_find_log_dir(state.operation_key))
 
 
+@app.post("/api/task1/mock-order")
+async def create_task1_mock_order() -> dict[str, object]:
+    """Preview the same server-side random order that Task1 can execute."""
+
+    orchestrator = _coordinator().bindings["1"].orchestrator
+    create_order = getattr(orchestrator, "create_mock_order", None)
+    if not callable(create_order):
+        raise HTTPException(status_code=503, detail="Task1 模拟点单模块不可用")
+    try:
+        order = await create_order()
+    except Task1DomainError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    return {
+        "order_id": order.order_id,
+        "source": order.source,
+        "catalog_size": order.catalog_size,
+        "product_names": list(order.product_names),
+    }
+
+
 @app.post("/api/tasks/{task_id}/start")
 async def start_unified_task(
-    task_id: str, request: UnifiedTaskRequest
+    task_id: str,
+    request: dict[str, object] = Body(default_factory=dict),
 ) -> dict[str, str]:
     run_id = uuid4().hex
     operation_key = (
         f"web-task{task_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{run_id[:10]}"
     )
     execution = await _coordinator().start_background(
-        task_id, request.model_dump(mode="json"), operation_key
+        task_id, request, operation_key
     )
     state = PickTask(
         task_id=run_id,

@@ -395,6 +395,12 @@ class SubagentClient:
         }
         if kind == "pick" and request.level is not None:
             payload["level"] = request.level
+        if kind == "pick" and request.slot_id is not None:
+            payload["slot_id"] = request.slot_id
+        if kind == "pick" and request.location_id is not None:
+            # 8086 的 location_id 表示机器人当前实际到达的导航点；8083
+            # 的抓取定位契约使用 target_id 表示同一上下文。
+            payload["target_id"] = request.location_id
         response = await self._post(
             locate_url,
             f"/perception/{kind}/locate",
@@ -435,6 +441,8 @@ class SubagentClient:
             "location_id": request.location_id,
             "pose_type": request.pose_type,
         }
+        if request.slot_id is not None:
+            payload["slot_id"] = request.slot_id
         response = await self._post(
             locate_url,
             "/perception/place/locate",
@@ -447,6 +455,8 @@ class SubagentClient:
                 request.product_name
             ):
                 raise ValueError("locate response name does not match request")
+            if request.slot_id is not None and located.slot_id != request.slot_id:
+                raise ValueError("locate response slot_id does not match request")
             expected_count = 1 if located.direction == "up" else 2
             if len(located.bbox) != expected_count or len(located.mask) != expected_count:
                 raise ValueError(
@@ -728,6 +738,16 @@ class PickPlaceOrchestrator:
         self.frames = frames
 
     async def run(self, request: PickPlaceRequest, kind: str, operation_key: str) -> StatusResponse:
+        if (
+            kind == "place"
+            and request.task_type.value == "SHORTAGE"
+            and request.slot_id is None
+        ):
+            raise ServiceError(
+                "MISSING_SLOT_ID",
+                "SHORTAGE place requires an exact slot_id",
+                status_code=422,
+            )
         # 用 step 标记当前阶段；任何下游异常都会在统一日志中指出具体阶段。
         step = "定位"
         execution_pose: PoseResponse | None = None

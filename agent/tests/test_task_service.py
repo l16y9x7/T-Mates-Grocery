@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from task1_service.models import Task1ServiceError
+from task1_service.models import InterfaceMetric, Task1ServiceError
 from task_service.app import create_app
 from task_service.settings import TaskServiceSettings
 
@@ -29,12 +30,14 @@ class FakeOrchestrator:
         self.blocking = blocking
         self.started = asyncio.Event()
         self.release = asyncio.Event()
+        self.last_request = None
 
     async def ready(self) -> bool:
         return self.client.is_ready
 
     async def run(self, request, operation_key: str | None = None):
         assert type(request).__name__ == f"Task{self.task_id}Request"
+        self.last_request = request
         if self.blocking:
             self.started.set()
             await self.release.wait()
@@ -83,6 +86,15 @@ class FakeOrchestrator:
             "held_items": {},
         }
 
+    async def create_mock_order(self):
+        assert self.task_id == "1"
+        return SimpleNamespace(
+            order_id="preview-order",
+            source="mock_random",
+            catalog_size=43,
+            product_names=["可口可乐罐装", "百事可乐瓶装"],
+        )
+
 
 class FailingTask1(FakeOrchestrator):
     async def run(self, request, operation_key: str | None = None):
@@ -93,6 +105,19 @@ class FailingTask1(FakeOrchestrator):
             step="商品放置",
             failed_interface="manipulation_release",
             url="http://robot:8084/manipulation/release",
+            interface_metrics=[
+                InterfaceMetric(
+                    interface="pick_place/place",
+                    service="pick_place",
+                    method="POST",
+                    url="http://pick-place.local/place",
+                    call_count=2,
+                    success_count=1,
+                    failure_count=1,
+                    total_duration_ms=125.0,
+                    average_duration_ms=62.5,
+                )
+            ],
         )
 
 
@@ -260,7 +285,43 @@ async def test_domain_error_keeps_failed_step() -> None:
         "failed_step": "商品放置",
         "failed_interface": "manipulation_release",
         "url": "http://robot:8084/manipulation/release",
+        "interface_metrics": [
+            {
+                "interface": "pick_place/place",
+                "service": "pick_place",
+                "method": "POST",
+                "url": "http://pick-place.local/place",
+                "call_count": 2,
+                "success_count": 1,
+                "failure_count": 1,
+                "total_duration_ms": 125.0,
+                "average_duration_ms": 62.5,
+            }
+        ],
     }
+
+
+@pytest.mark.asyncio
+async def test_web_task1_failure_result_keeps_interface_metrics() -> None:
+    bindings = orchestrators(**{"1": FailingTask1("1")})
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app_for(bindings)),
+        base_url="http://tasks.local",
+    ) as client:
+        preview = await client.post("/api/task1/mock-order", json={})
+        started = await client.post(
+            "/api/tasks/1/start",
+            json={
+                "order_source": "mock_random",
+                "order_id": preview.json()["order_id"],
+                "product_names": preview.json()["product_names"],
+            },
+        )
+        event_stream = await client.get(started.json()["events_url"])
+
+    assert started.status_code == 200
+    assert '"interface_metrics"' in event_stream.text
+    assert '"call_count": 2' in event_stream.text
 
 
 @pytest.mark.asyncio
@@ -290,11 +351,16 @@ async def test_web_uses_one_task_panel_and_common_sse_routes() -> None:
     assert 'data-operation-mode="place"' in page.text
     assert 'id="robotIpForm"' in page.text
     assert 'id="taskTerminateButton"' in page.text
+    assert 'id="task1MockOrder"' in page.text
+    assert 'id="taskInterfaceMetrics"' in page.text
+    assert 'id="parseReceiptButton"' not in page.text
     assert "elapsedTimers.task.start()" in script
     assert "elapsedTimers.pick.start()" in script
     assert "elapsedTimers.place.start()" in script
     assert "setOperationMode(button.dataset.operationMode)" in script
     assert "/api/task-runs/${runId}/terminate" in script
+    assert 'fetch("/api/task1/mock-order"' in script
+    assert "applyInterfaceMetric(flowEvent)" in script
     assert page.headers["cache-control"] == "no-store"
     assert started.status_code == 200
     assert started.json()["task_id"] == "3"
@@ -304,14 +370,30 @@ async def test_web_uses_one_task_panel_and_common_sse_routes() -> None:
 
 @pytest.mark.asyncio
 async def test_web_starts_task1_through_the_unified_route() -> None:
+    bindings = orchestrators()
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app_for()), base_url="http://tasks.local"
+        transport=httpx.ASGITransport(app=app_for(bindings)),
+        base_url="http://tasks.local",
     ) as client:
-        started = await client.post("/api/tasks/1/start", json={})
+        preview = await client.post("/api/task1/mock-order", json={})
+        started = await client.post(
+            "/api/tasks/1/start",
+            json={
+                "order_source": "mock_random",
+                "order_id": preview.json()["order_id"],
+                "product_names": preview.json()["product_names"],
+            },
+        )
         event_stream = await client.get(started.json()["events_url"])
 
+    assert preview.status_code == 200
+    assert preview.json()["catalog_size"] == 43
+    assert len(preview.json()["product_names"]) == 2
     assert started.status_code == 200
     assert started.json()["task_id"] == "1"
     assert started.json()["events_url"].startswith("/api/task-runs/")
     assert "event: result" in event_stream.text
     assert '"task_type": "SORTING"' in event_stream.text
+    request = bindings["1"].last_request
+    assert request.order_id == "preview-order"
+    assert request.product_names == ["可口可乐罐装", "百事可乐瓶装"]

@@ -11,7 +11,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
-PRODUCT_SLOT_PATTERN = re.compile(r"^H[12]_[FB]_L[1-5]_C\d{2}$")
+PRODUCT_SLOT_PATTERN = re.compile(r"^(?:H[12]_[FB]_L[1-5]|H[1-3]_L0[1-5])_C\d{2}$")
 
 
 class TaskType(StrEnum):
@@ -32,10 +32,9 @@ class InspectionPose(StrEnum):
         return "UPPER" if self is InspectionPose.UPPER else "LOWER"
 
 
-class ProductHandOption(BaseModel):
+class GraspOption(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    product_name: str = Field(min_length=1)
     hands: list[Hand]
     target_id: str = Field(min_length=1)
 
@@ -49,10 +48,52 @@ class ProductHandOption(BaseModel):
         return value
 
 
+class ProductHandOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    product_name: str = Field(min_length=1)
+    grasp_options: list[GraspOption]
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_legacy_shape(cls, value: Any) -> Any:
+        if isinstance(value, dict) and "grasp_options" not in value:
+            value = dict(value)
+            value["grasp_options"] = [
+                {
+                    "hands": value.pop("hands", None),
+                    "target_id": value.pop("target_id", None),
+                }
+            ]
+        elif isinstance(value, dict) and isinstance(value.get("grasp_options"), dict):
+            value = dict(value)
+            value["grasp_options"] = [value["grasp_options"]]
+        return value
+
+    @field_validator("grasp_options")
+    @classmethod
+    def valid_grasp_options(cls, value: list[GraspOption]) -> list[GraspOption]:
+        if not value:
+            raise ValueError("grasp_options must not be empty")
+        return value
+
+    @property
+    def hands(self) -> list[Hand]:
+        return list(
+            dict.fromkeys(
+                hand for option in self.grasp_options for hand in option.hands
+            )
+        )
+
+    @property
+    def target_id(self) -> str:
+        return self.grasp_options[0].target_id
+
+
 class ProductHandOptionsFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.0", "2.0"]
     source_catalog_version: str = Field(min_length=1)
     product_hand_options: dict[str, ProductHandOption]
 
@@ -104,6 +145,7 @@ class Task2Settings(BaseModel):
     task_boundary: str = Field(min_length=1, default="task_boundary")
     start_target_id: str = Field(min_length=1, default="start")
     product_hand_options_file: str = Field(min_length=1)
+    product_hand_options_schema_version: Literal["1.0", "2.0"] = "1.0"
     product_hand_options: dict[str, ProductHandOption] = Field(default_factory=dict)
     log_dir: str = Field(min_length=1, default="log")
 
@@ -117,9 +159,10 @@ class Task2Settings(BaseModel):
             raise ValueError("inspection_points must not contain duplicates")
         invalid_targets = sorted(
             {
-                option.target_id
+                grasp.target_id
                 for option in self.product_hand_options.values()
-                if option.target_id not in self.inspection_points
+                for grasp in option.grasp_options
+                if grasp.target_id not in self.inspection_points
             }
         )
         if invalid_targets:
@@ -128,7 +171,9 @@ class Task2Settings(BaseModel):
                 + ", ".join(invalid_targets)
             )
         mapped_targets = {
-            option.target_id for option in self.product_hand_options.values()
+            grasp.target_id
+            for option in self.product_hand_options.values()
+            for grasp in option.grasp_options
         }
         missing_targets = sorted(set(self.inspection_points) - mapped_targets)
         if missing_targets:
@@ -157,6 +202,7 @@ class Task2Settings(BaseModel):
             options_path = Path(base_dir) / options_path
         with options_path.open("r", encoding="utf-8") as options_stream:
             options = ProductHandOptionsFile.model_validate(yaml.safe_load(options_stream))
+        raw_config["product_hand_options_schema_version"] = options.schema_version
         raw_config["product_hand_options"] = options.product_hand_options
         return cls.model_validate(raw_config)
 
@@ -177,6 +223,17 @@ class ShortageProductFinding(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     shortage_product_name: str
+    slot_id: str | None = None
+
+    @field_validator("slot_id")
+    @classmethod
+    def valid_optional_slot_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not PRODUCT_SLOT_PATTERN.fullmatch(normalized):
+            raise ValueError("invalid shortage slot_id")
+        return normalized
 
 
 class InspectionResponse(BaseModel):
@@ -216,11 +273,22 @@ class TargetItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     product_name: str
+    product_slot_id: str | None = None
     inspection_target_id: str
     inspection_pose_type: InspectionPose
     hand: Hand
     picked: bool = False
     placed: bool = False
+
+    @field_validator("product_slot_id")
+    @classmethod
+    def valid_optional_product_slot_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not PRODUCT_SLOT_PATTERN.fullmatch(normalized):
+            raise ValueError("invalid product_slot_id")
+        return normalized
 
 
 class Task2Result(BaseModel):

@@ -1,0 +1,114 @@
+robot:
+  ip: 192.168.3.226
+  ports:
+    navigation: 8081
+    pose: 8084
+    camera: 8085
+local_services:
+  perception: http://127.0.0.1:8083
+  pose_estimation: http://127.0.0.1:8084
+  pick_place: http://127.0.0.1:8086
+  sku: http://127.0.0.1:25540
+servers:
+  tasks:
+    host: 0.0.0.0
+    port: 8108
+  pick_place:
+    host: 0.0.0.0
+    port: 8086
+tasks:
+  shared:
+    inspection_points:
+    - H1_F_L_INSPECT
+    - H1_F_R_INSPECT
+    - H1_B_L_INSPECT
+    - H1_B_R_INSPECT
+    - H2_F_L_INSPECT
+    - H2_F_R_INSPECT
+    - H2_B_L_INSPECT
+    - H2_B_R_INSPECT
+    start_target_id: start
+    capture_settle_seconds: 2
+    camera: head
+    baseline_dir: ../output/task0
+    task_boundary: task_boundary
+    product_hand_options_file: product-hand-options.yaml
+    log_dir: ../log
+    timeouts:
+      connect_seconds: 3
+      health_seconds: 5
+      inspection_seconds: 180
+      sku_seconds: 10
+      navigation_seconds: 600
+      pose_seconds: 300
+      camera_seconds: 30
+      pick_seconds: 600
+      place_seconds: 600
+  task0:
+    output_dir: ../output/task0
+  task1:
+    receipt_viewpoint: receipt_viewpoint
+    delivery_place: delivery_place
+    skip_product_names:
+    - 慢碳十色糙米
+    - 高纤七色糙米
+    - 山西黄小米
+    defer_product_names:
+    - 中盐精制盐
+    - 小苏打
+    - 镇江香醋
+    - 蒸鱼豉油
+    - 薄盐生抽
+    timeouts:
+      receipt_seconds: 30
+      navigation_seconds: 90
+      pose_seconds: 30
+      pick_seconds: 90
+      place_seconds: 90
+  task2:
+    inspection_points:
+    - H2_F_L_INSPECT
+    - H2_F_R_INSPECT
+    - H1_F_L_INSPECT
+    - H1_F_R_INSPECT
+    - H1_B_L_INSPECT
+    - H1_B_R_INSPECT
+    - H2_B_L_INSPECT
+    - H2_B_R_INSPECT
+    replenishment_pickup: replenishment_pickup
+    timeouts:
+      inspection_seconds: 30
+      navigation_seconds: 90
+      pose_seconds: 30
+      pick_seconds: 90
+      place_seconds: 90
+  task3: {}
+  test1:
+    output_dir: ../output/test1
+pick_place:
+  pick_cameras:
+    left: left_wrist
+    right: right_wrist
+  shortage_pick_camera: head
+  place_camera: head
+  calibration_files:
+    head: camera/head.json
+    left_wrist: camera/left_wrist.json
+    right_wrist: camera/right_wrist.json
+  temp_dir: /tmp/pick-place
+  log_dir: ../log
+  timeouts:
+    connect_seconds: 3
+    locate_seconds: 600
+    camera_seconds: 15
+    pose_seconds: 300
+    action_seconds: 600
+    check_seconds: 120
+    health_seconds: 5
+web:
+  request_timeout_seconds: 900
+  paths:
+    log_dir: ../log
+    locate_image_roots:
+    - ..
+    - /tmp

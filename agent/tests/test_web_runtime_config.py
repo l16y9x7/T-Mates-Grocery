@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -16,6 +17,77 @@ CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 
 class IdleCoordinator:
     active_task_id = None
+
+
+@pytest.mark.asyncio
+async def test_config_exposes_navigation_targets_from_active_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = SimpleNamespace(
+        tasks=SimpleNamespace(
+            task0=SimpleNamespace(
+                start_target_id="configured_start",
+                inspection_points=["POINT_A", "POINT_B"],
+            ),
+            task1=SimpleNamespace(
+                task_boundary="configured_boundary",
+                start_target_id="configured_start",
+                delivery_place="configured_delivery",
+            ),
+            task2=SimpleNamespace(
+                task_boundary="configured_boundary",
+                start_target_id="configured_start",
+                replenishment_pickup="configured_replenishment",
+                inspection_points=["POINT_B", "POINT_C"],
+            ),
+            task3=SimpleNamespace(
+                task_boundary="configured_boundary",
+                start_target_id="configured_start",
+                inspection_points=[
+                    SimpleNamespace(target_id="POINT_C"),
+                    SimpleNamespace(target_id="POINT_D"),
+                ],
+            ),
+        )
+    )
+    monkeypatch.setattr(web_app, "RUNTIME_SETTINGS", runtime)
+    monkeypatch.setattr(web_app, "_restart_preflight", lambda: (True, None))
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=web_app.app), base_url="http://web"
+    ) as client:
+        response = await client.get("/api/config")
+
+    assert response.status_code == 200
+    navigation_targets = response.json()["navigation_targets"]
+    assert navigation_targets["task_points"] == [
+        {"target_id": "configured_boundary", "label": "任务判定点"},
+        {"target_id": "configured_start", "label": "起点"},
+        {"target_id": "configured_delivery", "label": "交付台放货点"},
+        {"target_id": "configured_replenishment", "label": "补货台取货点"},
+    ]
+    assert navigation_targets["inspection_points"] == [
+        {"target_id": "POINT_A", "label": "1号巡检点"},
+        {"target_id": "POINT_B", "label": "2号巡检点"},
+        {"target_id": "POINT_C", "label": "3号巡检点"},
+        {"target_id": "POINT_D", "label": "4号巡检点"},
+    ]
+
+
+def test_navigation_target_options_are_not_hardcoded_in_html() -> None:
+    html = (
+        Path(__file__).resolve().parents[1] / "web/static/index.html"
+    ).read_text(encoding="utf-8")
+    javascript = (
+        Path(__file__).resolve().parents[1] / "web/static/app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="taskNavigationTargets"' in html
+    assert 'id="inspectionNavigationTargets"' in html
+    assert '<option value="task_boundary">' not in html
+    assert '<option value="H1_INSPECT">' not in html
+    assert '<option value="H1_F_L_INSPECT">' not in html
+    assert "applyNavigationTargets(config.navigation_targets)" in javascript
 
 
 @pytest.mark.asyncio

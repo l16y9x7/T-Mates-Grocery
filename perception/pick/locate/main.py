@@ -56,6 +56,7 @@ HARD_CASE_SCOPE_PATH = ROOT.parents[1] / "hard_case_config.json"
 HARD_CASE_LAYOUT_OVERRIDES_PATH = (
     ROOT.parents[1] / "hard_case_layout_overrides.json"
 )
+HARD_CASE_VIEW_LAYOUT_PATH = ROOT.parents[1] / "hard_case_view_layout.json"
 SUPPORTED_TASK_TYPES = ("SORTING", "SHORTAGE", "MISPLACED")
 PROMPT_MAPPING_PATHS = {
     "SORTING": PROMPT_MAPPING_PATH,
@@ -203,8 +204,9 @@ UPPER_CONFIDENCE_PICK_PRODUCTS = frozenset(
 MAX_MASK_AREA_PICK_PRODUCTS = frozenset({"中盐精制盐", "小苏打"})
 
 LOCATION_PATTERN = re.compile(
-    r"^H(?P<shelf>[12])_(?P<face>[FB])_L(?P<level>[1-5])_C(?P<column>\d{2})$"
+    r"^H(?P<shelf>[1-3])_L(?P<level>0[1-5])_C(?P<column>\d{2})$"
 )
+INSPECTION_TARGET_PATTERN = re.compile(r"^H(?:1|12|2|23|3)_INSPECT$")
 
 
 @dataclass(frozen=True)
@@ -217,6 +219,15 @@ class HardCaseGroupConfig:
         return dict(self.hand_overrides).get(product_name, self.preferred_hand)
 
 
+@dataclass(frozen=True)
+class HardCaseViewLayout:
+    target_id: str
+    hand: str
+    level: str
+    group_id: str
+    visible_slot_order: tuple[str, ...]
+
+
 # This allow-list is deliberately narrow. Non-SORTING tasks and every SKU not
 # listed here continue through the original prompt and center-selection path.
 HARD_CASE_GROUPS: dict[str, HardCaseGroupConfig] = {
@@ -225,10 +236,8 @@ HARD_CASE_GROUPS: dict[str, HardCaseGroupConfig] = {
             "脉动观梅止渴饮",
             "脉动芒果口味",
             "脉动菠萝口味",
-            "脉动猫薄荷瓶",
         ),
         preferred_hand="left",
-        hand_overrides=(("脉动猫薄荷瓶", "right"),),
     ),
     "alien_energy": HardCaseGroupConfig(
         members=(
@@ -283,6 +292,8 @@ class LocateRequest(BaseModel):
     product_name: str
     level: str | None = None
     hand: str
+    slot_id: str | None = None
+    target_id: str | None = None
     image_name: str | None = None
     image_base64: str | None = None
     depth_image_name: str | None = None
@@ -300,12 +311,14 @@ class LocatedInstance(BaseModel):
     source_qwen_index: int | None = None
     hard_case_group_index: int | None = None
     mapped_product_name: str | None = None
+    mapped_slot_id: str | None = None
     is_selected: bool = False
 
 
 class HardCaseGroupResult(BaseModel):
     index: int
     mapped_product_name: str
+    mapped_slot_id: str | None = None
     bbox: list[float]
     instance_count: int
 
@@ -323,6 +336,10 @@ class HardCaseDebugInfo(BaseModel):
     layout_override_applied: bool = False
     groups: list[HardCaseGroupResult] = Field(default_factory=list)
     selected_group_index: int
+    target_slot_id: str | None = None
+    target_id: str | None = None
+    visible_slot_order: list[str] = Field(default_factory=list)
+    slot_view_applied: bool = False
 
 
 class QwenBBoxRecord(BaseModel):
@@ -681,28 +698,31 @@ def fetch_sku_reference_image(product: dict[str, Any]) -> QwenReferenceImage:
 
 
 def lookup_sku_row(location_id: str) -> list[dict[str, Any]]:
-    """Return the standard row containing location_id, ordered left to right."""
+    """Return every physical column in a standard row, ordered left to right."""
     try:
         response = requests.request(
             "GET",
-            f"{SKU_API_URL}/sku/get_candidate_SKU",
+            f"{SKU_API_URL}/sku/get_row_layout",
             json={"location_id": location_id, "pose_type": ""},
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-        rows = response.json()
+        row = response.json()
     except requests.RequestException as error:
         raise HTTPException(status_code=502, detail=f"SKU 行查询请求失败: {error}") from error
     except ValueError as error:
         raise HTTPException(status_code=502, detail="SKU 行查询响应不是有效 JSON") from error
     if (
-        not isinstance(rows, list)
-        or len(rows) != 1
-        or not isinstance(rows[0], list)
-        or not all(isinstance(product, dict) for product in rows[0])
+        not isinstance(row, list)
+        or not row
+        or not all(
+            isinstance(product, dict)
+            and isinstance(product.get("location_id"), str)
+            for product in row
+        )
     ):
         raise HTTPException(status_code=502, detail="SKU 行查询响应格式错误")
-    return rows[0]
+    return row
 
 
 def normalize_level(level: str) -> str:
@@ -742,6 +762,244 @@ def load_hard_case_scope() -> set[tuple[str, str, str]]:
             raise HTTPException(status_code=500, detail=f"hard case 范围存在重复条目: {key}")
         scope.add(key)
     return scope
+
+
+def load_hard_case_view_layout(
+) -> tuple[dict[str, str], dict[tuple[str, str, str, str], HardCaseViewLayout]]:
+    """Load exact hard-case slots and their wrist-camera left-to-right order."""
+    try:
+        payload = json.loads(HARD_CASE_VIEW_LAYOUT_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=500, detail="hard case 视角配置不存在") from error
+    except (OSError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"读取 hard case 视角配置失败: {error}",
+        ) from error
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="hard case 视角配置必须是对象")
+
+    raw_slot_groups = payload.get("slot_groups")
+    raw_views = payload.get("views")
+    if not isinstance(raw_slot_groups, dict) or not isinstance(raw_views, list):
+        raise HTTPException(
+            status_code=500,
+            detail="hard case 视角配置缺少 slot_groups 或 views",
+        )
+
+    slot_to_group: dict[str, str] = {}
+    for group_id, raw_slots in raw_slot_groups.items():
+        if group_id not in {"alien_energy", "maiydong"}:
+            raise HTTPException(
+                status_code=500,
+                detail=f"hard case 视角配置包含不支持的槽位组: {group_id}",
+            )
+        if not (
+            isinstance(raw_slots, list)
+            and raw_slots
+            and all(isinstance(value, str) and value.strip() for value in raw_slots)
+        ):
+            raise HTTPException(
+                status_code=500,
+                detail=f"hard case 槽位组 {group_id} 必须是非空数组",
+            )
+        for raw_slot in raw_slots:
+            slot_id = raw_slot.strip().upper()
+            if LOCATION_PATTERN.fullmatch(slot_id) is None:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"hard case 槽位格式无效: {slot_id}",
+                )
+            if slot_id in slot_to_group:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"hard case 槽位重复配置: {slot_id}",
+                )
+            slot_to_group[slot_id] = group_id
+
+    views: dict[tuple[str, str, str, str], HardCaseViewLayout] = {}
+    covered_slots: set[str] = set()
+    for raw_view in raw_views:
+        if not isinstance(raw_view, dict):
+            raise HTTPException(status_code=500, detail="hard case 视角条目格式错误")
+        target_id = raw_view.get("target_id")
+        hand = raw_view.get("hand")
+        level = raw_view.get("level")
+        group_id = raw_view.get("group_id")
+        visible_slots = raw_view.get("visible_slot_order")
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (target_id, hand, level, group_id)
+        ) or not (
+            isinstance(visible_slots, list)
+            and visible_slots
+            and all(isinstance(value, str) and value.strip() for value in visible_slots)
+        ):
+            raise HTTPException(status_code=500, detail="hard case 视角条目缺少字段")
+
+        normalized_target = target_id.strip().upper()
+        normalized_hand = hand.strip().lower()
+        normalized_level = level.strip().upper()
+        normalized_group = group_id.strip()
+        normalized_slots = tuple(value.strip().upper() for value in visible_slots)
+        if (
+            INSPECTION_TARGET_PATTERN.fullmatch(normalized_target) is None
+            or normalized_hand not in {"left", "right"}
+            or re.fullmatch(r"L[1-5]", normalized_level) is None
+            or normalized_group not in raw_slot_groups
+        ):
+            raise HTTPException(status_code=500, detail="hard case 视角键无效")
+        if len(set(normalized_slots)) != len(normalized_slots):
+            raise HTTPException(
+                status_code=500,
+                detail=f"hard case 视角包含重复槽位: {normalized_target}/{normalized_level}",
+            )
+        for slot_id in normalized_slots:
+            match = LOCATION_PATTERN.fullmatch(slot_id)
+            if (
+                match is None
+                or f"L{int(match.group('level'))}" != normalized_level
+                or slot_to_group.get(slot_id) != normalized_group
+            ):
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "hard case 视角槽位与 group/level 不一致: "
+                        f"{normalized_target}/{normalized_hand}/{normalized_level}/{slot_id}"
+                    ),
+                )
+        key = (
+            normalized_target,
+            normalized_hand,
+            normalized_level,
+            normalized_group,
+        )
+        if key in views:
+            raise HTTPException(status_code=500, detail=f"hard case 视角重复配置: {key}")
+        views[key] = HardCaseViewLayout(
+            target_id=normalized_target,
+            hand=normalized_hand,
+            level=normalized_level,
+            group_id=normalized_group,
+            visible_slot_order=normalized_slots,
+        )
+        covered_slots.update(normalized_slots)
+
+    missing_slots = sorted(set(slot_to_group) - covered_slots)
+    if missing_slots:
+        raise HTTPException(
+            status_code=500,
+            detail=f"hard case 槽位没有任何可用视角: {missing_slots}",
+        )
+    return slot_to_group, views
+
+
+def validate_slot_hard_case_context(
+    product: dict[str, Any],
+    task_type: str,
+    level: str | None,
+    hand: str,
+    slot_id: str | None,
+    target_id: str | None,
+) -> tuple[str, HardCaseViewLayout] | None:
+    """Validate exact slot/view context for the connector hard-case groups."""
+    if task_type.strip().upper() != "SORTING":
+        return None
+    product_name = str(product.get("name", "")).strip()
+    connector_group_ids = {"alien_energy", "maiydong"}
+    configured_product_groups = {
+        group_id
+        for group_id in connector_group_ids
+        if product_name in HARD_CASE_GROUPS[group_id].members
+    }
+    # Ordinary products, catnip Maiydong and the legacy Shuke hard case do not
+    # depend on the connector-view file.
+    if not configured_product_groups:
+        return None
+
+    normalized_hand = hand.strip().lower()
+    if normalized_hand not in {"left", "right"}:
+        raise HTTPException(status_code=400, detail="hand 只能是 left 或 right")
+    if not level:
+        raise HTTPException(
+            status_code=400,
+            detail="电解质和非猫薄荷脉动 hard case 必须提供 level",
+        )
+    normalized_level = normalize_level(level)
+    scope_key = (product_name, normalized_level, normalized_hand)
+    if scope_key not in load_hard_case_scope():
+        return None
+
+    slot_to_group, views = load_hard_case_view_layout()
+    raw_locations = product.get("locations")
+    product_locations = {
+        value.strip().upper()
+        for value in raw_locations
+        if isinstance(value, str) and LOCATION_PATTERN.fullmatch(value.strip().upper())
+    } if isinstance(raw_locations, list) else set()
+    product_groups = {slot_to_group[value] for value in product_locations if value in slot_to_group}
+
+    normalized_slot = (slot_id or "").strip().upper()
+    requested_group = slot_to_group.get(normalized_slot)
+    if not product_groups and requested_group is None:
+        return None
+    if not product_groups:
+        raise HTTPException(
+            status_code=400,
+            detail=f"slot_id 与商品不一致: {normalized_slot}",
+        )
+    if len(product_groups) != 1:
+        raise HTTPException(
+            status_code=500,
+            detail="SKU hard case 槽位组配置不唯一",
+        )
+    group_id = next(iter(product_groups))
+    if group_id not in configured_product_groups:
+        raise HTTPException(status_code=400, detail="商品不属于该 hard case 商品组")
+    if not normalized_slot or not (target_id or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="电解质和非猫薄荷脉动 hard case 必须提供精确 slot_id 和 target_id",
+        )
+    slot_match = LOCATION_PATTERN.fullmatch(normalized_slot)
+    if slot_match is None:
+        raise HTTPException(status_code=400, detail="slot_id 格式无效")
+    if normalized_slot not in product_locations:
+        raise HTTPException(
+            status_code=400,
+            detail=f"slot_id 与商品不一致: {normalized_slot}",
+        )
+
+    if requested_group != group_id:
+        raise HTTPException(status_code=400, detail="slot_id 与 hard case 商品组不一致")
+    config = HARD_CASE_GROUPS[group_id]
+    if product_name not in config.members:
+        raise HTTPException(status_code=400, detail="商品不属于该 hard case 商品组")
+
+    slot_level = f"L{int(slot_match.group('level'))}"
+    if normalized_level != slot_level:
+        raise HTTPException(
+            status_code=400,
+            detail=f"level 与 slot_id 不一致: level={normalized_level}, slot={normalized_slot}",
+        )
+    normalized_target = (target_id or "").strip().upper()
+    if INSPECTION_TARGET_PATTERN.fullmatch(normalized_target) is None:
+        raise HTTPException(status_code=400, detail="target_id 格式无效")
+    view = views.get((normalized_target, normalized_hand, normalized_level, group_id))
+    if view is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "当前 target_id、hand、level 没有 hard case 腕部视角配置: "
+                f"{normalized_target}/{normalized_hand}/{normalized_level}/{group_id}"
+            ),
+        )
+    if normalized_slot not in view.visible_slot_order:
+        raise HTTPException(
+            status_code=400,
+            detail=f"目标槽位不在当前腕部视角中: {normalized_slot}",
+        )
+    return group_id, view
 
 
 def load_hard_case_layout_overrides(
@@ -849,13 +1107,29 @@ def hard_case_group_for_product(
     task_type: str,
     level: str | None,
     hand: str,
+    slot_id: str | None = None,
+    target_id: str | None = None,
 ) -> tuple[str, HardCaseGroupConfig] | None:
-    if task_type != "SORTING" or not level or (
-        product_name.strip(), level.strip().upper(), hand.strip().lower()
-    ) not in load_hard_case_scope():
+    del target_id  # View validity is checked once the full SKU record is available.
+    if task_type.strip().upper() != "SORTING" or not level:
         return None
+    normalized_name = product_name.strip()
+    scope_key = (
+        normalized_name,
+        level.strip().upper(),
+        hand.strip().lower(),
+    )
+    if scope_key not in load_hard_case_scope():
+        return None
+    normalized_slot = (slot_id or "").strip().upper()
+    if normalized_slot:
+        slot_to_group, _ = load_hard_case_view_layout()
+        group_id = slot_to_group.get(normalized_slot)
+        if group_id is not None:
+            config = HARD_CASE_GROUPS[group_id]
+            return (group_id, config) if normalized_name in config.members else None
     for group_id, config in HARD_CASE_GROUPS.items():
-        if product_name in config.members:
+        if normalized_name in config.members:
             return group_id, config
     return None
 
@@ -877,7 +1151,7 @@ def hard_case_level_required(
 
 
 def select_location_for_level(
-    product: dict[str, Any], level: str
+    product: dict[str, Any], level: str, hand: str = "left"
 ) -> tuple[str, re.Match[str]]:
     locations = product.get("locations")
     if not isinstance(locations, list) or not locations:
@@ -888,13 +1162,12 @@ def select_location_for_level(
         if not isinstance(value, str):
             continue
         match = LOCATION_PATTERN.fullmatch(value.strip().upper())
-        if match is not None and f"L{match.group('level')}" == normalized_level:
+        if match is not None and f"L{int(match.group('level'))}" == normalized_level:
             parsed.append((value.strip().upper(), match))
     if not parsed:
         raise HTTPException(status_code=404, detail=f"hard case SKU 在 {normalized_level} 没有 location")
-    if len(parsed) != 1:
-        raise HTTPException(status_code=502, detail=f"hard case SKU 在 {normalized_level} 存在多个 location")
-    return parsed[0]
+    parsed.sort(key=lambda item: int(item[1].group("column")))
+    return parsed[-1] if hand.strip().lower() == "right" else parsed[0]
 
 
 def hard_case_standard_order(
@@ -2266,10 +2539,25 @@ def apply_hard_case_ordering(
     task_type: str,
     level: str | None,
     hand: str,
+    slot_id: str | None = None,
+    target_id: str | None = None,
     shelf_front_line: tuple[float, float] | None = None,
 ) -> tuple[list[LocatedInstance], HardCaseDebugInfo | None]:
+    slot_context = validate_slot_hard_case_context(
+        product,
+        task_type,
+        level,
+        hand,
+        slot_id,
+        target_id,
+    )
     hard_case = hard_case_group_for_product(
-        product["name"].strip(), task_type, level, hand
+        product["name"].strip(),
+        task_type,
+        level,
+        hand,
+        slot_id=slot_id,
+        target_id=target_id,
     )
     if hard_case is None:
         return instances, None
@@ -2277,62 +2565,120 @@ def apply_hard_case_ordering(
     actual_hand = hand.strip().lower()
     preferred_hand = actual_hand
 
-    target_location, target_match = select_location_for_level(product, level)
-    standard_order = hard_case_standard_order(target_location, config)
     target_name = product["name"].strip()
-    if target_name not in standard_order:
-        raise HTTPException(status_code=502, detail="目标 SKU 不在指定层品牌顺序中")
-
     display_groups = split_instances_into_display_groups(instances, shelf_front_line)
     visible_count = len(display_groups)
-    layout_override = hard_case_layout_order_for_request(
-        target_name,
-        level,
-        actual_hand,
-    )
-    if layout_override is not None:
-        unknown_products = [
-            name for name in layout_override if name not in config.members
-        ]
-        if unknown_products:
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "hard case 布局覆盖包含非同组商品: "
-                    f"{unknown_products}"
-                ),
-            )
-        if visible_count != len(layout_override):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "检测列数与图片布局覆盖不一致: "
-                    f"visible={visible_count}, override={len(layout_override)}"
-                ),
-            )
-        directional_groups = (
-            display_groups
-            if actual_hand == "left"
-            else list(reversed(display_groups))
-        )
-        directional_order = list(layout_override)
-    else:
-        if visible_count > len(standard_order):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"检测列数超过标准品牌列数: "
-                    f"visible={visible_count}, standard={len(standard_order)}"
-                ),
-            )
-        if actual_hand == "left":
-            directional_groups = display_groups
-            directional_order = standard_order[:visible_count]
-        else:
-            directional_groups = list(reversed(display_groups))
-            directional_order = list(reversed(standard_order[-visible_count:]))
 
-    if target_name not in directional_order:
+    visible_slot_order: list[str] = []
+    slot_view_applied = slot_context is not None
+    normalized_target_id: str | None = None
+    layout_override: tuple[str, ...] | None = None
+    if slot_context is not None:
+        context_group_id, view = slot_context
+        if context_group_id != group_id:
+            raise HTTPException(status_code=500, detail="hard case 商品组判定不一致")
+        target_location = (slot_id or "").strip().upper()
+        target_match = LOCATION_PATTERN.fullmatch(target_location)
+        assert target_match is not None
+        normalized_target_id = view.target_id
+        visible_slot_order = list(view.visible_slot_order)
+        row = lookup_sku_row(target_location)
+        row_by_slot = {
+            str(item.get("location_id", "")).strip().upper(): item
+            for item in row
+            if isinstance(item, dict)
+        }
+        missing_view_slots = [
+            value for value in visible_slot_order if value not in row_by_slot
+        ]
+        if missing_view_slots:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "SKU 行数据缺少 hard case 视角槽位: "
+                    f"{missing_view_slots}"
+                ),
+            )
+        directional_order = [
+            str(row_by_slot[value].get("name", "")).strip()
+            for value in visible_slot_order
+        ]
+        if any(name not in config.members for name in directional_order):
+            raise HTTPException(
+                status_code=502,
+                detail="hard case 视角槽位对应了非同组商品",
+            )
+        if row_by_slot[target_location].get("name", "").strip() != target_name:
+            raise HTTPException(status_code=502, detail="SKU 行数据中的商品与目标槽位不一致")
+        standard_order = [
+            str(item.get("name", "")).strip()
+            for item in row
+            if str(item.get("name", "")).strip() in config.members
+        ]
+        if visible_count != len(visible_slot_order):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "检测列数与 hard case 视角槽位数不一致: "
+                    f"visible={visible_count}, configured={len(visible_slot_order)}"
+                ),
+            )
+        # The view config is always image-left-to-right. In particular, a right
+        # wrist at H12_INSPECT sees H2's left columns and must not use a suffix.
+        directional_groups = display_groups
+    else:
+        target_location, target_match = select_location_for_level(product, level, hand)
+        standard_order = hard_case_standard_order(target_location, config)
+        if target_name not in standard_order:
+            raise HTTPException(status_code=502, detail="目标 SKU 不在指定层品牌顺序中")
+        layout_override = hard_case_layout_order_for_request(
+            target_name,
+            level,
+            actual_hand,
+        )
+        if layout_override is not None:
+            unknown_products = [
+                name for name in layout_override if name not in config.members
+            ]
+            if unknown_products:
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        "hard case 布局覆盖包含非同组商品: "
+                        f"{unknown_products}"
+                    ),
+                )
+            if visible_count != len(layout_override):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "检测列数与图片布局覆盖不一致: "
+                        f"visible={visible_count}, override={len(layout_override)}"
+                    ),
+                )
+            directional_groups = (
+                display_groups
+                if actual_hand == "left"
+                else list(reversed(display_groups))
+            )
+            directional_order = list(layout_override)
+        else:
+            if visible_count > len(standard_order):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"检测列数超过标准品牌列数: "
+                        f"visible={visible_count}, standard={len(standard_order)}"
+                    ),
+                )
+            if actual_hand == "left":
+                directional_groups = display_groups
+                directional_order = standard_order[:visible_count]
+            else:
+                directional_groups = list(reversed(display_groups))
+                directional_order = list(reversed(standard_order[-visible_count:]))
+
+    if slot_context is None and target_name not in directional_order:
         raise HTTPException(
             status_code=404,
             detail=(
@@ -2345,14 +2691,24 @@ def apply_hard_case_ordering(
     debug_groups: list[HardCaseGroupResult] = []
     selected_group_index = -1
     selected_instance: LocatedInstance | None = None
-    for group_index, (group, mapped_name) in enumerate(
-        zip(directional_groups, directional_order),
+    mapped_slots: list[str | None] = (
+        list(visible_slot_order)
+        if slot_context is not None
+        else [None] * len(directional_order)
+    )
+    for group_index, (group, mapped_name, mapped_slot) in enumerate(
+        zip(directional_groups, directional_order, mapped_slots),
         start=1,
     ):
         front_instances = keep_front_depth_row(group, shelf_front_line)
         if not front_instances:
             raise HTTPException(status_code=422, detail=f"{mapped_name} 没有第一排实例")
-        if mapped_name == target_name and selected_instance is None:
+        is_target_group = (
+            mapped_slot == target_location
+            if slot_context is not None
+            else mapped_name == target_name and selected_instance is None
+        )
+        if is_target_group:
             selected_group_index = group_index
             selected_instance = select_frontmost_instance(front_instances)
         updated_group: list[LocatedInstance] = []
@@ -2361,6 +2717,7 @@ def apply_hard_case_ordering(
                 update={
                     "hard_case_group_index": group_index,
                     "mapped_product_name": mapped_name,
+                    "mapped_slot_id": mapped_slot,
                     "is_selected": instance is selected_instance,
                 }
             )
@@ -2370,6 +2727,7 @@ def apply_hard_case_ordering(
             HardCaseGroupResult(
                 index=group_index,
                 mapped_product_name=mapped_name,
+                mapped_slot_id=mapped_slot,
                 bbox=union_instance_bboxes(updated_group),
                 instance_count=len(updated_group),
             )
@@ -2381,7 +2739,11 @@ def apply_hard_case_ordering(
         group_id=group_id,
         preferred_hand=preferred_hand,
         actual_hand=actual_hand,
-        order_direction="left_to_right" if actual_hand == "left" else "right_to_left",
+        order_direction=(
+            "left_to_right"
+            if slot_context is not None or actual_hand == "left"
+            else "right_to_left"
+        ),
         target_location=target_location,
         target_level=int(target_match.group("level")),
         target_column=int(target_match.group("column")),
@@ -2389,6 +2751,10 @@ def apply_hard_case_ordering(
         layout_override_applied=layout_override is not None,
         groups=debug_groups,
         selected_group_index=selected_group_index,
+        target_slot_id=target_location if slot_context is not None else None,
+        target_id=normalized_target_id,
+        visible_slot_order=visible_slot_order,
+        slot_view_applied=slot_view_applied,
     )
 
 
@@ -2399,6 +2765,8 @@ def locate_product_in_image(
     task_type: str = "SORTING",
     level: str | None = None,
     hand: str = "left",
+    slot_id: str | None = None,
+    target_id: str | None = None,
     qwen_prompt_override: str | None = None,
     sam_prompt_override: str | None = None,
     depth_image: Image.Image | None = None,
@@ -2411,8 +2779,21 @@ def locate_product_in_image(
     monitor_image_path = store_monitor_image(image_path)
     canonical_name = product["name"].strip()
     normalized_level = normalize_level(level) if level else None
+    slot_context = validate_slot_hard_case_context(
+        product,
+        task_type,
+        normalized_level,
+        hand,
+        slot_id,
+        target_id,
+    )
     hard_case = hard_case_group_for_product(
-        canonical_name, task_type, normalized_level, hand
+        canonical_name,
+        task_type,
+        normalized_level,
+        hand,
+        slot_id=slot_id,
+        target_id=target_id,
     )
     qwen_prompt = (qwen_prompt_override or "").strip()
     sam_prompt = (sam_prompt_override or "").strip()
@@ -2427,9 +2808,14 @@ def locate_product_in_image(
     if hard_case is not None:
         assert normalized_level is not None
         hard_case_group_id, _ = hard_case
-        target_location, target_match = select_location_for_level(
-            product, normalized_level
-        )
+        if slot_context is not None:
+            target_location = (slot_id or "").strip().upper()
+            target_match = LOCATION_PATTERN.fullmatch(target_location)
+            assert target_match is not None
+        else:
+            target_location, target_match = select_location_for_level(
+                product, normalized_level, hand
+            )
         if hard_case_group_id == "bbq_sauce_spicy":
             bbox_instruction = "每个红色烧烤酱袋子堆分别输出 bbox。"
         elif hard_case_group_id == "bbq_sauce_original":
@@ -2439,7 +2825,7 @@ def locate_product_in_image(
         qwen_prompt = (
             f"{qwen_prompt}\n"
             f"该 hard case 商品本次只处理标准库位置 {target_location} "
-            f"对应的 L{target_match.group('level')} 层；如果该 SKU 有多个位置，"
+            f"对应的 L{int(target_match.group('level'))} 层；如果该 SKU 有多个位置，"
             "这里使用调用方指定的层。不要输出同品牌在其他货架层的商品；"
             f"{bbox_instruction}"
         )
@@ -2623,6 +3009,8 @@ def locate_product_in_image(
             task_type=task_type,
             level=normalized_level,
             hand=hand,
+            slot_id=slot_id,
+            target_id=target_id,
             shelf_front_line=shelf_front_line,
         )
     except HTTPException as error:
@@ -2759,6 +3147,14 @@ def locate_product_debug(
             status_code=400,
             detail="该 SORTING 特例必须提供 level",
         )
+    validate_slot_hard_case_context(
+        product,
+        task_type,
+        level,
+        request.hand,
+        request.slot_id,
+        request.target_id,
+    )
     prompt_overrides = (
         {
             "task_type": task_type,
@@ -2770,6 +3166,8 @@ def locate_product_debug(
     )
     prompt_overrides["hand"] = request.hand
     prompt_overrides["level"] = level
+    prompt_overrides["slot_id"] = request.slot_id
+    prompt_overrides["target_id"] = request.target_id
     prompt_overrides["capture_postprocess_errors"] = capture_inference_errors
     has_depth_name = request.depth_image_name is not None
     has_depth_base64 = request.depth_image_base64 is not None

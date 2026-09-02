@@ -1,5 +1,5 @@
 robot:
-  ip: 192.168.3.226
+  ip: 192.168.200.66
   ports:
     navigation: 8081
     pose: 8084
@@ -19,14 +19,11 @@ servers:
 tasks:
   shared:
     inspection_points:
-    - H1_F_L_INSPECT
-    - H1_F_R_INSPECT
-    - H1_B_L_INSPECT
-    - H1_B_R_INSPECT
-    - H2_F_L_INSPECT
-    - H2_F_R_INSPECT
-    - H2_B_L_INSPECT
-    - H2_B_R_INSPECT
+    - H1_INSPECT
+    - H12_INSPECT
+    - H2_INSPECT
+    - H23_INSPECT
+    - H3_INSPECT
     start_target_id: start
     capture_settle_seconds: 2
     camera: head
@@ -47,34 +44,21 @@ tasks:
   task0:
     output_dir: ../output/task0
   task1:
-    receipt_viewpoint: receipt_viewpoint
     delivery_place: delivery_place
-    skip_product_names:
-    - 慢碳十色糙米
-    - 高纤七色糙米
-    - 山西黄小米
-    defer_product_names:
-    - 中盐精制盐
-    - 小苏打
-    - 镇江香醋
-    - 蒸鱼豉油
-    - 薄盐生抽
+    skip_product_names: []
+    defer_product_names: []
     timeouts:
-      receipt_seconds: 30
       navigation_seconds: 90
       pose_seconds: 30
       pick_seconds: 90
       place_seconds: 90
   task2:
     inspection_points:
-    - H2_F_L_INSPECT
-    - H2_F_R_INSPECT
-    - H1_F_L_INSPECT
-    - H1_F_R_INSPECT
-    - H1_B_L_INSPECT
-    - H1_B_R_INSPECT
-    - H2_B_L_INSPECT
-    - H2_B_R_INSPECT
+    - H1_INSPECT
+    - H12_INSPECT
+    - H2_INSPECT
+    - H23_INSPECT
+    - H3_INSPECT
     replenishment_pickup: replenishment_pickup
     timeouts:
       inspection_seconds: 30

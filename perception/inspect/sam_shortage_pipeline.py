@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Literal, Sequence
@@ -107,6 +108,7 @@ class GroupDetection:
 @dataclass
 class SlotComparison:
     slot_index: int
+    slot_id: str | None
     product_name: str | None
     status: str
     baseline_instance_index: int
@@ -129,6 +131,7 @@ class GroupComparison:
     level: str
     group_index: int
     prompt: str
+    slot_ids: list[str | None]
     slot_product_names: list[str]
     expected_front_count: int
     baseline: GroupDetection
@@ -184,6 +187,7 @@ def load_mapping_config(
     path: str | Path | None = None,
 ) -> dict[str, dict[str, list[dict[str, Any]]]]:
     source = Path(path) if path is not None else MAPPING_PATH
+    require_slot_ids = source.resolve() == MAPPING_PATH.resolve()
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -199,6 +203,8 @@ def load_mapping_config(
             if not isinstance(level, str) or not isinstance(groups, list):
                 raise SamShortageError(f"{location_id}/{level} 必须是配置组列表")
             normalized_groups: list[dict[str, Any]] = []
+            normalized_level = level.strip().upper()
+            seen_level_slots: set[str] = set()
             for group_index, group in enumerate(groups, start=1):
                 if not isinstance(group, dict):
                     raise SamShortageError(
@@ -207,6 +213,7 @@ def load_mapping_config(
                 expected = group.get("expected_front_count")
                 prompt = group.get("sam3_prompt")
                 names = group.get("slot_product_names", [])
+                slot_ids = group.get("slot_ids")
                 if (
                     not isinstance(expected, int)
                     or isinstance(expected, bool)
@@ -225,15 +232,52 @@ def load_mapping_config(
                     raise SamShortageError(
                         f"{location_id}/{level} 第 {group_index} 组商品数量不匹配"
                     )
+                if slot_ids is None:
+                    if require_slot_ids:
+                        raise SamShortageError(
+                            f"{location_id}/{level} 第 {group_index} 组缺少 slot_ids"
+                        )
+                    normalized_slot_ids: list[str | None] = [None] * expected
+                elif (
+                    not isinstance(slot_ids, list)
+                    or len(slot_ids) != expected
+                    or any(
+                        not isinstance(slot_id, str)
+                        or re.fullmatch(r"H[1-3]_L0[1-5]_C\d{2}", slot_id.strip())
+                        is None
+                        for slot_id in slot_ids
+                    )
+                    or len({slot_id.strip() for slot_id in slot_ids}) != expected
+                ):
+                    raise SamShortageError(
+                        f"{location_id}/{level} 第 {group_index} 组货位数量或格式不匹配"
+                    )
+                else:
+                    normalized_slot_ids = [slot_id.strip() for slot_id in slot_ids]
+                    invalid_levels = [
+                        slot_id
+                        for slot_id in normalized_slot_ids
+                        if f"L{int(slot_id.split('_')[-2][1:])}"
+                        != normalized_level
+                    ]
+                    duplicate_slots = seen_level_slots.intersection(
+                        normalized_slot_ids
+                    )
+                    if invalid_levels or duplicate_slots:
+                        raise SamShortageError(
+                            f"{location_id}/{level} 第 {group_index} 组货位层号错误或重复"
+                        )
+                    seen_level_slots.update(normalized_slot_ids)
                 normalized_groups.append(
                     {
                         "group_index": group_index,
                         "expected_front_count": expected,
                         "sam3_prompt": prompt.strip(),
+                        "slot_ids": normalized_slot_ids,
                         "slot_product_names": [name.strip() for name in names],
                     }
                 )
-            normalized_levels[level.strip().upper()] = normalized_groups
+            normalized_levels[normalized_level] = normalized_groups
         normalized[location_id.strip().upper()] = normalized_levels
     return normalized
 
@@ -405,12 +449,8 @@ def detect_group(
             for raw, _, _ in decoded
         ],
         expected_front_count=expected_front_count,
-        prefer_global_depth_layer=location_id.upper().startswith(
-            ("H2_F_L_INSPECT", "H2_F_R_INSPECT")
-        ),
-        prefer_regular_columns=location_id.upper().startswith(
-            ("H2_F_L_INSPECT", "H2_F_R_INSPECT")
-        ),
+        prefer_global_depth_layer=location_id.upper() == "H2_INSPECT",
+        prefer_regular_columns=location_id.upper() == "H2_INSPECT",
         prefer_vertical_position_anomaly=level_uses_upper_pick,
         max_same_prompt_depth_spread_mm=(30.0 if multiple_groups_on_level else None),
         enforce_expected_count=enforce_expected_count,
@@ -560,6 +600,7 @@ def compare_group(
     *,
     level: str,
     group_index: int,
+    slot_ids: list[str | None],
     slot_product_names: list[str],
     baseline: GroupDetection,
     current: GroupDetection,
@@ -654,6 +695,11 @@ def compare_group(
         slots.append(
             SlotComparison(
                 slot_index=slot_position,
+                slot_id=(
+                    slot_ids[slot_position - 1]
+                    if slot_position <= len(slot_ids)
+                    else None
+                ),
                 product_name=(
                     slot_product_names[slot_position - 1]
                     if slot_position <= len(slot_product_names)
@@ -683,6 +729,7 @@ def compare_group(
         level=level,
         group_index=group_index,
         prompt=baseline.prompt,
+        slot_ids=slot_ids,
         slot_product_names=slot_product_names,
         expected_front_count=expected,
         baseline=baseline,
@@ -709,6 +756,7 @@ def analyze_shortage(
     current_rgb: np.ndarray,
     current_depth_mm: np.ndarray,
     product_name_filter: str | None = None,
+    slot_id_filter: str | None = None,
     mapping_path: str | Path | None = None,
     sam3_caller: Sam3Caller = call_sam3,
     shelf_masker: ShelfMasker = apply_shelf_mask,
@@ -734,12 +782,29 @@ def analyze_shortage(
         current_rows=current_rows,
     )
     requested_name = (product_name_filter or "").strip()
+    requested_slot = (slot_id_filter or "").strip()
     for level in POSE_LEVELS[pose_type]:
         baseline_row = baseline_rows.get(level)
         current_row = current_rows.get(level)
         if baseline_row is None or current_row is None:
             continue
         configs = level_config.get(level, [])
+        if requested_slot and requested_name and not any(
+            any(
+                slot_id == requested_slot and name == requested_name
+                for slot_id, name in zip(
+                    config["slot_ids"],
+                    config["slot_product_names"],
+                    strict=True,
+                )
+            )
+            for config in configs
+        ):
+            continue
+        if requested_slot and not any(
+            requested_slot in config["slot_ids"] for config in configs
+        ):
+            continue
         if requested_name and not any(
             requested_name in config["slot_product_names"] for config in configs
         ):
@@ -750,6 +815,8 @@ def analyze_shortage(
             for name in config["slot_product_names"]
         )
         for config in configs:
+            if requested_slot and requested_slot not in config["slot_ids"]:
+                continue
             prompt = str(config["sam3_prompt"])
             expected = int(config["expected_front_count"])
             baseline_detection = detect_group(
@@ -779,6 +846,7 @@ def analyze_shortage(
                 compare_group(
                     level=level,
                     group_index=int(config["group_index"]),
+                    slot_ids=list(config["slot_ids"]),
                     slot_product_names=list(config["slot_product_names"]),
                     baseline=baseline_detection,
                     current=current_detection,
@@ -786,9 +854,10 @@ def analyze_shortage(
                     current_image_size=image_size,
                 )
             )
-    if requested_name and not analysis.comparisons:
+    if (requested_name or requested_slot) and not analysis.comparisons:
         raise SamShortageError(
-            f"当前巡检视角没有配置商品: {requested_name}"
+            "当前巡检视角没有配置目标: "
+            f"product={requested_name or '-'}, slot={requested_slot or '-'}"
         )
     return analysis
 
@@ -920,8 +989,10 @@ def _level_reference_candidates(
 def select_place_references(
     analysis: ShortageAnalysis,
     product_name: str,
+    slot_id: str | None = None,
 ) -> PlaceReferenceSelection:
     normalized_name = product_name.strip()
+    normalized_slot = (slot_id or "").strip()
     failures: list[str] = []
     matching_slots = [
         (comparison, slot)
@@ -929,6 +1000,7 @@ def select_place_references(
         for slot in comparison.missing_slots
         if isinstance(slot.product_name, str)
         and slot.product_name.strip() == normalized_name
+        and (not normalized_slot or slot.slot_id == normalized_slot)
     ]
     matching_slots.sort(
         key=lambda item: (
@@ -1000,7 +1072,10 @@ def select_place_references(
         raise SamShortageError(
             "缺失槽位周围没有足够参照物: " + ", ".join(failures)
         )
-    raise SamShortageError(f"当前画面没有确认商品缺失槽位: {normalized_name}")
+    target_description = (
+        f"{normalized_name} ({normalized_slot})" if normalized_slot else normalized_name
+    )
+    raise SamShortageError(f"当前画面没有确认商品缺失槽位: {target_description}")
 
 
 def full_image_mask(
@@ -1106,8 +1181,13 @@ def analysis_as_dict(analysis: ShortageAnalysis) -> dict[str, Any]:
             )
         },
         "findings": [
-            {"shortage_product_name": name}
-            for name in analysis.missing_product_names
+            {
+                "shortage_product_name": slot.product_name,
+                "slot_id": slot.slot_id,
+            }
+            for comparison in analysis.comparisons
+            for slot in comparison.missing_slots
+            if isinstance(slot.product_name, str) and slot.product_name.strip()
         ],
         "comparisons": [
             {
@@ -1139,6 +1219,7 @@ def analysis_as_dict(analysis: ShortageAnalysis) -> dict[str, Any]:
                 "slots": [
                     {
                         "slot_index": slot.slot_index,
+                        "slot_id": slot.slot_id,
                         "product_name": slot.product_name,
                         "status": slot.status,
                         "target_bbox_current_xyxy": slot.target_bbox_current_xyxy,

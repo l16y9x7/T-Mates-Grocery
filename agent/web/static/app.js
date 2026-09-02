@@ -29,17 +29,15 @@ const shelfLevelCustom = document.querySelector("#shelfLevelCustom");
 const shelfLevelLabel = document.querySelector("#shelfLevelLabel");
 const navigationForm = document.querySelector("#navigationForm");
 const navigationTargetPreset = document.querySelector("#navigationTargetPreset");
+const navigationTargetsLoading = document.querySelector("#navigationTargetsLoading");
+const taskNavigationTargets = document.querySelector("#taskNavigationTargets");
+const inspectionNavigationTargets = document.querySelector("#inspectionNavigationTargets");
 const targetId = document.querySelector("#targetId");
 const gripperForm = document.querySelector("#gripperForm");
 const gripperSubmitButton = document.querySelector("#gripperSubmitButton");
 const healthButton = document.querySelector("#healthButton");
 const robotStatus = document.querySelector("#robotStatus");
 const robotOutput = document.querySelector("#robotOutput");
-const parseReceiptButton = document.querySelector("#parseReceiptButton");
-const receiptStatus = document.querySelector("#receiptStatus");
-const receiptProducts = document.querySelector("#receiptProducts");
-const receiptEmpty = document.querySelector("#receiptEmpty");
-const receiptOutput = document.querySelector("#receiptOutput");
 const taskForm = document.querySelector("#taskForm");
 const taskSubmitButton = document.querySelector("#taskSubmitButton");
 const taskTerminateButton = document.querySelector("#taskTerminateButton");
@@ -65,6 +63,17 @@ const taskResultCard = document.querySelector("#taskResultCard");
 const taskResultStatus = document.querySelector("#taskResultStatus");
 const taskResultBody = document.querySelector("#taskResultBody");
 const taskOperationKey = document.querySelector("#taskOperationKey");
+const task1MockOrder = document.querySelector("#task1MockOrder");
+const mockOrderStatus = document.querySelector("#mockOrderStatus");
+const mockOrderProducts = document.querySelector("#mockOrderProducts");
+const mockOrderEmpty = document.querySelector("#mockOrderEmpty");
+const mockOrderId = document.querySelector("#mockOrderId");
+const mockOrderCatalogSize = document.querySelector("#mockOrderCatalogSize");
+const mockOrderRefreshButton = document.querySelector("#mockOrderRefreshButton");
+const taskInterfaceMetrics = document.querySelector("#taskInterfaceMetrics");
+const taskInterfaceMetricsCount = document.querySelector("#taskInterfaceMetricsCount");
+const taskInterfaceMetricsBody = document.querySelector("#taskInterfaceMetricsBody");
+const taskInterfaceMetricsEmpty = document.querySelector("#taskInterfaceMetricsEmpty");
 const pickVisual = document.querySelector("#pickVisual");
 const pickVisualCanvas = document.querySelector("#pickVisualCanvas");
 const pickVisualStatus = document.querySelector("#pickVisualStatus");
@@ -98,6 +107,10 @@ let eventSource = null;
 let placeEventSource = null;
 let taskEventSource = null;
 let currentTaskRunId = null;
+let currentMockOrder = null;
+let taskBusy = false;
+let mockOrderLoading = false;
+const taskInterfaceMetricValues = new Map();
 const visualPollers = { pick: null, place: null, task: null };
 const visualRefreshers = { pick: null, place: null, task: null };
 
@@ -161,7 +174,7 @@ operationModeButtons.forEach((button) => {
 
 const TASK_INFO = {
   0: { title: "采集准备", description: "采集货架巡检点的头部 RGB-D 基准数据" },
-  1: { title: "订单分拣", description: "识别小票商品并完成货架抓取和交付台放置" },
+  1: { title: "订单分拣", description: "从模拟点单系统获取两件随机商品，并完成货架抓取和交付台放置" },
   2: { title: "缺货补货", description: "巡检缺货商品并从补货台抓取后放回货架" },
   3: { title: "乱放纠正", description: "识别错放商品并交换两件商品的货架位置" },
 };
@@ -230,6 +243,44 @@ function updateNavigationTargetCustomField() {
   const usesCustomTarget = navigationTargetPreset.value === CUSTOM_VALUE;
   targetId.hidden = !usesCustomTarget;
   targetId.required = usesCustomTarget;
+}
+
+function applyNavigationTargets(navigationTargets) {
+  const configuredGroups = [
+    [taskNavigationTargets, navigationTargets?.task_points],
+    [inspectionNavigationTargets, navigationTargets?.inspection_points],
+  ];
+  const entries = configuredGroups.flatMap(([, values]) =>
+    Array.isArray(values)
+      ? values.filter((entry) => typeof entry?.target_id === "string" && entry.target_id.trim())
+      : [],
+  );
+  if (!entries.length) return;
+
+  const previouslyLoaded = navigationTargetPreset.dataset.runtimeTargetsLoaded === "true";
+  const previousValue = previouslyLoaded ? navigationTargetPreset.value : null;
+  const seenTargets = new Set();
+  configuredGroups.forEach(([group, values]) => {
+    group.replaceChildren();
+    if (!Array.isArray(values)) return;
+    values.forEach((entry) => {
+      const targetIdValue = typeof entry?.target_id === "string" ? entry.target_id.trim() : "";
+      if (!targetIdValue || seenTargets.has(targetIdValue)) return;
+      seenTargets.add(targetIdValue);
+      const option = document.createElement("option");
+      option.value = targetIdValue;
+      const label = typeof entry.label === "string" ? entry.label.trim() : "";
+      option.textContent = label ? `${targetIdValue} · ${label}` : targetIdValue;
+      group.append(option);
+    });
+  });
+  navigationTargetsLoading?.remove();
+  navigationTargetPreset.dataset.runtimeTargetsLoaded = "true";
+  navigationTargetPreset.value =
+    previousValue && (seenTargets.has(previousValue) || previousValue === CUSTOM_VALUE)
+      ? previousValue
+      : entries[0].target_id.trim();
+  updateNavigationTargetCustomField();
 }
 
 poseTypePreset.addEventListener("change", updatePoseTypeCustomField);
@@ -526,12 +577,15 @@ function addFlowEvent(event, target = timeline) {
   meta.textContent = event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : "刚刚";
   item.append(title, meta);
   if (isInterfaceCall) {
-    const method = event.request?.method;
-    const url = event.request?.url;
-    if (method || url) {
+    const method = event.method || event.request?.method;
+    const url = event.url || event.request?.url;
+    const duration = Number.isFinite(Number(event.duration_ms))
+      ? `本次 ${formatDuration(event.duration_ms)}`
+      : "";
+    if (method || url || duration) {
       const route = document.createElement("div");
       route.className = "interface-route";
-      route.textContent = [method, url].filter(Boolean).join("  ");
+      route.textContent = [method, url, duration].filter(Boolean).join("  ·  ");
       item.append(route);
     }
     appendInterfacePayload(item, "完整入参 · REQUEST", event.request);
@@ -581,7 +635,117 @@ function formatTaskError(body, fallback = "任务执行失败") {
 }
 
 function selectedTaskId() {
-  return new FormData(taskForm).get("task_id") || "0";
+  return taskForm.querySelector('input[name="task_id"]:checked')?.value || "0";
+}
+
+function task1OrderPayload() {
+  if (!currentMockOrder) throw new Error("请先生成模拟订单");
+  return {
+    order_source: "mock_random",
+    order_id: currentMockOrder.order_id,
+    product_names: [...currentMockOrder.product_names],
+  };
+}
+
+function setMockOrderStatus(message, state = "") {
+  mockOrderStatus.textContent = message;
+  mockOrderStatus.className = state;
+}
+
+function normalizeMockOrder(value) {
+  const orderIdValue = typeof value?.order_id === "string" ? value.order_id.trim() : "";
+  const source = typeof value?.source === "string" ? value.source.trim() : "";
+  const products = Array.isArray(value?.product_names)
+    ? value.product_names
+      .filter((name) => typeof name === "string" && name.trim())
+      .map((name) => name.trim())
+    : [];
+  const catalogSize = Number(value?.catalog_size);
+  if (!orderIdValue || source !== "mock_random" || products.length !== 2) {
+    throw new Error("模拟点单接口返回格式不正确");
+  }
+  if (new Set(products).size !== products.length) {
+    throw new Error("模拟点单接口返回了重复商品");
+  }
+  return {
+    order_id: orderIdValue,
+    source,
+    catalog_size: Number.isFinite(catalogSize) && catalogSize > 0 ? catalogSize : null,
+    product_names: products,
+  };
+}
+
+function renderMockOrder(order) {
+  mockOrderProducts.replaceChildren();
+  order.product_names.forEach((name) => {
+    const item = document.createElement("li");
+    item.textContent = name;
+    mockOrderProducts.append(item);
+  });
+  mockOrderProducts.hidden = false;
+  mockOrderEmpty.hidden = true;
+  mockOrderId.textContent = order.order_id;
+  mockOrderCatalogSize.textContent = order.catalog_size === null ? "-" : `${order.catalog_size} 个 SKU`;
+  setMockOrderStatus("已生成 · 2 件", "success");
+}
+
+function showMockOrderError(message) {
+  currentMockOrder = null;
+  mockOrderProducts.hidden = true;
+  mockOrderProducts.replaceChildren();
+  mockOrderEmpty.hidden = false;
+  mockOrderEmpty.textContent = message;
+  mockOrderId.textContent = "-";
+  mockOrderCatalogSize.textContent = "-";
+  setMockOrderStatus("生成失败", "failure");
+}
+
+function syncTaskControls() {
+  const taskId = selectedTaskId();
+  taskSubmitButton.disabled = taskBusy || (taskId === "1" && (mockOrderLoading || !currentMockOrder));
+  taskTerminateButton.hidden = !taskBusy || !currentTaskRunId;
+  taskTerminateButton.disabled = !taskBusy || !currentTaskRunId;
+  taskTerminateButton.querySelector("span:last-child").textContent = "终止任务";
+  taskForm.querySelectorAll('input[name="task_id"]').forEach((input) => { input.disabled = taskBusy; });
+  mockOrderRefreshButton.disabled = taskBusy || mockOrderLoading;
+  taskSubmitButton.querySelector("span:last-child").textContent = taskBusy
+    ? "执行中"
+    : `开始 Task ${taskId}`;
+}
+
+async function requestMockOrder() {
+  if (mockOrderLoading || taskBusy) return currentMockOrder;
+  mockOrderLoading = true;
+  mockOrderProducts.hidden = true;
+  mockOrderEmpty.hidden = false;
+  mockOrderEmpty.textContent = "正在从模拟点单系统获取订单...";
+  setMockOrderStatus("生成中");
+  syncTaskControls();
+  try {
+    const response = await fetch("/api/task1/mock-order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message = body?.detail || body?.message;
+      throw new Error(typeof message === "string" ? message : `模拟点单失败（HTTP ${response.status}）`);
+    }
+    const order = normalizeMockOrder(body);
+    currentMockOrder = order;
+    renderMockOrder(order);
+    if (selectedTaskId() === "1") setTaskError();
+    return order;
+  } catch (error) {
+    const message = error.message || "无法生成模拟订单";
+    showMockOrderError(message);
+    if (selectedTaskId() === "1") setTaskError(message);
+    throw error;
+  } finally {
+    mockOrderLoading = false;
+    syncTaskControls();
+  }
 }
 
 function updateTaskSelection() {
@@ -589,8 +753,13 @@ function updateTaskSelection() {
   const info = TASK_INFO[taskId];
   taskTitle.textContent = info.title;
   taskDescription.textContent = info.description;
-  taskSubmitButton.querySelector("span:last-child").textContent = `开始 Task ${taskId}`;
+  task1MockOrder.hidden = taskId !== "1";
+  taskInterfaceMetrics.hidden = taskId !== "1";
   taskProgress.hidden = taskId !== "0";
+  syncTaskControls();
+  if (taskId === "1" && !currentMockOrder && !mockOrderLoading) {
+    requestMockOrder().catch(() => { /* The inline error keeps retry available. */ });
+  }
 }
 
 function setTaskProgress(completed = 0, total = 0) {
@@ -637,6 +806,129 @@ function appendTaskDetail(titleText, detailText, key) {
   taskDetails.hidden = false;
 }
 
+function metricNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+function formatDuration(milliseconds) {
+  if (milliseconds === null || milliseconds === undefined || milliseconds === "") return "-";
+  const value = Number(milliseconds);
+  if (!Number.isFinite(value) || value < 0) return "-";
+  return value >= 1000 ? `${(value / 1000).toFixed(2)} s` : `${value.toFixed(1)} ms`;
+}
+
+function normalizeInterfaceMetric(value, fallbackInterface = "") {
+  // Legacy pick/place interface log events do not carry counters. They remain
+  // visible in the timeline, but must not create fake 0-call metric rows.
+  if (value?.call_count === undefined || value?.call_count === null) return null;
+  const interfaceName = typeof value?.interface === "string" && value.interface.trim()
+    ? value.interface.trim()
+    : fallbackInterface;
+  if (!interfaceName) return null;
+  const method = typeof value?.method === "string" ? value.method.trim().toUpperCase() : "";
+  const callCount = metricNumber(value?.call_count);
+  const totalDuration = metricNumber(value?.total_duration_ms);
+  return {
+    interface: interfaceName,
+    method,
+    call_count: callCount,
+    success_count: metricNumber(value?.success_count),
+    failure_count: metricNumber(value?.failure_count),
+    duration_ms: value?.duration_ms === undefined || value?.duration_ms === null
+      ? null
+      : metricNumber(value.duration_ms),
+    total_duration_ms: totalDuration,
+    average_duration_ms: metricNumber(
+      value?.average_duration_ms,
+      callCount ? totalDuration / callCount : 0,
+    ),
+  };
+}
+
+function renderInterfaceMetricTable() {
+  taskInterfaceMetricsBody.replaceChildren();
+  [...taskInterfaceMetricValues.values()]
+    .sort((left, right) => `${left.method} ${left.interface}`.localeCompare(`${right.method} ${right.interface}`))
+    .forEach((metric) => {
+      const row = document.createElement("tr");
+      const values = [
+        [metric.method, metric.interface].filter(Boolean).join(" "),
+        String(metric.call_count),
+        `${metric.success_count} / ${metric.failure_count}`,
+        formatDuration(metric.total_duration_ms),
+        formatDuration(metric.average_duration_ms),
+        formatDuration(metric.duration_ms),
+      ];
+      values.forEach((value) => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.append(cell);
+      });
+      taskInterfaceMetricsBody.append(row);
+    });
+  const count = taskInterfaceMetricValues.size;
+  taskInterfaceMetricsCount.textContent = `${count} 个接口`;
+  taskInterfaceMetricsEmpty.hidden = count > 0;
+  taskInterfaceMetricsBody.closest(".interface-metrics-table-wrap").hidden = count === 0;
+}
+
+function applyInterfaceMetric(value, fallbackInterface = "") {
+  const metric = normalizeInterfaceMetric(value, fallbackInterface);
+  if (!metric) return;
+  const key = `${metric.method}:${metric.interface}`;
+  const previous = taskInterfaceMetricValues.get(key);
+  if (previous && metric.call_count < previous.call_count) return;
+  if (previous && value?.duration_ms === undefined) {
+    metric.duration_ms = previous.duration_ms;
+  }
+  taskInterfaceMetricValues.set(key, metric);
+  renderInterfaceMetricTable();
+}
+
+function applyInterfaceMetrics(metrics) {
+  if (Array.isArray(metrics)) {
+    metrics.forEach((metric) => applyInterfaceMetric(metric));
+    return;
+  }
+  if (!metrics || typeof metrics !== "object") return;
+  if (Array.isArray(metrics.metrics)) {
+    metrics.metrics.forEach((metric) => applyInterfaceMetric(metric));
+    return;
+  }
+  Object.entries(metrics).forEach(([interfaceName, metric]) => {
+    if (metric && typeof metric === "object") applyInterfaceMetric(metric, interfaceName);
+  });
+}
+
+function showMockOrderEvent(event) {
+  const source = event.source || event.order_source;
+  const isMockOrderEvent = source === "mock_random"
+    || event.event === "模拟订单"
+    || event.event === "模拟点单";
+  if (!isMockOrderEvent || !Array.isArray(event.product_names)) return;
+  const productNames = event.product_names
+    .filter((name) => typeof name === "string" && name.trim())
+    .map((name) => name.trim());
+  if (productNames.length !== 2) return;
+  const candidate = {
+    order_id: event.order_id || currentMockOrder?.order_id,
+    source: "mock_random",
+    catalog_size: event.catalog_size ?? currentMockOrder?.catalog_size,
+    product_names: productNames,
+  };
+  try {
+    currentMockOrder = normalizeMockOrder(candidate);
+    renderMockOrder(currentMockOrder);
+  } catch (_) { /* Keep the order selected before task start. */ }
+  taskDetailsTitle.textContent = "模拟订单";
+  productNames.forEach((name, index) => appendTaskDetail(
+    name,
+    `第 ${index + 1} 件 · ${event.order_id || currentMockOrder?.order_id || "未知订单"}`,
+    `mock-order:${event.order_id || "current"}:${index}:${name}`,
+  ));
+}
+
 function updateTaskLiveStatus(event, taskId) {
   const strong = taskLiveStatus?.querySelector("strong");
   if (!strong) return;
@@ -649,6 +941,7 @@ function updateTaskLiveStatus(event, taskId) {
     setTaskProgress(event.capture_number, event.total_captures);
     appendTaskCapture(event);
   }
+  if (taskId === "1") showMockOrderEvent(event);
   if (taskId === "2" && event.event === "缺货记录" && event.status === "succeeded") {
     taskDetailsTitle.textContent = "缺货记录";
     appendTaskDetail(
@@ -666,7 +959,9 @@ function updateTaskLiveStatus(event, taskId) {
       `${finding.misplaced_product_name}:${finding.gt_product_name}`,
     ));
   }
-  if (event.status === "failed") {
+  // Internal actions and HTTP attempts may fail and then recover. Only the
+  // operation terminal event means the whole task has stopped.
+  if (event.status === "failed" && event.event === "operation") {
     const body = {
       error_code: event.error_code,
       failed_step: event.step,
@@ -692,6 +987,8 @@ function resetTaskView() {
   taskCaptures.hidden = true;
   taskCaptureList.replaceChildren();
   taskCaptureCount.textContent = "0 组";
+  taskInterfaceMetricValues.clear();
+  renderInterfaceMetricTable();
   taskDetails.hidden = true;
   taskDetailsList.replaceChildren();
   taskDetailsCount.textContent = "-";
@@ -708,14 +1005,8 @@ function resetTaskView() {
 }
 
 function setTaskBusy(busy) {
-  taskSubmitButton.disabled = busy;
-  taskTerminateButton.hidden = !busy || !currentTaskRunId;
-  taskTerminateButton.disabled = !busy || !currentTaskRunId;
-  taskTerminateButton.querySelector("span:last-child").textContent = "终止任务";
-  taskForm.querySelectorAll('input[name="task_id"]').forEach((input) => { input.disabled = busy; });
-  taskSubmitButton.querySelector("span:last-child").textContent = busy
-    ? "执行中"
-    : `开始 Task ${selectedTaskId()}`;
+  taskBusy = busy;
+  syncTaskControls();
 }
 
 function setTaskTerminating(terminating) {
@@ -758,6 +1049,17 @@ function renderTaskSpecificResult(taskId, body) {
 function showTaskResult(taskId, result) {
   const body = result.body ?? result;
   const terminated = body?.error_code === "TASK_TERMINATED";
+  if (taskId === "1" && body && typeof body === "object") {
+    applyInterfaceMetrics(body.interface_metrics);
+    if (Array.isArray(body.product_names)) {
+      showMockOrderEvent({
+        ...currentMockOrder,
+        ...(body.order && typeof body.order === "object" ? body.order : {}),
+        ...body,
+        source: "mock_random",
+      });
+    }
+  }
   taskResultCard.hidden = false;
   taskResultStatus.textContent = terminated
     ? "任务已终止"
@@ -775,6 +1077,9 @@ function showTaskResult(taskId, result) {
     taskLiveStatus.className = "live-status failed";
     taskLiveStatus.querySelector("strong").textContent = "任务已终止";
   } else if (result.ok) {
+    setTaskError();
+    taskErrorDetails.hidden = true;
+    taskErrorBody.textContent = "-";
     renderTaskSpecificResult(taskId, body);
     taskLiveStatus.className = "live-status succeeded";
     taskLiveStatus.querySelector("strong").textContent = "任务完成 · 成功";
@@ -834,11 +1139,11 @@ async function startPlace(payload) {
   return body;
 }
 
-async function startUnifiedTask(taskId) {
+async function startUnifiedTask(taskId, payload = {}) {
   const response = await fetch(`/api/tasks/${taskId}/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: "{}",
+    body: JSON.stringify(payload),
   });
   const body = await response.json();
   if (!response.ok) throw new Error(body.detail || body.message || `无法启动 Task ${taskId}`);
@@ -878,70 +1183,6 @@ async function callRobot(path, payload, prefix) {
   if (!response.ok || body.ok === false) throw new Error(body.body?.message || body.detail || "机器人接口调用失败");
   return body;
 }
-
-function setReceiptStatus(message, state = "") {
-  receiptStatus.textContent = message;
-  receiptStatus.className = state;
-}
-
-function renderReceiptProducts(productNames) {
-  receiptProducts.replaceChildren();
-  if (!productNames.length) {
-    receiptProducts.hidden = true;
-    receiptEmpty.hidden = false;
-    receiptEmpty.textContent = "接口未识别到商品名称";
-    return;
-  }
-  productNames.forEach((name) => {
-    const item = document.createElement("li");
-    item.textContent = name;
-    receiptProducts.append(item);
-  });
-  receiptProducts.hidden = false;
-  receiptEmpty.hidden = true;
-}
-
-parseReceiptButton.addEventListener("click", async () => {
-  parseReceiptButton.disabled = true;
-  parseReceiptButton.querySelector("span:last-child").textContent = "识别中";
-  setReceiptStatus("请求发送中");
-  receiptProducts.hidden = true;
-  receiptEmpty.hidden = false;
-  receiptEmpty.textContent = "正在读取小票...";
-  try {
-    const response = await fetch("/api/perception/parse", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Idempotency-Key": robotKey("perception-parse"),
-      },
-      body: "{}",
-    });
-    const result = await response.json().catch(() => ({ body: { message: "服务返回了非 JSON 数据" } }));
-    const body = result.body ?? result;
-    receiptOutput.textContent = JSON.stringify(body, null, 2);
-    const productNames = body && Array.isArray(body.product_names)
-      ? body.product_names.filter((name) => typeof name === "string" && name.trim())
-      : null;
-    if (!response.ok || result.ok === false) {
-      throw new Error(body?.message || `小票识别失败（HTTP ${response.status}）`);
-    }
-    if (productNames === null) {
-      throw new Error("小票识别响应缺少 product_names");
-    }
-    renderReceiptProducts(productNames);
-    setReceiptStatus(`识别完成 · ${productNames.length} 项`, "success");
-  } catch (error) {
-    receiptProducts.hidden = true;
-    receiptEmpty.hidden = false;
-    receiptEmpty.textContent = error.message || "小票识别失败";
-    receiptOutput.textContent = JSON.stringify({ message: error.message || "小票识别失败" }, null, 2);
-    setReceiptStatus("识别失败", "failure");
-  } finally {
-    parseReceiptButton.disabled = false;
-    parseReceiptButton.querySelector("span:last-child").textContent = "识别小票";
-  }
-});
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1037,6 +1278,10 @@ placeForm.addEventListener("submit", async (event) => {
   }
 });
 
+mockOrderRefreshButton.addEventListener("click", () => {
+  requestMockOrder().catch(() => { /* The inline error keeps retry available. */ });
+});
+
 taskForm.addEventListener("change", (event) => {
   if (event.target.matches('input[name="task_id"]')) {
     resetTaskView();
@@ -1052,7 +1297,8 @@ taskForm.addEventListener("submit", async (event) => {
   resetTaskView();
   setTaskBusy(true);
   try {
-    const task = await startUnifiedTask(taskId);
+    const payload = taskId === "1" ? task1OrderPayload() : {};
+    const task = await startUnifiedTask(taskId, payload);
     currentTaskRunId = task.run_id;
     setTaskBusy(true);
     elapsedTimers.task.start();
@@ -1072,6 +1318,9 @@ taskForm.addEventListener("submit", async (event) => {
     taskEventSource.addEventListener("flow", (message) => {
       try {
         const flowEvent = JSON.parse(message.data);
+        if (taskId === "1" && flowEvent.event === "接口调用") {
+          applyInterfaceMetric(flowEvent);
+        }
         addFlowEvent(flowEvent, taskTimeline);
         updateTaskLiveStatus(flowEvent, taskId);
       } catch (_) { /* ignore malformed event */ }
@@ -1190,6 +1439,7 @@ function setRobotIpMessage(message = "", state = "") {
 }
 
 function applyRuntimeConfig(config, updateInput = true) {
+  applyNavigationTargets(config.navigation_targets);
   currentRobotIp.textContent = config.robot_ip || "-";
   if (updateInput || !robotIpInput.value) robotIpInput.value = config.robot_ip || "";
   robotIpRuntimeStatus.textContent = config.restart_supported

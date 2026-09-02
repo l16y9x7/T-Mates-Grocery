@@ -5,14 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-from asyncio import sleep
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
-from time import monotonic
 from uuid import uuid4
 
 from task1_service.client import Task1Client
+from task1_service.mock_order import MockOrder, MockOrderSystem
 from task1_service.models import (
     Hand,
     PRODUCT_SLOT_PATTERN,
@@ -26,8 +25,6 @@ from manipulation_policy import initial_shelf_nudge_direction
 
 
 LOGGER = logging.getLogger(__name__)
-RECEIPT_EXPOSURE_SETTLE_SECONDS = 0.5
-RECEIPT_MAX_CONSECUTIVE_FAILURES = 2
 SHELF_LEVEL_PRIORITY = {
     level: rank
     for rank, level in enumerate(("L3", "L2", "L4", "L1", "L5"))
@@ -51,7 +48,8 @@ def _recovery_direction(error: Task1ServiceError, operation: str) -> str | None:
 
 
 def shelf_level(slot_id: str) -> str:
-    return slot_id.split("_")[2]
+    level = slot_id.split("_")[-2]
+    return f"L{int(level[1:])}"
 
 
 _INSPECTION_LEFT_MAX = {
@@ -89,6 +87,21 @@ class Task1Orchestrator:
     def __init__(self, settings: Task1Settings, client: Task1Client) -> None:
         self.settings = settings
         self.client = client
+        self.mock_order_system = MockOrderSystem(self._available_order_products)
+
+    async def _available_order_products(self) -> list[str]:
+        names = await self.client.list_product_names()
+        excluded = set(self.settings.skip_product_names)
+        return [name for name in names if name not in excluded]
+
+    async def create_mock_order(
+        self,
+        product_names: list[str] | None = None,
+        order_id: str | None = None,
+    ) -> MockOrder:
+        """Generate or revalidate the mock order selected by the web console."""
+
+        return await self.mock_order_system.create_order(product_names, order_id)
 
     async def run(self, request: Task1Request, operation_key: str | None = None) -> Task1Result:
         task_run_id = operation_key or uuid4().hex
@@ -109,186 +122,25 @@ class Task1Orchestrator:
             await self.client.check_all_health()
             logger.event("健康检查", "succeeded")
 
-            step = "头部相机切换1080p"
-            receipt_phase_error: Exception | None = None
-            switch_completed_at: float | None = None
-            product_names: list[str] = []
-            try:
-                logger.event("头部相机切换1080p", "started", resolution=1080)
-                try:
-                    await self.client.set_head_resolution(1080)
-                except Exception as exc:
-                    logger.event(
-                        "头部相机切换1080p",
-                        "failed",
-                        resolution=1080,
-                        error_code=getattr(exc, "code", type(exc).__name__),
-                        message=str(exc),
-                        fallback="continue_with_current_resolution",
-                    )
-                else:
-                    switch_completed_at = monotonic()
-                    logger.event("头部相机切换1080p", "succeeded", resolution=1080)
-
-                step = "小票点导航"
-                logger.event(
-                    "小票点导航", "started", target_id=self.settings.receipt_viewpoint
-                )
-                try:
-                    await self._navigate(
-                        self.settings.receipt_viewpoint,
-                        f"{task_run_id}:task1.receipt.navigate",
-                        logger,
-                        navigation_state,
-                    )
-                except Task1ServiceError as exc:
-                    navigation_state["target_id"] = None
-                    action_failures.append(self._failure("navigate", None, None, exc))
-                    logger.event(
-                        "小票点导航",
-                        "failed",
-                        target_id=self.settings.receipt_viewpoint,
-                        error_code=exc.code,
-                        message=exc.message,
-                        fallback="continue_receipt_attempt",
-                    )
-                else:
-                    logger.event(
-                        "小票点导航", "succeeded", target_id=self.settings.receipt_viewpoint
-                    )
-
-                step = "小票拍摄位姿"
-                logger.event("小票拍摄位姿", "started", pose_type="RECEIPT_VIEW")
-                try:
-                    await self.client.prepare_pose(
-                        "RECEIPT_VIEW", f"{task_run_id}:task1.receipt.pose"
-                    )
-                except Task1ServiceError as exc:
-                    action_failures.append(self._failure("pose", None, None, exc))
-                    logger.event(
-                        "小票拍摄位姿",
-                        "failed",
-                        pose_type="RECEIPT_VIEW",
-                        error_code=exc.code,
-                        message=exc.message,
-                        fallback="continue_receipt_attempt",
-                    )
-                else:
-                    logger.event("小票拍摄位姿", "succeeded", pose_type="RECEIPT_VIEW")
-
-                settle_seconds = 0.0
-                if switch_completed_at is not None:
-                    elapsed = monotonic() - switch_completed_at
-                    settle_seconds = max(
-                        0.0, RECEIPT_EXPOSURE_SETTLE_SECONDS - elapsed
-                    )
-                if settle_seconds > 0:
-                    logger.event(
-                        "小票曝光等待", "started", wait_seconds=settle_seconds
-                    )
-                    await sleep(settle_seconds)
-                logger.event(
-                    "小票曝光等待",
-                    "succeeded",
-                    waited_seconds=settle_seconds,
-                    minimum_seconds=RECEIPT_EXPOSURE_SETTLE_SECONDS,
-                    resolution_switch_succeeded=switch_completed_at is not None,
-                )
-
-                step = "小票识别"
-                receipt_results: set[frozenset[str]] = set()
-                attempt = 0
-                consecutive_failures = 0
-                while True:
-                    attempt += 1
-                    logger.event("小票识别", "started", attempt=attempt)
-                    try:
-                        candidate_product_names = await self.client.parse_receipt()
-                    except Task1ServiceError as exc:
-                        receipt_phase_error = exc
-                        consecutive_failures += 1
-                        logger.event(
-                            "小票识别",
-                            "failed",
-                            attempt=attempt,
-                            error_code=exc.code,
-                            message=exc.message,
-                        )
-                        if consecutive_failures >= RECEIPT_MAX_CONSECUTIVE_FAILURES:
-                            action_failures.append(
-                                self._failure("receipt", None, None, exc)
-                            )
-                            break
-                    else:
-                        consecutive_failures = 0
-                        result_key = frozenset(candidate_product_names)
-                        consensus_reached = result_key in receipt_results
-                        logger.event(
-                            "小票识别",
-                            "succeeded",
-                            attempt=attempt,
-                            product_names=candidate_product_names,
-                            consensus_reached=consensus_reached,
-                        )
-                        if consensus_reached:
-                            product_names = candidate_product_names
-                            receipt_phase_error = None
-                            break
-                        receipt_results.add(result_key)
-            except Exception as exc:
-                receipt_phase_error = exc
-                action_failures.append(
-                    {
-                        "operation": "receipt",
-                        "product_name": "",
-                        "hand": "",
-                        "error_code": getattr(exc, "code", type(exc).__name__),
-                        "message": str(exc),
-                    }
-                )
-                logger.event(
-                    "小票阶段",
-                    "failed",
-                    error_code=getattr(exc, "code", type(exc).__name__),
-                    message=str(exc),
-                    fallback="finish_without_receipt_items",
-                )
-            finally:
-                receipt_phase_step = step
-                step = "头部相机恢复720p"
-                logger.event("头部相机恢复720p", "started", resolution=720)
-                try:
-                    await self.client.set_head_resolution(720)
-                except Exception as restore_exc:
-                    logger.event(
-                        "头部相机恢复720p",
-                        "failed",
-                        resolution=720,
-                        error_code=getattr(
-                            restore_exc, "code", type(restore_exc).__name__
-                        ),
-                        message=str(restore_exc),
-                        original_step=(
-                            receipt_phase_step if receipt_phase_error is not None else None
-                        ),
-                        original_error_code=(
-                            getattr(
-                                receipt_phase_error,
-                                "code",
-                                type(receipt_phase_error).__name__,
-                            )
-                            if receipt_phase_error is not None
-                            else None
-                        ),
-                        fallback="continue_task1_without_head_camera",
-                    )
-                else:
-                    logger.event("头部相机恢复720p", "succeeded", resolution=720)
-                step = receipt_phase_step
+            step = "模拟点单"
+            logger.event("模拟点单", "started", order_source=request.order_source)
+            order = await self.create_mock_order(
+                request.product_names,
+                request.order_id,
+            )
+            product_names = list(order.product_names)
+            logger.event(
+                "模拟点单",
+                "succeeded",
+                order_id=order.order_id,
+                order_source=order.source,
+                catalog_size=order.catalog_size,
+                product_names=product_names,
+            )
 
             step = "SKU货位转换"
             targets: list[TargetItem] = []
-            resolved_slots: set[str] = set()
+            target_slot_candidates: list[list[str]] = []
             selected_product_names = self._select_products(product_names, logger)
             for name in selected_product_names:
                 logger.event("SKU货位转换", "started", product_name=name)
@@ -314,23 +166,18 @@ class Task1Orchestrator:
                             f"invalid product slot: {invalid_slot}",
                             status_code=422,
                         )
-                    slot_id = min(
+                    candidate_slots = sorted(
                         sku.locations,
-                        key=lambda location: SHELF_LEVEL_PRIORITY[
-                            shelf_level(location)
-                        ],
+                        key=lambda location: (
+                            SHELF_LEVEL_PRIORITY[shelf_level(location)],
+                            location,
+                        ),
                     )
-                    if slot_id in resolved_slots:
-                        raise Task1ServiceError(
-                            "INVALID_RECEIPT",
-                            f"multiple products resolve to the same location: {slot_id}",
-                            status_code=422,
-                        )
-                    target_id = self._target_id(slot_id)
+                    slot_id = candidate_slots[0]
                     target = TargetItem(
                         product_name=name,
                         product_slot_id=slot_id,
-                        target_id=target_id,
+                        target_id="",
                         shelf_level=shelf_level(slot_id),
                         hand=Hand.LEFT,
                     )
@@ -344,51 +191,34 @@ class Task1Orchestrator:
                         message=exc.message,
                     )
                     continue
-                resolved_slots.add(slot_id)
                 targets.append(target)
+                target_slot_candidates.append(candidate_slots)
                 logger.event(
                     "SKU货位转换",
                     "succeeded",
                     product_name=name,
                     sku_id=sku.sku_id,
                     product_slot_id=slot_id,
-                    target_id=target_id,
+                    target_id="",
                     shelf_level=shelf_level(slot_id),
                 )
-            hands: tuple[Hand, ...] = ()
-            if len(targets) == 2:
-                try:
-                    hands = self._assign_hands(
-                        [target.product_slot_id for target in targets]
-                    )
-                except Task1ServiceError as exc:
-                    action_failures.append(self._failure("hand_assignment", None, None, exc))
-                    hands = tuple(
-                        self._allowed_hands(target.product_slot_id)[0]
-                        for target in targets
-                        if self._allowed_hands(target.product_slot_id)
-                    )
-            elif len(targets) == 1:
-                allowed = self._allowed_hands(targets[0].product_slot_id)
-                if allowed:
-                    hands = (allowed[0],)
-                else:
-                    action_failures.append(
-                        {
-                            "operation": "hand_assignment",
-                            "product_name": targets[0].product_name,
-                            "hand": "",
-                            "error_code": "NO_FEASIBLE_HAND_ASSIGNMENT",
-                            "message": "product has no configured safe hand",
-                        }
-                    )
-                    targets.clear()
-            for target, hand in zip(targets, hands):
+            try:
+                planned = self._plan_grasps(targets, target_slot_candidates)
+            except Task1ServiceError as exc:
+                action_failures.append(self._failure("hand_assignment", None, None, exc))
+                targets.clear()
+                planned = []
+            for target, (target_id, hand) in zip(targets, planned):
+                target.target_id = target_id
                 target.hand = hand
                 logger.event(
                     "抓取手分配", "succeeded", product_name=target.product_name,
                     product_slot_id=target.product_slot_id, hand=hand.value,
-                    allowed_hands=[item.value if isinstance(item, Hand) else str(item) for item in self._allowed_hands(target.product_slot_id)],
+                    target_id=target_id,
+                    allowed_choices=[
+                        {"target_id": choice_target, "hand": choice_hand.value}
+                        for choice_target, choice_hand in self._grasp_choices(target.product_slot_id)
+                    ],
                 )
 
             if len(targets) == 2 and targets[0].hand != targets[1].hand:
@@ -513,6 +343,13 @@ class Task1Orchestrator:
                 product_names=product_names,
                 target_items=targets,
                 held_items=held_items,
+                order={
+                    "order_id": order.order_id,
+                    "source": order.source,
+                    "catalog_size": order.catalog_size,
+                    "product_names": order.product_names,
+                },
+                interface_metrics=self.client.interface_metrics(),
             )
             picked_count = sum(target.picked for target in targets)
             placed_count = sum(target.placed for target in targets)
@@ -524,12 +361,17 @@ class Task1Orchestrator:
                 failed_attempt_count=len(action_failures),
                 partial=placed_count < 2,
                 uncertain_hands=[hand.value for hand in sorted(uncertain_hands)],
+                interface_metrics=[
+                    metric.model_dump(mode="json")
+                    for metric in result.interface_metrics
+                ],
             )
             return result
         except Exception as exc:
             original_step = step
             if isinstance(exc, Task1ServiceError):
                 exc.step = original_step
+                exc.interface_metrics = self.client.interface_metrics()
             try:
                 navigation_state["target_id"] = None
                 logger.event(
@@ -565,6 +407,7 @@ class Task1Orchestrator:
                     f"task failed at {original_step}; navigation back to start also failed: {recovery_exc}",
                     failed_interface=getattr(recovery_exc, "failed_interface", None),
                     url=getattr(recovery_exc, "url", None),
+                    interface_metrics=self.client.interface_metrics(),
                 )
                 recovery_error.step = "失败回开始点"
                 logger.event(
@@ -576,6 +419,10 @@ class Task1Orchestrator:
                     original_step=original_step,
                     original_error_code=getattr(exc, "code", type(exc).__name__),
                     original_message=str(exc),
+                    interface_metrics=[
+                        metric.model_dump(mode="json")
+                        for metric in self.client.interface_metrics()
+                    ],
                 )
                 LOGGER.exception(
                     "任务一失败且无法返回开始点 step=%s key=%s",
@@ -591,14 +438,107 @@ class Task1Orchestrator:
                 message=str(exc),
                 failed_interface=getattr(exc, "failed_interface", None),
                 url=getattr(exc, "url", None),
+                interface_metrics=[
+                    metric.model_dump(mode="json")
+                    for metric in self.client.interface_metrics()
+                ],
             )
+            if isinstance(exc, Task1ServiceError):
+                # Include the recovery navigation calls in the error returned
+                # to the web layer as well as in the persisted event log.
+                exc.interface_metrics = self.client.interface_metrics()
             LOGGER.exception("任务一流程失败 step=%s key=%s", original_step, task_run_id)
             raise
         finally:
             self.client.set_trace_callback(None)
 
     def _allowed_hands(self, slot_id: str) -> list[Hand]:
-        return self.settings.product_hand_options.get(slot_id, [Hand.LEFT, Hand.RIGHT])
+        return list(dict.fromkeys(hand for _, hand in self._grasp_choices(slot_id)))
+
+    def _grasp_choices(self, slot_id: str) -> list[tuple[str, Hand]]:
+        configured = self.settings.product_grasp_options.get(slot_id)
+        if configured:
+            return [
+                (option.target_id, hand)
+                for option in configured
+                for hand in option.hands
+            ]
+        # The legacy fallback derives H1_F/H1_B/H2_F/H2_B inspection points
+        # from a four-part slot id. New three-part shelf slots must be explicitly
+        # mapped so an unknown catalog location cannot silently gain both hands
+        # or crash while being parsed by default_inspection_target_id().
+        if len(slot_id.split("_")) == 3:
+            return []
+        target_id = self._target_id(slot_id)
+        hands = self.settings.product_hand_options.get(
+            slot_id, [Hand.LEFT, Hand.RIGHT]
+        )
+        return [(target_id, Hand(hand)) for hand in hands]
+
+    def _plan_grasps(
+        self,
+        targets: list[TargetItem],
+        slot_candidates: list[list[str]] | None = None,
+    ) -> list[tuple[str, Hand]]:
+        candidates = slot_candidates or [
+            [target.product_slot_id] for target in targets
+        ]
+        choices = [
+            [
+                (slot, target_id, hand)
+                for slot in slots
+                for target_id, hand in self._grasp_choices(slot)
+            ]
+            for slots in candidates
+        ]
+        if any(not item for item in choices):
+            raise Task1ServiceError(
+                "NO_FEASIBLE_HAND_ASSIGNMENT",
+                "one or more products have no grasp option",
+                status_code=422,
+            )
+        if len(choices) == 2:
+            # First prefer one navigation point where both hands can pick one item.
+            # If that is impossible, still prefer carrying both items in one trip,
+            # even when the robot must visit two shelf points.
+            for require_same_target in (True, False):
+                for first in choices[0]:
+                    for second in choices[1]:
+                        if first[0] == second[0] or first[2] == second[2]:
+                            continue
+                        if require_same_target and first[1] != second[1]:
+                            continue
+                        targets[0].product_slot_id = first[0]
+                        targets[0].shelf_level = shelf_level(first[0])
+                        targets[1].product_slot_id = second[0]
+                        targets[1].shelf_level = shelf_level(second[0])
+                        return [(first[1], first[2]), (second[1], second[2])]
+            # No distinct left/right pair exists. A serial two-trip plan is still
+            # valid, but the two requested products cannot refer to one physical
+            # slot even when the SKU service returns overlapping candidates.
+            selected_pair = next(
+                (
+                    (first, second)
+                    for first in choices[0]
+                    for second in choices[1]
+                    if first[0] != second[0]
+                ),
+                None,
+            )
+            if selected_pair is None:
+                raise Task1ServiceError(
+                    "NO_FEASIBLE_HAND_ASSIGNMENT",
+                    "two products have no distinct physical slot assignment",
+                    status_code=422,
+                )
+            selected = list(selected_pair)
+        else:
+            selected = [item[0] for item in choices]
+        # No left/right pair exists: execute the one-item-per-trip path.
+        for target, (slot, _, _) in zip(targets, selected):
+            target.product_slot_id = slot
+            target.shelf_level = shelf_level(slot)
+        return [(target_id, hand) for _, target_id, hand in selected]
 
     def _select_products(
         self, product_names: list[str], logger: _Task1Log | _NullTaskLog
@@ -800,7 +740,12 @@ class Task1Orchestrator:
             hand=target.hand,
             action_key=f"{task_run_id}:task1.pick.{index}.pick",
             action=lambda key: self.client.pick(
-                target.product_name, target.hand, target.shelf_level, key
+                target.product_name,
+                target.hand,
+                target.shelf_level,
+                key,
+                slot_id=target.product_slot_id,
+                target_id=target.target_id,
             ),
             logger=logger,
             action_failures=action_failures,
@@ -1375,14 +1320,25 @@ class _Task1Log:
 
     def interface_event(self, trace: dict[str, object]) -> None:
         status_code = trace.get("status_code")
-        status = "succeeded" if isinstance(status_code, int) and status_code < 400 else "failed"
+        status = (
+            "succeeded"
+            if isinstance(status_code, int) and 200 <= status_code < 300
+            else "failed"
+        )
         self.event(
             "接口调用",
             status,
+            call_id=trace.get("call_id"),
             interface=trace.get("interface"),
             service=trace.get("service"),
             method=trace.get("method"),
             url=trace.get("url"),
+            duration_ms=trace.get("duration_ms"),
+            call_count=trace.get("call_count"),
+            success_count=trace.get("success_count"),
+            failure_count=trace.get("failure_count"),
+            total_duration_ms=trace.get("total_duration_ms"),
+            average_duration_ms=trace.get("average_duration_ms"),
             request={
                 "headers": trace.get("headers") or {},
                 "query": trace.get("query") or {},

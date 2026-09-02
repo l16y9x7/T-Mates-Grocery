@@ -28,9 +28,9 @@ DEFAULT_CATALOG_PATH = ROOT / "products.json"
 DEFAULT_INSPECTION_CANDIDATES_PATH = ROOT / "inspection_candidates.json"
 IMAGES_ROOT = (ROOT / "images_new").resolve()
 LOCATION_PATTERN = re.compile(
-    r"^H(?P<shelf>[12])_(?P<face>[FB])_L(?P<level>[1-5])_C(?P<column>\d{2})$"
+    r"^H(?P<shelf>[1-3])_L(?P<level>0[1-5])_C(?P<column>\d{2})$"
 )
-INSPECTION_TARGET_PATTERN = re.compile(r"^H[12]_[FB]_[LR]_INSPECT$")
+INSPECTION_TARGET_PATTERN = re.compile(r"^H(?:1|12|2|23|3)_INSPECT$")
 CandidatePoseType = Literal["", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
 InspectionPoseType = Literal["SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
 
@@ -44,6 +44,10 @@ class ProductResponse(BaseModel):
     name: str
     images: list[str]
     locations: list[str]
+
+
+class SlotProductResponse(ProductResponse):
+    location_id: str
 
 
 class CandidateSkuRequest(BaseModel):
@@ -63,6 +67,7 @@ class ErrorResponse(BaseModel):
 ERROR_RESPONSES = {
     400: {"model": ErrorResponse},
     404: {"model": ErrorResponse},
+    503: {"model": ErrorResponse},
 }
 
 
@@ -164,9 +169,9 @@ class SkuCatalog:
 
         payload = json.loads(path.read_text(encoding="utf-8"))
         targets = payload.get("inspection_targets")
-        if not isinstance(targets, dict) or not targets:
+        if not isinstance(targets, dict):
             raise ValueError(
-                "inspection_candidates.json inspection_targets must be a non-empty object"
+                "inspection_candidates.json inspection_targets must be an object"
             )
 
         loaded: dict[str, dict[int, tuple[str, ...]]] = {}
@@ -235,6 +240,10 @@ class SkuCatalog:
     def product_for_location(self, location: str) -> dict[str, Any] | None:
         return self._copy_product(self._by_location.get(location.strip().upper()))
 
+    @property
+    def has_inspection_candidates(self) -> bool:
+        return bool(self._inspection_candidate_rows)
+
     def candidate_products(
         self,
         location_id: str,
@@ -257,7 +266,6 @@ class SkuCatalog:
             levels = (int(requested.group("level")),)
 
         shelf = requested.group("shelf")
-        face = requested.group("face")
         rows: list[list[dict[str, Any]]] = []
         for level in levels:
             slots: list[tuple[int, dict[str, Any]]] = []
@@ -267,7 +275,6 @@ class SkuCatalog:
                     continue
                 if (
                     parsed.group("shelf") == shelf
-                    and parsed.group("face") == face
                     and int(parsed.group("level")) == level
                 ):
                     slots.append((int(parsed.group("column")), product))
@@ -286,6 +293,36 @@ class SkuCatalog:
             rows.append(row)
         return rows
 
+    def row_layout(self, location_id: str) -> list[dict[str, Any]] | None:
+        """Return every physical column in one row, preserving repeated SKUs."""
+
+        normalized_location = location_id.strip().upper()
+        requested = LOCATION_PATTERN.fullmatch(normalized_location)
+        if requested is None:
+            raise ValueError("invalid location_id")
+        if normalized_location not in self._by_location:
+            return None
+
+        shelf = requested.group("shelf")
+        level = int(requested.group("level"))
+        slots: list[tuple[int, str, dict[str, Any]]] = []
+        for location, product in self._by_location.items():
+            parsed = LOCATION_PATTERN.fullmatch(location)
+            if parsed is None:
+                continue
+            if (
+                parsed.group("shelf") == shelf
+                and int(parsed.group("level")) == level
+            ):
+                slots.append((int(parsed.group("column")), location, product))
+        slots.sort(key=lambda item: item[0])
+        row: list[dict[str, Any]] = []
+        for _, location, product in slots:
+            copied = self._copy_product(product)
+            if copied is not None:
+                row.append({"location_id": location, **copied})
+        return row
+
     def inspection_candidate_products(
         self,
         location_id: str,
@@ -296,10 +333,10 @@ class SkuCatalog:
         target = location_id.strip().upper()
         if INSPECTION_TARGET_PATTERN.fullmatch(target) is None:
             raise ValueError("invalid inspection location_id")
+        levels = (1, 2) if pose_type == "SHELF_VIEW_UPPER" else (3, 4, 5)
         configured_rows = self._inspection_candidate_rows.get(target)
         if configured_rows is None:
-            return None
-        levels = (1, 2) if pose_type == "SHELF_VIEW_UPPER" else (3, 4, 5)
+            return [self._derived_inspection_row(target, level) for level in levels]
         return [
             [
                 self._copy_product(self._by_sku[sku_id])
@@ -307,6 +344,41 @@ class SkuCatalog:
             ]
             for level in levels
         ]
+
+    def _derived_inspection_row(
+        self, target: str, level: int
+    ) -> list[dict[str, Any]]:
+        """Build candidates from the five-point shelf geometry when no manual view exists."""
+
+        def visible(shelf: int, column: int) -> bool:
+            return (
+                (target == "H1_INSPECT" and shelf == 1)
+                or (target == "H12_INSPECT" and ((shelf == 1 and column >= 4) or (shelf == 2 and column <= 2)))
+                or (target == "H2_INSPECT" and shelf == 2)
+                or (target == "H23_INSPECT" and ((shelf == 2 and column >= 5) or (shelf == 3 and column <= 2)))
+                or (target == "H3_INSPECT" and shelf == 3)
+            )
+
+        slots: list[tuple[int, int, dict[str, Any]]] = []
+        for location, product in self._by_location.items():
+            parsed = LOCATION_PATTERN.fullmatch(location)
+            if parsed is None or int(parsed.group("level")) != level:
+                continue
+            shelf = int(parsed.group("shelf"))
+            column = int(parsed.group("column"))
+            if visible(shelf, column):
+                slots.append((shelf, column, product))
+        slots.sort(key=lambda item: (item[0], item[1]))
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for _, _, product in slots:
+            if product["sku_id"] in seen:
+                continue
+            seen.add(product["sku_id"])
+            copied = self._copy_product(product)
+            if copied is not None:
+                result.append(copied)
+        return result
 
     def images_for_name(self, name: str) -> list[str] | None:
         normalized_name = name.strip()
@@ -446,6 +518,22 @@ def create_app(
             [ProductResponse(**product) for product in row]
             for row in rows
         ]
+
+    @app.get(
+        "/sku/get_row_layout",
+        response_model=list[SlotProductResponse],
+        responses=ERROR_RESPONSES,
+    )
+    def get_row_layout(
+        request: CandidateSkuRequest = Body(...),
+    ) -> list[SlotProductResponse]:
+        try:
+            slots = catalog.row_layout(request.location_id)
+        except ValueError as error:
+            raise ApiError(400, "INVALID_LOCATION_ID") from error
+        if slots is None:
+            raise ApiError(404, "LOCATION_NOT_FOUND")
+        return [SlotProductResponse(**slot) for slot in slots]
 
     @app.get(
         "/sku/get_inspection_candidate_SKU",

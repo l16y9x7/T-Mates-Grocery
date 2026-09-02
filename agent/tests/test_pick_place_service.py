@@ -443,6 +443,7 @@ async def test_place_maps_internal_sequence_and_rejects_key_conflict() -> None:
                 "hand": "right",
                 "location_id": "H1_F_L_INSPECT",
                 "pose_type": "SHELF_VIEW_UPPER",
+                "slot_id": "H1_L01_C01",
             },
             headers={"Idempotency-Key": "task-2"},
         )
@@ -454,6 +455,7 @@ async def test_place_maps_internal_sequence_and_rejects_key_conflict() -> None:
                 "hand": "right",
                 "location_id": "H1_F_L_INSPECT",
                 "pose_type": "SHELF_VIEW_UPPER",
+                "slot_id": "H1_L01_C01",
             },
             headers={"Idempotency-Key": "task-2"},
         )
@@ -485,6 +487,7 @@ async def test_place_uses_up_reference_pose_before_prepare_and_release() -> None
         hand="right",
         location_id="H1_F_L_INSPECT",
         pose_type="SHELF_VIEW_UPPER",
+        slot_id="H1_L01_C01",
     )
 
     result = await PickPlaceOrchestrator(settings, fake, FakeFrames()).run(
@@ -1097,7 +1100,12 @@ async def test_subagent_locate_uses_formal_locate_contract() -> None:
         calibration_file="camera.json",
     )
     request = PickPlaceRequest(
-        task_type="SORTING", product_name="可口可乐", hand="LEFT", level="L2"
+        task_type="SORTING",
+        product_name="可口可乐",
+        hand="LEFT",
+        level="L2",
+        slot_id="H2_L02_C03",
+        location_id="H12_INSPECT",
     )
 
     async def handler(http_request: httpx.Request) -> httpx.Response:
@@ -1105,7 +1113,8 @@ async def test_subagent_locate_uses_formal_locate_contract() -> None:
         assert http_request.headers["content-type"] == "application/json"
         assert http_request.content.decode("utf-8") == (
             '{"task_type":"SORTING","product_name":"可口可乐",'
-            '"hand":"left","level":"L2"}'
+            '"hand":"left","level":"L2","slot_id":"H2_L02_C03",'
+            '"target_id":"H12_INSPECT"}'
         )
         return httpx.Response(
             200,
@@ -1132,6 +1141,7 @@ async def test_subagent_place_locate_sends_exact_context_and_parses_new_fields()
         hand="LEFT",
         location_id="H1_F_L_INSPECT",
         pose_type="SHELF_VIEW_UPPER",
+        slot_id="H1_L01_C01",
     )
     async def handler(http_request: httpx.Request) -> httpx.Response:
         assert http_request.url.path == "/perception/place/locate"
@@ -1140,11 +1150,13 @@ async def test_subagent_place_locate_sends_exact_context_and_parses_new_fields()
             "product_name": "商品名",
             "location_id": "H1_F_L_INSPECT",
             "pose_type": "SHELF_VIEW_UPPER",
+            "slot_id": "H1_L01_C01",
         }
         return httpx.Response(
             200,
             json={
                 "name": "商品名",
+                "slot_id": "H1_L01_C01",
                 "bbox": [[10, 20, 30, 40], [50, 20, 70, 40]],
                 "mask": ["cG5nLTE=", "cG5nLTI="],
                 "direction": "both",
@@ -1158,6 +1170,7 @@ async def test_subagent_place_locate_sends_exact_context_and_parses_new_fields()
         result = await SubagentClient(_locate_settings(), client).locate_place(request)
 
     assert result.name == "商品名"
+    assert result.slot_id == "H1_L01_C01"
     assert result.direction == "both"
     assert result.bbox == [[10, 20, 30, 40], [50, 20, 70, 40]]
     assert result.mask == ["cG5nLTE=", "cG5nLTI="]
