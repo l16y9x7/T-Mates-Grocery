@@ -15,14 +15,14 @@ product_hand_options:
   H1_L02_C05: {product_name: "半亩花田洗发水", grasp_options: [{hands: [RIGHT], target_id: H1_INSPECT}, {hands: [LEFT], target_id: H12_INSPECT}]}
   H1_L03_C01: {product_name: "Dove沐浴泡泡樱花甜香", grasp_options: {hands: [LEFT], target_id: H1_INSPECT}}
   H1_L03_C02: {product_name: "Dove沐浴泡泡白桃果香", grasp_options: {hands: [LEFT], target_id: H1_INSPECT}}
-  H1_L03_C03: {product_name: "Dove沐浴泡泡清甜奶香", grasp_options: {hands: [LEFT], target_id: H1_INSPECT}}
+  H1_L03_C03: {product_name: "Dove沐浴泡泡清甜奶香", grasp_options: [{hands: [RIGHT], target_id: H1_INSPECT}, {hands: [LEFT], target_id: H12_INSPECT}]}
   H1_L03_C04: {product_name: "京东京造毛巾", grasp_options: [{hands: [RIGHT], target_id: H1_INSPECT}, {hands: [LEFT], target_id: H12_INSPECT}]}
   H1_L04_C01: {product_name: "心相印厨房纸巾", grasp_options: {hands: [LEFT], target_id: H1_INSPECT}}
   H1_L04_C02: {product_name: "心相印厨房纸巾", grasp_options: {hands: [LEFT], target_id: H1_INSPECT}}
-  H1_L04_C03: {product_name: "心相印厨房纸巾", grasp_options: {hands: [LEFT], target_id: H1_INSPECT}}
+  H1_L04_C03: {product_name: "心相印厨房纸巾", grasp_options: [{hands: [RIGHT], target_id: H1_INSPECT}, {hands: [LEFT], target_id: H12_INSPECT}]}
   H1_L05_C01: {product_name: "拖鞋", grasp_options: {hands: [LEFT], target_id: H1_INSPECT}}
   H1_L05_C02: {product_name: "拖鞋", grasp_options: {hands: [LEFT], target_id: H1_INSPECT}}
-  H1_L05_C03: {product_name: "拖鞋", grasp_options: {hands: [LEFT], target_id: H1_INSPECT}}
+  H1_L05_C03: {product_name: "拖鞋", grasp_options: [{hands: [RIGHT], target_id: H1_INSPECT}, {hands: [LEFT], target_id: H12_INSPECT}]}
 
   H2_L01_C01: {product_name: "可口可乐罐装", grasp_options: [{hands: [LEFT], target_id: H2_INSPECT}, {hands: [RIGHT], target_id: H12_INSPECT}]}
   H2_L01_C02: {product_name: "可口可乐罐装", grasp_options: [{hands: [LEFT], target_id: H2_INSPECT}, {hands: [RIGHT], target_id: H12_INSPECT}]}
@@ -69,13 +69,13 @@ product_hand_options:
   H3_L02_C06: {product_name: "奥利奥白桃乌龙味", grasp_options: {hands: [RIGHT], target_id: H3_INSPECT}}
   H3_L03_C01: {product_name: "呀！土豆番茄酱味", grasp_options: [{hands: [LEFT], target_id: H3_INSPECT}, {hands: [RIGHT], target_id: H23_INSPECT}]}
   H3_L03_C02: {product_name: "呀！土豆番茄酱味", grasp_options: [{hands: [LEFT], target_id: H3_INSPECT}, {hands: [RIGHT], target_id: H23_INSPECT}]}
-  H3_L03_C03: {product_name: "好友趣韩国泡菜味", grasp_options: {hands: [LEFT], target_id: H3_INSPECT}}
+  H3_L03_C03: {product_name: "好友趣韩国泡菜味", grasp_options: {hands: [RIGHT], target_id: H3_INSPECT}}
   H3_L03_C04: {product_name: "好友趣韩国泡菜味", grasp_options: {hands: [RIGHT], target_id: H3_INSPECT}}
   H3_L04_C01: {product_name: "上好佳鲜虾条", grasp_options: [{hands: [LEFT], target_id: H3_INSPECT}, {hands: [RIGHT], target_id: H23_INSPECT}]}
   H3_L04_C02: {product_name: "上好佳鲜虾条", grasp_options: [{hands: [LEFT], target_id: H3_INSPECT}, {hands: [RIGHT], target_id: H23_INSPECT}]}
-  H3_L04_C03: {product_name: "浪味仙", grasp_options: {hands: [LEFT], target_id: H3_INSPECT}}
+  H3_L04_C03: {product_name: "浪味仙", grasp_options: {hands: [RIGHT], target_id: H3_INSPECT}}
   H3_L04_C04: {product_name: "浪味仙", grasp_options: {hands: [RIGHT], target_id: H3_INSPECT}}
   H3_L05_C01: {product_name: "上好佳鲜虾条", grasp_options: [{hands: [LEFT], target_id: H3_INSPECT}, {hands: [RIGHT], target_id: H23_INSPECT}]}
   H3_L05_C02: {product_name: "上好佳鲜虾条", grasp_options: [{hands: [LEFT], target_id: H3_INSPECT}, {hands: [RIGHT], target_id: H23_INSPECT}]}
-  H3_L05_C03: {product_name: "浪味仙", grasp_options: {hands: [LEFT], target_id: H3_INSPECT}}
+  H3_L05_C03: {product_name: "浪味仙", grasp_options: {hands: [RIGHT], target_id: H3_INSPECT}}
   H3_L05_C04: {product_name: "浪味仙", grasp_options: {hands: [RIGHT], target_id: H3_INSPECT}}
