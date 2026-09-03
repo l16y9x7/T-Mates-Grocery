@@ -963,7 +963,7 @@ async def _robot_request(
     idempotency_key: str | None,
     timeout: float | None = None,
 ) -> JSONResponse:
-    """调用真实机器人接口，并把请求/响应原样返回给网页。"""
+    """调用下游能力接口，并把请求/响应原样返回给网页。"""
 
     key = idempotency_key or f"web:{operation}:{uuid4().hex}"
     request_payload = payload or {}
@@ -973,7 +973,7 @@ async def _robot_request(
             response = await client.request(
                 method,
                 target_url,
-                json=request_payload if method != "GET" else None,
+                json=payload if method != "GET" and payload is not None else None,
                 headers={"Content-Type": "application/json", "Idempotency-Key": key},
                 timeout=timeout or DEFAULT_TIMEOUT,
             )
@@ -1072,6 +1072,23 @@ async def gripper_open(
         request.model_dump(mode="json"),
         "gripper_open",
         idempotency_key,
+    )
+
+
+@app.post("/api/sku/reset-inventory")
+async def reset_sku_inventory(
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+) -> JSONResponse:
+    """无参数重置 SKU 库存，并将 products.json 恢复为完整货位。"""
+
+    return await _robot_request(
+        "POST",
+        RUNTIME_SETTINGS.tasks.task1.services.sku,
+        "/sku/reset_inventory",
+        None,
+        "sku_inventory_reset",
+        idempotency_key,
+        timeout=30,
     )
 
 

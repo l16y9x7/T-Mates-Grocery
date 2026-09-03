@@ -41,6 +41,12 @@ h1 { font-size: clamp(2.5rem, 6vw, 4.6rem); line-height: 1; letter-spacing: 0; f
 .system-message { min-height: 18px; margin: 14px 0 0; color: var(--muted); font: 11px/1.5 ui-monospace, monospace; }
 .system-message.success { color: var(--accent); }
 .system-message.failure { color: var(--red); }
+.inventory-reset-control { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 4px; padding: 14px; background: var(--panel-deep); border-left: 2px solid #526e62; }
+.inventory-reset-copy { min-width: 0; }
+.inventory-reset-copy strong, .inventory-reset-copy span { display: block; }
+.inventory-reset-copy strong { color: #e5f1ec; font-size: 13px; }
+.inventory-reset-copy span { margin-top: 6px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.inventory-reset-control .secondary-button { flex: 0 0 auto; min-width: 176px; margin: 0; padding-inline: 18px; }
 .workspace { display: grid; grid-template-columns: minmax(285px, 340px) minmax(0, 1fr); gap: 20px; align-items: stretch; }
 .pick-place-section { overflow: hidden; background: var(--line); border: 1px solid var(--line); }
 .pick-place-modebar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 340px); gap: 24px; align-items: center; padding: 18px 24px; background: var(--panel); }
@@ -207,5 +213,5 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 footer { justify-content: space-between; color: #587069; font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; padding-top: 20px; gap: 14px; }
 footer span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 800px) { .shell { width: min(100% - 28px, 600px); padding-top: 18px; } .intro { padding: 40px 0 30px; } .workspace, .task-workspace, .robot-grid, .system-config, .pick-place-modebar { grid-template-columns: 1fr; } .pick-place-modebar { gap: 16px; } .visual-panel { min-height: 0; } .operation-visual-grid { grid-template-columns: 1fr; } .robot-actions { align-items: flex-start; flex-direction: column; } footer { align-items: flex-start; flex-direction: column; } }
-@media (max-width: 560px) { .robot-ip-form, .task-action-row { grid-template-columns: 1fr; } .panel-heading-meta { gap: 8px; } }
+@media (max-width: 560px) { .robot-ip-form, .task-action-row { grid-template-columns: 1fr; } .inventory-reset-control { align-items: stretch; flex-direction: column; } .inventory-reset-control .secondary-button { width: 100%; } .panel-heading-meta { gap: 8px; } }
 @media (max-width: 480px) { .capture-list { grid-template-columns: 1fr; } }

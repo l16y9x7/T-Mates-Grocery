@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#0b1514" />
     <title>机器人任务控制台</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260902-2" />
+    <link rel="stylesheet" href="/static/styles.css?v=20260903-1" />
   </head>
   <body>
     <main class="shell">
@@ -37,6 +37,14 @@
           </form>
         </div>
         <p id="robotIpMessage" class="system-message" role="status" aria-live="polite"></p>
+        <div class="inventory-reset-control">
+          <div class="inventory-reset-copy">
+            <strong>SKU 库存</strong>
+            <span>将 products.json 中所有商品的库存恢复到完整货位。</span>
+          </div>
+          <button id="inventoryResetButton" class="secondary-button" type="button"><span class="button-icon">↻</span><span>一键重置库存</span></button>
+        </div>
+        <p id="inventoryResetMessage" class="system-message" role="status" aria-live="polite"></p>
       </section>
 
       <section class="task-workspace">
@@ -341,6 +349,6 @@
       </dialog>
       <footer><span>8108 UNIFIED TASK SERVICE</span><span id="footerUrl">-</span></footer>
     </main>
-    <script src="/static/app.js?v=20260902-3" defer></script>
+    <script src="/static/app.js?v=20260903-1" defer></script>
   </body>
 </html>

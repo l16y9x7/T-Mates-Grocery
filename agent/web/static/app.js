@@ -104,6 +104,8 @@ const robotIpSubmitButton = document.querySelector("#robotIpSubmitButton");
 const currentRobotIp = document.querySelector("#currentRobotIp");
 const robotIpRuntimeStatus = document.querySelector("#robotIpRuntimeStatus");
 const robotIpMessage = document.querySelector("#robotIpMessage");
+const inventoryResetButton = document.querySelector("#inventoryResetButton");
+const inventoryResetMessage = document.querySelector("#inventoryResetMessage");
 const forceRestartDialog = document.querySelector("#forceRestartDialog");
 const activeOperationsSummary = document.querySelector("#activeOperationsSummary");
 let eventSource = null;
@@ -1533,6 +1535,48 @@ function setRobotIpMessage(message = "", state = "") {
   robotIpMessage.textContent = message;
   robotIpMessage.className = `system-message ${state}`.trim();
 }
+
+function setInventoryResetMessage(message = "", state = "") {
+  inventoryResetMessage.textContent = message;
+  inventoryResetMessage.className = `system-message ${state}`.trim();
+}
+
+inventoryResetButton.addEventListener("click", async () => {
+  inventoryResetButton.disabled = true;
+  inventoryResetButton.querySelector("span:last-child").textContent = "重置中";
+  setInventoryResetMessage("正在恢复 SKU 完整库存...");
+  try {
+    const response = await fetch("/api/sku/reset-inventory", { method: "POST" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const errorBody = result?.body && typeof result.body === "object"
+        ? result.body
+        : result;
+      throw new Error(responseMessage(errorBody, `库存重置失败（HTTP ${response.status}）`));
+    }
+    const body = result?.body && typeof result.body === "object"
+      ? result.body
+      : result;
+    const modifiedProducts = Number(body.modified_products);
+    const inventoryCount = Number(body.inventory_count);
+    const productCount = Number(body.product_count);
+    if (![modifiedProducts, inventoryCount, productCount].every(Number.isFinite)) {
+      throw new Error("SKU 服务返回的库存统计格式无效");
+    }
+    const stateText = modifiedProducts > 0
+      ? `已恢复 ${modifiedProducts} 个商品`
+      : "库存原本已是完整状态";
+    setInventoryResetMessage(
+      `${stateText}；当前 ${productCount} 个 SKU，共 ${inventoryCount} 个库存货位。`,
+      "success",
+    );
+  } catch (error) {
+    setInventoryResetMessage(error.message || "库存重置失败", "failure");
+  } finally {
+    inventoryResetButton.disabled = false;
+    inventoryResetButton.querySelector("span:last-child").textContent = "一键重置库存";
+  }
+});
 
 function applyRuntimeConfig(config, updateInput = true) {
   applyNavigationTargets(config.navigation_targets);

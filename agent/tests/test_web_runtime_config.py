@@ -142,6 +142,75 @@ async def test_gripper_open_rejects_invalid_hand() -> None:
     assert response.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_inventory_reset_proxies_to_configured_sku_service_without_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, str, dict[str, object] | None, str, str | None, float | None]] = []
+
+    async def fake_robot_request(
+        method: str,
+        base_url: str,
+        path: str,
+        payload: dict[str, object] | None,
+        operation: str,
+        idempotency_key: str | None,
+        timeout: float | None = None,
+    ) -> JSONResponse:
+        calls.append(
+            (method, base_url, path, payload, operation, idempotency_key, timeout)
+        )
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": True,
+                "body": {
+                    "reset": True,
+                    "modified_products": 2,
+                    "product_count": 43,
+                    "inventory_count": 107,
+                },
+            },
+        )
+
+    monkeypatch.setattr(web_app, "_robot_request", fake_robot_request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=web_app.app), base_url="http://web"
+    ) as client:
+        response = await client.post(
+            "/api/sku/reset-inventory",
+            headers={"Idempotency-Key": "reset-stock-test"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["body"]["modified_products"] == 2
+    assert calls == [
+        (
+            "POST",
+            web_app.RUNTIME_SETTINGS.tasks.task1.services.sku,
+            "/sku/reset_inventory",
+            None,
+            "sku_inventory_reset",
+            "reset-stock-test",
+            30,
+        )
+    ]
+
+
+def test_inventory_reset_button_calls_web_proxy() -> None:
+    html = (
+        Path(__file__).resolve().parents[1] / "web/static/index.html"
+    ).read_text(encoding="utf-8")
+    javascript = (
+        Path(__file__).resolve().parents[1] / "web/static/app.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'id="inventoryResetButton"' in html
+    assert 'id="inventoryResetMessage"' in html
+    assert 'fetch("/api/sku/reset-inventory", { method: "POST" })' in javascript
+
+
 def _runtime_copy(tmp_path: Path) -> Path:
     config_path = tmp_path / "runtime.production.yaml"
     shutil.copy2(CONFIG_DIR / "runtime.production.yaml", config_path)
