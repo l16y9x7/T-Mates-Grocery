@@ -6,7 +6,16 @@ const state = {
   callbackUrl: "",
   events: [],
   apiCalls: 0,
-  catalog: ["可口可乐罐装", "百事可乐瓶装", "农夫山泉饮用天然水", "统一冰红茶", "乐事原味薯片", "奥利奥夹心饼干", "蒙牛纯牛奶", "康师傅红烧牛肉面"]
+  catalog: [
+    { sku_id: "SKU_001", name: "NFC桔汁" },
+    { sku_id: "SKU_002", name: "蒙牛纯牛奶" },
+    { sku_id: "SKU_003", name: "纯甄酸奶" },
+    { sku_id: "SKU_014", name: "品客薯片烧烤牛排味" },
+    { sku_id: "SKU_015", name: "品客原味" },
+    { sku_id: "SKU_016", name: "品客酸乳酪洋葱味" },
+    { sku_id: "SKU_017", name: "奥利奥香甜不腻" },
+    { sku_id: "SKU_019", name: "奥利奥浓醇巧克力味" }
+  ]
 };
 
 const $ = (id) => document.getElementById(id);
@@ -45,7 +54,7 @@ function addApiCall(method, path, status, payload) {
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
-  const token = localStorage.getItem("external-access-token");
+  const token = $("accessToken")?.value.trim() || localStorage.getItem("external-access-token");
   if (token) headers.Authorization = `Bearer ${token}`;
   if (options.body) headers["Content-Type"] = "application/json";
   const response = await fetch(path, { ...options, headers, cache: "no-store" });
@@ -78,7 +87,7 @@ function updateTaskForm() {
 
 function fillCatalog() {
   [$("productOne"), $("productTwo")].forEach((select, index) => {
-    select.innerHTML = state.catalog.map((product, productIndex) => `<option value="${productIndex}">${product}</option>`).join("");
+    select.innerHTML = state.catalog.map((product, productIndex) => `<option value="${productIndex}">${product.name} (${product.sku_id})</option>`).join("");
     select.value = String(index);
   });
   $("catalogSize").textContent = `商品池 ${state.catalog.length} 个 SKU`;
@@ -88,12 +97,12 @@ function fillCatalog() {
 function updateOrderSummary() {
   const one = state.catalog[Number($("productOne").value)];
   let two = state.catalog[Number($("productTwo").value)];
-  if (one === two) {
+  if (one?.sku_id === two?.sku_id) {
     $("productTwo").value = String((Number($("productTwo").value) + 1) % state.catalog.length);
     two = state.catalog[Number($("productTwo").value)];
   }
   $("orderId").textContent = `订单号 ${$("externalTaskId").value || "-"}`;
-  $("catalogSize").textContent = `${one || "-"} · ${two || "-"}`;
+  $("catalogSize").textContent = `${one?.name || "-"} · ${two?.name || "-"}`;
 }
 
 function statusClass(status) { return String(status || "unknown").toLowerCase(); }
@@ -107,7 +116,10 @@ function renderHealth(payload) {
     const ready = payload[`ready_for_task${number}`];
     return `<div class="health-task ${ready ? "ready" : ""}"><div><span>Task ${number}</span><strong>${taskInfo[String(number)].name}</strong></div><em>${ready ? "READY" : "BLOCKED"}</em></div>`;
   }).join("");
-  $("dependencies").innerHTML = ["task_orchestrator", "navigation", "pose", "pick_place", "sku"].map((name) => `<span class="dependency"><i></i>${name}</span>`).join("");
+  const dependencies = Array.isArray(payload.dependencies) ? payload.dependencies : [];
+  $("dependencies").innerHTML = dependencies.length
+    ? dependencies.map((dependency) => `<span class="dependency"><i class="${dependency.status === "READY" ? "" : "bad"}"></i>${dependency.name} · ${dependency.status}</span>`).join("")
+    : '<span class="dependency muted-dependency">当前服务未返回依赖明细</span>';
   $("connectionDot").className = `status-dot ${status === "READY" || status === "BUSY" ? "ready" : "failed"}`;
   $("connectionText").textContent = status === "READY" ? "任务服务在线" : status === "BUSY" ? "任务服务忙碌" : "任务服务异常";
 }
@@ -191,7 +203,7 @@ async function submitTask(event) {
   const requestBody = { external_task_id: externalTaskId };
   if (state.task === "1") {
     requestBody.external_order_id = externalTaskId;
-    requestBody.items = [Number($("productOne").value), Number($("productTwo").value)].map((index) => ({ item_id: `ITEM-${String(index + 1).padStart(3, "0")}`, product_name: state.catalog[index], quantity: 1 }));
+    requestBody.items = [Number($("productOne").value), Number($("productTwo").value)].map((index) => ({ item_id: `ITEM-${String(index + 1).padStart(3, "0")}`, sku_id: state.catalog[index].sku_id, quantity: 1 }));
   }
   if ($("callbackEnabled").checked) requestBody.status_callback_url = state.callbackUrl;
   $("submitButton").disabled = true; setMessage("正在发送受理请求…");
@@ -210,6 +222,8 @@ async function boot() {
   state.callbackUrl = config.callback_url;
   $("serviceUrl").textContent = config.robot_task_url;
   $("callbackUrl").textContent = `callback: ${config.callback_url}`;
+  $("accessToken").value = localStorage.getItem("external-access-token") || "";
+  $("accessToken").addEventListener("input", () => localStorage.setItem("external-access-token", $("accessToken").value.trim()));
   fillCatalog(); setDefaultIds(); await refreshHealth();
 }
 

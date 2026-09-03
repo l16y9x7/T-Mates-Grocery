@@ -22,6 +22,15 @@ class ReadyClient:
     async def health_ready(self) -> bool:
         return self.is_ready
 
+    async def search_by_sku(self, sku_id: str):
+        return SimpleNamespace(
+            sku_id=sku_id.upper(),
+            name={"SKU_001": "NFC桔汁", "SKU_002": "蒙牛纯牛奶"}.get(
+                sku_id.upper(), sku_id
+            ),
+            locations=["H3_L01_C01"],
+        )
+
 
 class FakeOrchestrator:
     def __init__(self, task_id: str, *, ready: bool = True, blocking: bool = False) -> None:

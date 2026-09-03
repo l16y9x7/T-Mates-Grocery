@@ -41,6 +41,7 @@
           <div class="form-grid">
             <label class="field"><span>业务任务号</span><input id="externalTaskId" required /></label>
             <label class="field"><span>幂等键</span><input id="idempotencyKey" required /></label>
+            <label class="field full-field"><span>访问令牌 <small>可选</small></span><input id="accessToken" type="password" placeholder="仅在服务端配置 access_token 时填写" autocomplete="off" /></label>
           </div>
           <section id="orderFields" class="order-fields" hidden>
             <div class="subheading"><span>订单商品</span><button id="randomOrderButton" class="text-button" type="button">⤨ 重新随机</button></div>

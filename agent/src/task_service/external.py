@@ -17,11 +17,15 @@ from fastapi import APIRouter, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from task1_service.models import Task1ServiceError
+
 from .coordinator import TaskCoordinator, TaskServiceError
 from .settings import ExternalServiceSettings
 
 
 LOGGER = logging.getLogger(__name__)
+
+
 class CallbackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -44,10 +48,10 @@ class ExternalOrderItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     item_id: str = Field(min_length=1, max_length=200)
-    product_name: str = Field(min_length=1, max_length=200)
+    sku_id: str = Field(min_length=1, max_length=100)
     quantity: Literal[1] = 1
 
-    @field_validator("item_id", "product_name")
+    @field_validator("item_id", "sku_id")
     @classmethod
     def trim_text(cls, value: str) -> str:
         value = value.strip()
@@ -64,15 +68,18 @@ class Task1TriggerRequest(CallbackRequest):
     @field_validator("external_task_id", "external_order_id")
     @classmethod
     def trim_ids(cls, value: str) -> str:
-        return value.strip()
+        value = value.strip()
+        if not value:
+            raise ValueError("order IDs must not be empty")
+        return value
 
     @field_validator("items")
     @classmethod
     def validate_items(cls, value: list[ExternalOrderItem]) -> list[ExternalOrderItem]:
         if len(value) != 2:
             raise ValueError("items must contain exactly two products")
-        if len({item.product_name for item in value}) != 2:
-            raise ValueError("items must contain two distinct products")
+        if len({item.sku_id.upper() for item in value}) != 2:
+            raise ValueError("items must contain two distinct sku_id values")
         if len({item.item_id for item in value}) != 2:
             raise ValueError("item_id values must be distinct")
         return value
@@ -163,6 +170,7 @@ class _ExternalTaskRecord:
     sequence: int = 0
     last_status: dict[str, Any] | None = None
     monitor: asyncio.Task[None] | None = None
+    sku_names: dict[str, str] = field(default_factory=dict)
 
 
 class ExternalTaskService:
@@ -285,7 +293,7 @@ class ExternalTaskService:
             self._by_idempotency[idempotency_key] = record
             self._by_external_id[external_task_id] = record
             try:
-                internal_payload = self._internal_payload(task_number, request)
+                internal_payload = await self._internal_payload(task_number, request, record)
                 execution = await self._coordinator().start_background(task_number, internal_payload, task_id)
             except Exception:
                 self._records.pop(task_id, None)
@@ -467,11 +475,13 @@ class ExternalTaskService:
             summary = {"inspection_points_total": total, "inspection_points_completed": total, "captures_total": len(captures), "captures_completed": len(captures), "captures_failed": 0}
             return self._status(record, "SUCCEEDED", "理货完成", "货架信息已全部记录", {"code": "SUCCEEDED", "label": "理货完成", "progress_percent": 100, "message": "所有货架区域记录完成"}, None, summary, {"level": "SUCCESS", "code": "TASK_SUCCEEDED", "message": "理货已完成"}, captures=captures)
         if record.task_number == "1":
+            request = record.request
             items = []
-            for requested in record.request.items:  # type: ignore[union-attr]
-                target = next((item for item in data.get("target_items", []) if item["product_name"] == requested.product_name), None)
+            for requested in request.items:  # type: ignore[union-attr]
+                product_name = record.sku_names[requested.sku_id.upper()]
+                target = next((item for item in data.get("target_items", []) if item["product_name"] == product_name), None)
                 item_status = "PLACED" if target and target.get("placed") else "PICKED" if target and target.get("picked") else "PENDING"
-                items.append({"item_id": requested.item_id, "product_name": requested.product_name, "status": item_status, "status_label": {"PLACED": "已完成", "PICKED": "已取到", "PENDING": "等待处理"}[item_status], "picked": bool(target and target.get("picked")), "placed": bool(target and target.get("placed")), "message": {"PLACED": "商品已放到交付台", "PICKED": "商品已取到，等待交付", "PENDING": "商品未完成处理"}[item_status]})
+                items.append({"item_id": requested.item_id, "sku_id": requested.sku_id, "product_name": product_name, "status": item_status, "status_label": {"PLACED": "已完成", "PICKED": "已取到", "PENDING": "等待处理"}[item_status], "picked": bool(target and target.get("picked")), "placed": bool(target and target.get("placed")), "message": {"PLACED": "商品已放到交付台", "PICKED": "商品已取到，等待交付", "PENDING": "商品未完成处理"}[item_status]})
             placed = sum(item["placed"] for item in items)
             status = "SUCCEEDED" if placed == len(items) else "PARTIAL_SUCCESS" if placed else "FAILED"
             title = "取货完成" if status == "SUCCEEDED" else "取货部分完成" if status == "PARTIAL_SUCCESS" else "取货失败"
@@ -505,11 +515,33 @@ class ExternalTaskService:
             return {"total_items": 2, "items_completed": 0, "items_in_progress": 0, "items_failed": 0, "items_held": 0}
         return {"inspection_points_total": 0, "inspection_points_completed": 0, "shortage_items_found": 0, "replenishment_items_placed": 0, "held_items": 0}
 
-    @staticmethod
-    def _internal_payload(task_number: str, request: BaseModel) -> dict[str, Any]:
+    async def _internal_payload(
+        self,
+        task_number: str,
+        request: BaseModel,
+        record: _ExternalTaskRecord,
+    ) -> dict[str, Any]:
         if task_number == "1":
             body = request  # type: ignore[assignment]
-            return {"order_source": "mock_random", "order_id": body.external_order_id, "product_names": [item.product_name for item in body.items]}
+            product_names = []
+            for item in body.items:
+                try:
+                    sku = await self._coordinator().bindings["1"].orchestrator.client.search_by_sku(item.sku_id)
+                except Task1ServiceError as exc:
+                    if exc.code == "SKU_NOT_FOUND":
+                        raise TaskServiceError(
+                            "PRODUCT_NOT_FOUND",
+                            f"SKU 不存在: {item.sku_id}",
+                            status_code=422,
+                        ) from exc
+                    raise
+                record.sku_names[item.sku_id.upper()] = sku.name
+                product_names.append(sku.name)
+            return {
+                "order_source": "mock_random",
+                "order_id": body.external_order_id,
+                "product_names": product_names,
+            }
         return {}
 
     def _callback_url(self, requested: str | None) -> str | None:

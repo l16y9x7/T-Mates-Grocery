@@ -328,6 +328,35 @@ class Task1Client:
         assert last_error is not None
         raise last_error
 
+    async def search_by_sku(self, sku_id: str) -> SkuResponse:
+        last_error: Task1ServiceError | None = None
+        for attempt in (1, 2):
+            try:
+                response = await self._request(
+                    "sku",
+                    "GET",
+                    "/sku/search_by_SKU",
+                    params={"sku": sku_id},
+                    timeout_seconds=self.settings.timeouts.sku_seconds,
+                )
+                try:
+                    result = SkuResponse.model_validate(response.json())
+                except (ValueError, ValidationError) as exc:
+                    raise Task1ServiceError(
+                        "INVALID_RESPONSE", "SKU ID response is invalid"
+                    ) from exc
+                if result.sku_id.upper() != sku_id.strip().upper():
+                    raise Task1ServiceError(
+                        "INVALID_RESPONSE", "SKU response ID does not match request"
+                    )
+                return result
+            except Task1ServiceError as exc:
+                last_error = exc
+                if attempt == 2 or exc.code == "NETWORK_ERROR":
+                    raise
+        assert last_error is not None
+        raise last_error
+
     async def search_by_location(self, location: str) -> SkuResponse:
         response = await self._request(
             "sku",

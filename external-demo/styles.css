@@ -62,6 +62,8 @@ h2 { font-size: 19px; line-height: 1.1; font-weight: 680; }
 .dependencies { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 14px; color: var(--dim); font: 10px ui-monospace, monospace; }
 .dependency { display: inline-flex; align-items: center; gap: 6px; }
 .dependency i { width: 6px; height: 6px; border-radius: 50%; background: var(--lime); }
+.dependency i.bad { background: var(--red); }
+.muted-dependency { color: var(--dim); }
 .workspace, .lower-grid { display: grid; grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr); gap: 18px; margin-top: 18px; }
 .panel { min-width: 0; padding: 24px; background: var(--surface); border: 1px solid var(--line); }
 .panel-heading { align-items: flex-start; padding-bottom: 20px; border-bottom: 1px solid var(--line-soft); }
@@ -73,6 +75,8 @@ h2 { font-size: 19px; line-height: 1.1; font-weight: 680; }
 .task-tab.active { border-color: var(--lime); background: #172530; }
 .task-tab.active b { color: var(--lime); }
 .form-grid, .order-items { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 18px; }
+.full-field { grid-column: 1 / -1; }
+.field small { color: var(--dim); font-size: 10px; }
 .field { display: grid; gap: 7px; min-width: 0; color: var(--muted); font-size: 11px; }
 .field input, .field select { width: 100%; min-height: 42px; padding: 0 11px; color: var(--text); background: var(--surface-3); border: 1px solid var(--line); border-radius: 0; outline: none; }
 .field input:focus, .field select:focus { border-color: var(--lime); }

@@ -32,8 +32,8 @@ async def test_external_task1_is_accepted_and_converted_to_internal_order() -> N
                 "external_task_id": "order-1",
                 "external_order_id": "order-1",
                 "items": [
-                    {"item_id": "item-1", "product_name": "可口可乐罐装"},
-                    {"item_id": "item-2", "product_name": "百事可乐瓶装"},
+                    {"item_id": "item-1", "sku_id": "SKU_001"},
+                    {"item_id": "item-2", "sku_id": "SKU_002"},
                 ],
             },
         )
@@ -43,7 +43,7 @@ async def test_external_task1_is_accepted_and_converted_to_internal_order() -> N
     assert response.json()["task_type"] == "TASK1_PICKUP"
     assert response.json()["status"] == "ACCEPTED"
     assert bindings["1"].last_request.order_id == "order-1"
-    assert bindings["1"].last_request.product_names == ["可口可乐罐装", "百事可乐瓶装"]
+    assert bindings["1"].last_request.product_names == ["NFC桔汁", "蒙牛纯牛奶"]
 
 
 @pytest.mark.asyncio
