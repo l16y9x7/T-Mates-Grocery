@@ -152,6 +152,47 @@ class Task1Mock:
         return httpx.Response(404, json={"error_code": "UNKNOWN_ENDPOINT"})
 
 
+class PickConcurrencyMock(Task1Mock):
+    """Hold the first pick briefly so tests can observe overlapping requests."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.active_pick_requests = 0
+        self.max_active_pick_requests = 0
+        self.initial_pick_failures: dict[str, dict[str, object]] = {}
+
+    async def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path != "/pick":
+            return await super().handle(request)
+
+        self.requests.append(request)
+        self.pick_attempts += 1
+        request_index = self.pick_attempts
+        self.active_pick_requests += 1
+        self.max_active_pick_requests = max(
+            self.max_active_pick_requests,
+            self.active_pick_requests,
+        )
+        try:
+            if request_index == 1:
+                # Yield once: a concurrently scheduled second request enters
+                # before this one completes; a serial caller remains at one.
+                await asyncio.sleep(0)
+            if self.pick_failure is not None and (
+                self.pick_failure_limit is None
+                or request_index <= self.pick_failure_limit
+            ):
+                return httpx.Response(502, json=self.pick_failure)
+            request_hand = payload(request)["hand"]
+            if ":recovery." not in request.headers["Idempotency-Key"]:
+                failure = self.initial_pick_failures.get(request_hand)
+                if failure is not None:
+                    return httpx.Response(502, json=failure)
+            return httpx.Response(200, json={"status": "SUCCEEDED"})
+        finally:
+            self.active_pick_requests -= 1
+
+
 def settings() -> Task1Settings:
     return Task1Settings(
         services={
@@ -623,6 +664,77 @@ def test_task1_rejects_two_products_when_only_same_slot_is_available() -> None:
     assert "distinct physical slot" in error.value.message
 
 
+def test_task1_prefers_same_target_and_level_for_parallel_pick() -> None:
+    task_settings = settings().model_copy(
+        update={
+            "product_grasp_options": {
+                "H2_L04_C02": [
+                    GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT")
+                ],
+                "H2_L05_C03": [
+                    GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT")
+                ],
+                "H2_L05_C04": [
+                    GraspOption(hands=[Hand.RIGHT], target_id="H2_INSPECT")
+                ],
+            }
+        }
+    )
+    orchestrator = Task1Orchestrator(task_settings, None)  # type: ignore[arg-type]
+    targets = [
+        TargetItem(
+            product_name="多层商品",
+            product_slot_id="H2_L04_C02",
+            target_id="",
+            shelf_level="L4",
+            hand=Hand.LEFT,
+        ),
+        TargetItem(
+            product_name="五层商品",
+            product_slot_id="H2_L05_C04",
+            target_id="",
+            shelf_level="L5",
+            hand=Hand.LEFT,
+        ),
+    ]
+
+    planned = orchestrator._plan_grasps(
+        targets,
+        [["H2_L04_C02", "H2_L05_C03"], ["H2_L05_C04"]],
+    )
+
+    assert [target.product_slot_id for target in targets] == [
+        "H2_L05_C03",
+        "H2_L05_C04",
+    ]
+    assert [target.shelf_level for target in targets] == ["L5", "L5"]
+    assert planned == [
+        ("H2_INSPECT", Hand.LEFT),
+        ("H2_INSPECT", Hand.RIGHT),
+    ]
+
+
+def test_parallel_pick_eligibility_does_not_require_different_product_names() -> None:
+    targets = [
+        TargetItem(
+            product_name="同款商品",
+            product_slot_id="H3_L01_C03",
+            target_id="H3_INSPECT",
+            shelf_level="L1",
+            hand=Hand.LEFT,
+        ),
+        TargetItem(
+            product_name="同款商品",
+            product_slot_id="H3_L01_C04",
+            target_id="H3_INSPECT",
+            shelf_level="L1",
+            hand=Hand.RIGHT,
+        ),
+    ]
+
+    assert Task1Orchestrator._can_pick_in_parallel(targets) is True
+
+
 @pytest.mark.parametrize(
     ("locations", "expected_slot"),
     [
@@ -788,6 +900,230 @@ async def test_task1_navigates_by_inspection_target_and_reuses_same_target() -> 
         and payload(request) == {"pose_type": "START_POSITION"}
     ]
     assert len(resets) == len(navigation)
+
+
+@pytest.mark.asyncio
+async def test_task1_picks_in_parallel_at_the_same_target_and_level(
+    tmp_path: Path,
+) -> None:
+    mock = PickConcurrencyMock()
+    mock.names = {
+        "同层左手商品": "H3_L01_C03",
+        "同层右手商品": "H3_L01_C04",
+    }
+    task_settings = settings().model_copy(
+        update={
+            "log_dir": str(tmp_path),
+            "product_grasp_options": {
+                "H3_L01_C03": [
+                    GraspOption(hands=[Hand.LEFT], target_id="H3_INSPECT")
+                ],
+                "H3_L01_C04": [
+                    GraspOption(hands=[Hand.RIGHT], target_id="H3_INSPECT")
+                ],
+            },
+        }
+    )
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
+
+    assert [item.target_id for item in result.target_items] == [
+        "H3_INSPECT",
+        "H3_INSPECT",
+    ]
+    assert [item.shelf_level for item in result.target_items] == ["L1", "L1"]
+    assert [item.hand for item in result.target_items] == [Hand.LEFT, Hand.RIGHT]
+    assert mock.max_active_pick_requests == 2
+    pick_requests = [
+        request for request in mock.requests if request.url.path == "/pick"
+    ]
+    assert len(pick_requests) == 2
+    assert len(
+        {request.headers["Idempotency-Key"] for request in pick_requests}
+    ) == 2
+    shelf_pick_poses = [
+        payload(request)
+        for request in mock.requests
+        if request.url.path == "/pose/prepare"
+        and payload(request).get("pose_type") == "SHELF_PICK_READY"
+    ]
+    assert shelf_pick_poses == [
+        {"pose_type": "SHELF_PICK_READY", "shelf_level": "L1"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_parallel_pick_waits_for_both_initial_calls_before_serial_recovery(
+    tmp_path: Path,
+) -> None:
+    mock = PickConcurrencyMock()
+    mock.names = {
+        "并行左手商品": "H3_L01_C03",
+        "并行右手商品": "H3_L01_C04",
+    }
+    mock.pick_failure = {
+        "error_code": "EXECUTION_FAILED",
+        "message": "first left pick failed",
+        "failed_interface": "manipulation_grasp",
+    }
+    mock.pick_failure_limit = 1
+    task_settings = settings().model_copy(
+        update={
+            "log_dir": str(tmp_path),
+            "product_grasp_options": {
+                "H3_L01_C03": [
+                    GraspOption(hands=[Hand.LEFT], target_id="H3_INSPECT")
+                ],
+                "H3_L01_C04": [
+                    GraspOption(hands=[Hand.RIGHT], target_id="H3_INSPECT")
+                ],
+            },
+        }
+    )
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(
+            Task1Request(), "parallel-recovery"
+        )
+
+    assert mock.max_active_pick_requests == 2
+    assert [item.picked for item in result.target_items] == [True, True]
+    pick_requests = [
+        request for request in mock.requests if request.url.path == "/pick"
+    ]
+    assert [request.headers["Idempotency-Key"] for request in pick_requests] == [
+        "parallel-recovery:task1.pick.0.pick",
+        "parallel-recovery:task1.pick.1.pick",
+        "parallel-recovery:task1.pick.0.pick:recovery.retry",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_parallel_pick_does_not_recover_while_other_hand_is_unknown() -> None:
+    mock = PickConcurrencyMock()
+    mock.initial_pick_failures = {
+        "LEFT": {
+            "error_code": "ACTION_RESULT_UNKNOWN",
+            "message": "left pick result unknown",
+        },
+        "RIGHT": {
+            "error_code": "EXECUTION_FAILED",
+            "message": "right pick failed",
+            "failed_interface": "manipulation_grasp",
+            "pose": [1, 2, 3, 4, 5, 6],
+        },
+    }
+    task_settings = settings().model_copy(
+        update={
+            "product_grasp_options": {
+                "H3_L01_C03": [
+                    GraspOption(hands=[Hand.LEFT], target_id="H3_INSPECT")
+                ],
+                "H3_L01_C04": [
+                    GraspOption(hands=[Hand.RIGHT], target_id="H3_INSPECT")
+                ],
+            }
+        }
+    )
+    targets = [
+        TargetItem(
+            product_name="未知左手商品",
+            product_slot_id="H3_L01_C03",
+            target_id="H3_INSPECT",
+            shelf_level="L1",
+            hand=Hand.LEFT,
+        ),
+        TargetItem(
+            product_name="失败右手商品",
+            product_slot_id="H3_L01_C04",
+            target_id="H3_INSPECT",
+            shelf_level="L1",
+            hand=Hand.RIGHT,
+        ),
+    ]
+    client = Task1Client(task_settings, transport=mock.transport)
+    held_items: dict[Hand, str] = {}
+    uncertain_hands: set[Hand] = set()
+    action_failures: list[dict[str, str]] = []
+
+    async with client:
+        outcomes = await Task1Orchestrator(
+            task_settings, client
+        )._pick_targets_parallel(
+            targets,
+            "parallel-unknown",
+            task1_service_module._NullTaskLog(),
+            {"target_id": None},
+            held_items,
+            uncertain_hands,
+            action_failures,
+        )
+
+    assert outcomes == [False, False]
+    assert uncertain_hands == {Hand.LEFT}
+    assert held_items == {}
+    pick_requests = [
+        request for request in mock.requests if request.url.path == "/pick"
+    ]
+    assert len(pick_requests) == 2
+    assert not [
+        request
+        for request in mock.requests
+        if request.url.path == "/navigation/nudge"
+        or (
+            request.url.path == "/pose/prepare"
+            and request.headers["Idempotency-Key"].endswith(":recovery.pose")
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_task1_keeps_same_target_different_levels_serial(
+    tmp_path: Path,
+) -> None:
+    mock = PickConcurrencyMock()
+    mock.names = {
+        "一层左手商品": "H3_L01_C03",
+        "二层右手商品": "H3_L02_C04",
+    }
+    task_settings = settings().model_copy(
+        update={
+            "log_dir": str(tmp_path),
+            "product_grasp_options": {
+                "H3_L01_C03": [
+                    GraspOption(hands=[Hand.LEFT], target_id="H3_INSPECT")
+                ],
+                "H3_L02_C04": [
+                    GraspOption(hands=[Hand.RIGHT], target_id="H3_INSPECT")
+                ],
+            },
+        }
+    )
+    client = Task1Client(task_settings, transport=mock.transport)
+
+    async with client:
+        result = await Task1Orchestrator(task_settings, client).run(Task1Request())
+
+    assert [item.target_id for item in result.target_items] == [
+        "H3_INSPECT",
+        "H3_INSPECT",
+    ]
+    assert [item.shelf_level for item in result.target_items] == ["L1", "L2"]
+    assert [item.hand for item in result.target_items] == [Hand.LEFT, Hand.RIGHT]
+    assert mock.max_active_pick_requests == 1
+    shelf_pick_poses = [
+        payload(request)
+        for request in mock.requests
+        if request.url.path == "/pose/prepare"
+        and payload(request).get("pose_type") == "SHELF_PICK_READY"
+    ]
+    assert shelf_pick_poses == [
+        {"pose_type": "SHELF_PICK_READY", "shelf_level": "L1"},
+        {"pose_type": "SHELF_PICK_READY", "shelf_level": "L2"},
+    ]
 
 
 @pytest.mark.asyncio
