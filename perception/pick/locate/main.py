@@ -2803,7 +2803,7 @@ def keep_display_rows_for_inventory(
     instances: list[LocatedInstance],
     required_count: int,
 ) -> list[LocatedInstance]:
-    """Fill physical slots from nearest display rows without rear-row bridges."""
+    """Fill slots by shelf-front distance after removing tiny mask outliers."""
 
     if not instances or required_count <= 0:
         return []
@@ -2817,6 +2817,7 @@ def keep_display_rows_for_inventory(
                 if (instance.display_row_index or 1) == row_index
             ]
         )
+        row_instances = drop_smallest_mask_area_outlier(row_instances)
         available = [
             instance
             for instance in row_instances
@@ -2828,16 +2829,33 @@ def keep_display_rows_for_inventory(
         ]
         needed = required_count - len(selected)
         if len(available) > needed:
-            available = sorted(
-                available,
-                key=lambda instance: (
-                    mask_foreground_pixel_count(instance.mask),
-                    instance.score if instance.score is not None else -1.0,
-                    (instance.bbox[2] - instance.bbox[0])
-                    * (instance.bbox[3] - instance.bbox[1]),
-                ),
-                reverse=True,
-            )[:needed]
+            distances_available = all(
+                instance.shelf_front_distance_ratio is not None
+                and math.isfinite(instance.shelf_front_distance_ratio)
+                for instance in available
+            )
+            if distances_available:
+                # 同一候选排超出库存数量时，优先保留 mask 底部最靠近红色货架前沿的实例。
+                available = sorted(
+                    available,
+                    key=lambda instance: (
+                        instance.shelf_front_distance_ratio,
+                        -(instance.score if instance.score is not None else -1.0),
+                        instance_center_x(instance),
+                    ),
+                )[:needed]
+            else:
+                # 红色货架前沿不可用时，才回退到原来的 mask 面积排序。
+                available = sorted(
+                    available,
+                    key=lambda instance: (
+                        mask_foreground_pixel_count(instance.mask),
+                        instance.score if instance.score is not None else -1.0,
+                        (instance.bbox[2] - instance.bbox[0])
+                        * (instance.bbox[3] - instance.bbox[1]),
+                    ),
+                    reverse=True,
+                )[:needed]
         selected.extend(available)
         if len(selected) >= required_count:
             break

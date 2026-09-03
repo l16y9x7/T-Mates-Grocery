@@ -296,7 +296,7 @@
     "sam3_prompt": "frontmost pepsi bottle"
   },
   "百岁山矿泉水": {
-    "qwen3_prompt": "找到图片中货架上的百岁山矿泉水瓶堆，不是宝矿力水特，输出一个完整的大bbox。返回格式：{\"name\": \"百岁山矿泉水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的百岁山矿泉水瓶堆，一共有三排，输出一个完整的大bbox。返回格式：{\"name\": \"百岁山矿泉水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost transparent bottle"
   },
   "百草味海苔肉松蛋卷": {
