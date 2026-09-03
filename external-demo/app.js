@@ -203,7 +203,7 @@ async function submitTask(event) {
   const requestBody = { external_task_id: externalTaskId };
   if (state.task === "1") {
     requestBody.external_order_id = externalTaskId;
-    requestBody.items = [Number($("productOne").value), Number($("productTwo").value)].map((index) => ({ item_id: `ITEM-${String(index + 1).padStart(3, "0")}`, sku_id: state.catalog[index].sku_id, quantity: 1 }));
+    requestBody.items = [Number($("productOne").value), Number($("productTwo").value)].map((index) => ({ sku_id: state.catalog[index].sku_id, quantity: 1 }));
   }
   if ($("callbackEnabled").checked) requestBody.status_callback_url = state.callbackUrl;
   $("submitButton").disabled = true; setMessage("正在发送受理请求…");

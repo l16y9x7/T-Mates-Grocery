@@ -32,8 +32,8 @@ async def test_external_task1_is_accepted_and_converted_to_internal_order() -> N
                 "external_task_id": "order-1",
                 "external_order_id": "order-1",
                 "items": [
-                    {"item_id": "item-1", "sku_id": "SKU_001"},
-                    {"item_id": "item-2", "sku_id": "SKU_002"},
+                    {"sku_id": "SKU_001"},
+                    {"sku_id": "SKU_002"},
                 ],
             },
         )
@@ -67,6 +67,28 @@ async def test_external_requires_idempotency_key_and_rejects_untrusted_callback(
     assert missing_key.status_code == 400
     assert untrusted_callback.status_code == 422
     assert untrusted_callback.json()["error_code"] == "CALLBACK_URL_NOT_ALLOWED"
+
+
+@pytest.mark.asyncio
+async def test_external_order_uses_sku_id_and_rejects_item_id() -> None:
+    app = app_for()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://tasks.local"
+    ) as client:
+        response = await client.post(
+            "/api/external/v1/task1/orders",
+            headers={"Idempotency-Key": "order-key"},
+            json={
+                "external_task_id": "order-1",
+                "external_order_id": "order-1",
+                "items": [
+                    {"item_id": "item-1", "sku_id": "SKU_001"},
+                    {"item_id": "item-2", "sku_id": "SKU_002"},
+                ],
+            },
+        )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

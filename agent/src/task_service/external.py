@@ -47,11 +47,10 @@ class Task0TriggerRequest(CallbackRequest):
 class ExternalOrderItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    item_id: str = Field(min_length=1, max_length=200)
     sku_id: str = Field(min_length=1, max_length=100)
     quantity: Literal[1] = 1
 
-    @field_validator("item_id", "sku_id")
+    @field_validator("sku_id")
     @classmethod
     def trim_text(cls, value: str) -> str:
         value = value.strip()
@@ -80,8 +79,6 @@ class Task1TriggerRequest(CallbackRequest):
             raise ValueError("items must contain exactly two products")
         if len({item.sku_id.upper() for item in value}) != 2:
             raise ValueError("items must contain two distinct sku_id values")
-        if len({item.item_id for item in value}) != 2:
-            raise ValueError("item_id values must be distinct")
         return value
 
 
@@ -481,13 +478,13 @@ class ExternalTaskService:
                 product_name = record.sku_names[requested.sku_id.upper()]
                 target = next((item for item in data.get("target_items", []) if item["product_name"] == product_name), None)
                 item_status = "PLACED" if target and target.get("placed") else "PICKED" if target and target.get("picked") else "PENDING"
-                items.append({"item_id": requested.item_id, "sku_id": requested.sku_id, "product_name": product_name, "status": item_status, "status_label": {"PLACED": "已完成", "PICKED": "已取到", "PENDING": "等待处理"}[item_status], "picked": bool(target and target.get("picked")), "placed": bool(target and target.get("placed")), "message": {"PLACED": "商品已放到交付台", "PICKED": "商品已取到，等待交付", "PENDING": "商品未完成处理"}[item_status]})
+                items.append({"sku_id": requested.sku_id, "product_name": product_name, "status": item_status, "status_label": {"PLACED": "已完成", "PICKED": "已取到", "PENDING": "等待处理"}[item_status], "picked": bool(target and target.get("picked")), "placed": bool(target and target.get("placed")), "message": {"PLACED": "商品已放到交付台", "PICKED": "商品已取到，等待交付", "PENDING": "商品未完成处理"}[item_status]})
             placed = sum(item["placed"] for item in items)
             status = "SUCCEEDED" if placed == len(items) else "PARTIAL_SUCCESS" if placed else "FAILED"
             title = "取货完成" if status == "SUCCEEDED" else "取货部分完成" if status == "PARTIAL_SUCCESS" else "取货失败"
             return self._status(record, status, title, f"已完成 {placed}/{len(items)} 件商品", {"code": status, "label": title, "progress_percent": 100, "message": "订单处理已结束"}, None, {"total_items": len(items), "items_completed": placed, "items_in_progress": 0, "items_failed": len(items) - placed, "items_held": sum(item["picked"] and not item["placed"] for item in items)}, {"level": "SUCCESS" if status == "SUCCEEDED" else "WARNING" if status == "PARTIAL_SUCCESS" else "ERROR", "code": "TASK_COMPLETED", "message": title}, items=items)
         target_items = data.get("target_items", [])
-        items = [{"item_id": f"{record.task_id}-item-{index}", "product_name": item["product_name"], "status": "REPLENISHED" if item.get("placed") else "PICKED" if item.get("picked") else "PENDING", "status_label": "已完成补货" if item.get("placed") else "已取到" if item.get("picked") else "等待处理", "picked": item.get("picked", False), "placed": item.get("placed", False), "message": "商品已补回货架" if item.get("placed") else "等待补货"} for index, item in enumerate(target_items, 1)]
+        items = [{"product_name": item["product_name"], "status": "REPLENISHED" if item.get("placed") else "PICKED" if item.get("picked") else "PENDING", "status_label": "已完成补货" if item.get("placed") else "已取到" if item.get("picked") else "等待处理", "picked": item.get("picked", False), "placed": item.get("placed", False), "message": "商品已补回货架" if item.get("placed") else "等待补货"} for item in target_items]
         placed = sum(item["placed"] for item in items)
         if not items:
             status = "SUCCEEDED"
