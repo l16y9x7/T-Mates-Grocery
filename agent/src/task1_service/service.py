@@ -1,7 +1,8 @@
-"""任务一的串行编排流程。"""
+"""任务一的抓取与交付编排流程。"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -222,11 +223,10 @@ class Task1Orchestrator:
                 )
 
             if len(targets) == 2 and targets[0].hand != targets[1].hand:
-                for index, target in enumerate(targets):
-                    step = "商品抓取"
-                    await self._pick_target_best_effort(
-                        target,
-                        index,
+                if self._can_pick_in_parallel(targets):
+                    step = "商品并行抓取"
+                    await self._pick_targets_parallel_best_effort(
+                        targets,
                         task_run_id,
                         logger,
                         navigation_state,
@@ -234,6 +234,19 @@ class Task1Orchestrator:
                         uncertain_hands,
                         action_failures,
                     )
+                else:
+                    for index, target in enumerate(targets):
+                        step = "商品抓取"
+                        await self._pick_target_best_effort(
+                            target,
+                            index,
+                            task_run_id,
+                            logger,
+                            navigation_state,
+                            held_items,
+                            uncertain_hands,
+                            action_failures,
+                        )
                 if held_items:
                     step = "交付台准备"
                     delivery_ready = await self._prepare_delivery_best_effort(
@@ -498,15 +511,24 @@ class Task1Orchestrator:
                 status_code=422,
             )
         if len(choices) == 2:
-            # First prefer one navigation point where both hands can pick one item.
-            # If that is impossible, still prefer carrying both items in one trip,
-            # even when the robot must visit two shelf points.
-            for require_same_target in (True, False):
+            # Prefer a pair that can share both navigation and shelf pose so its
+            # left/right pick requests can run concurrently. Fall back to the
+            # previous same-target and two-target carrying plans when needed.
+            for require_same_target, require_same_level in (
+                (True, True),
+                (True, False),
+                (False, False),
+            ):
                 for first in choices[0]:
                     for second in choices[1]:
                         if first[0] == second[0] or first[2] == second[2]:
                             continue
                         if require_same_target and first[1] != second[1]:
+                            continue
+                        if (
+                            require_same_level
+                            and shelf_level(first[0]) != shelf_level(second[0])
+                        ):
                             continue
                         targets[0].product_slot_id = first[0]
                         targets[0].shelf_level = shelf_level(first[0])
@@ -539,6 +561,19 @@ class Task1Orchestrator:
             target.product_slot_id = slot
             target.shelf_level = shelf_level(slot)
         return [(target_id, hand) for _, target_id, hand in selected]
+
+    @staticmethod
+    def _can_pick_in_parallel(targets: list[TargetItem]) -> bool:
+        """Return whether two planned targets share one safe dual-arm setup."""
+
+        return (
+            len(targets) == 2
+            and targets[0].product_slot_id != targets[1].product_slot_id
+            and targets[0].target_id == targets[1].target_id
+            and targets[0].shelf_level == targets[1].shelf_level
+            and {target.hand for target in targets} == {Hand.LEFT, Hand.RIGHT}
+            and all(_initial_nudge_direction(target) is None for target in targets)
+        )
 
     def _select_products(
         self, product_names: list[str], logger: _Task1Log | _NullTaskLog
@@ -602,6 +637,267 @@ class Task1Orchestrator:
             "error_code": error.code,
             "message": error.message,
         }
+
+    async def _pick_targets_parallel_best_effort(
+        self,
+        targets: list[TargetItem],
+        task_run_id: str,
+        logger: "_Task1Log",
+        navigation_state: dict[str, str | None],
+        held_items: dict[Hand, str],
+        uncertain_hands: set[Hand],
+        action_failures: list[dict[str, str]],
+    ) -> list[bool]:
+        try:
+            return await self._pick_targets_parallel(
+                targets,
+                task_run_id,
+                logger,
+                navigation_state,
+                held_items,
+                uncertain_hands,
+                action_failures,
+            )
+        except Task1ServiceError as exc:
+            navigation_state["target_id"] = None
+            logger.event(
+                "并行抓取",
+                "failed",
+                execution_mode="parallel",
+                target_id=targets[0].target_id if targets else "",
+                shelf_level=targets[0].shelf_level if targets else "",
+                error_code=exc.code,
+                message=exc.message,
+            )
+            for target in targets:
+                failure = self._failure(
+                    "pick_prerequisite", target.product_name, target.hand, exc
+                )
+                action_failures.append(failure)
+                logger.event(
+                    "商品处理",
+                    "skipped",
+                    **failure,
+                    execution_mode="parallel",
+                    fallback="skip_parallel_pair",
+                )
+            return [False for _ in targets]
+
+    async def _pick_targets_parallel(
+        self,
+        targets: list[TargetItem],
+        task_run_id: str,
+        logger: "_Task1Log",
+        navigation_state: dict[str, str | None],
+        held_items: dict[Hand, str],
+        uncertain_hands: set[Hand],
+        action_failures: list[dict[str, str]],
+    ) -> list[bool]:
+        """Run only the two initial pick requests concurrently.
+
+        Navigation and shelf pose preparation are shared. Any recovery that can
+        move the base or change the robot pose is deliberately processed after
+        both initial requests have settled, one hand at a time.
+        """
+
+        if not self._can_pick_in_parallel(targets):
+            raise Task1ServiceError(
+                "INVALID_PARALLEL_PICK_PLAN",
+                "parallel picks require distinct slots at one target and level",
+                status_code=422,
+            )
+
+        target_id = targets[0].target_id
+        shelf = targets[0].shelf_level
+        details = {
+            "execution_mode": "parallel",
+            "target_id": target_id,
+            "shelf_level": shelf,
+            "products": [
+                {
+                    "product_name": target.product_name,
+                    "product_slot_id": target.product_slot_id,
+                    "hand": target.hand.value,
+                }
+                for target in targets
+            ],
+        }
+        logger.event("并行抓取", "started", **details)
+        logger.event("商品导航", "started", **details)
+        await self._navigate(
+            target_id,
+            f"{task_run_id}:task1.pick.parallel.navigate",
+            logger,
+            navigation_state,
+        )
+        logger.event("商品导航", "succeeded", **details)
+        logger.event(
+            "抓取位姿",
+            "started",
+            pose_type="SHELF_PICK_READY",
+            **details,
+        )
+        await self.client.prepare_pose(
+            "SHELF_PICK_READY",
+            f"{task_run_id}:task1.pick.parallel.pose",
+            shelf_level=shelf,
+        )
+        logger.event("抓取位姿", "succeeded", **details)
+
+        async def initial_pick(
+            target: TargetItem, index: int
+        ) -> Task1ServiceError | None:
+            action_key = f"{task_run_id}:task1.pick.{index}.pick"
+            return await self._run_initial_action_attempt(
+                event_name="抓取",
+                product_name=target.product_name,
+                hand=target.hand,
+                action_key=action_key,
+                action=lambda key: self.client.pick(
+                    target.product_name,
+                    target.hand,
+                    target.shelf_level,
+                    key,
+                    slot_id=target.product_slot_id,
+                    target_id=target.target_id,
+                ),
+                logger=logger,
+            )
+
+        initial_results = await asyncio.gather(
+            *(initial_pick(target, index) for index, target in enumerate(targets)),
+            return_exceptions=True,
+        )
+        outcomes = [False for _ in targets]
+        unexpected_error = next(
+            (
+                result
+                for result in initial_results
+                if isinstance(result, BaseException)
+                and not isinstance(result, Task1ServiceError)
+            ),
+            None,
+        )
+        for index, initial_result in enumerate(initial_results):
+            if initial_result is None:
+                outcomes[index] = True
+        if unexpected_error is not None:
+            for target, succeeded in zip(targets, outcomes):
+                if succeeded:
+                    target.picked = True
+                    held_items[target.hand] = target.product_name
+            logger.event(
+                "并行抓取",
+                "failed",
+                outcomes=outcomes,
+                error=repr(unexpected_error),
+                **details,
+            )
+            raise unexpected_error
+
+        async def recover_pick(
+            index: int,
+            target: TargetItem,
+            initial_error: Task1ServiceError,
+        ) -> bool:
+            action_key = f"{task_run_id}:task1.pick.{index}.pick"
+            return await self._recover_action_failure(
+                initial_error=initial_error,
+                operation="pick",
+                event_name="抓取",
+                product_name=target.product_name,
+                hand=target.hand,
+                action_key=action_key,
+                action=lambda key, target=target: self.client.pick(
+                    target.product_name,
+                    target.hand,
+                    target.shelf_level,
+                    key,
+                    slot_id=target.product_slot_id,
+                    target_id=target.target_id,
+                ),
+                logger=logger,
+                action_failures=action_failures,
+                uncertain_hands=uncertain_hands,
+                navigation_state=navigation_state,
+                before_retry=lambda key, target=target: self.client.prepare_pose(
+                    "SHELF_PICK_READY",
+                    key,
+                    shelf_level=target.shelf_level,
+                ),
+            )
+
+        uncertain_codes = {
+            "ACTION_RESULT_UNKNOWN",
+            "NETWORK_ERROR",
+            "INVALID_RESPONSE",
+        }
+        # Record every unknown result before considering physical recovery for
+        # the other hand. An unknown hand may already be holding an item.
+        for index, (target, initial_result) in enumerate(
+            zip(targets, initial_results)
+        ):
+            if (
+                isinstance(initial_result, Task1ServiceError)
+                and initial_result.code in uncertain_codes
+            ):
+                outcomes[index] = await recover_pick(
+                    index, target, initial_result
+                )
+
+        for index, (target, initial_result) in enumerate(
+            zip(targets, initial_results)
+        ):
+            if (
+                not isinstance(initial_result, Task1ServiceError)
+                or initial_result.code in uncertain_codes
+            ):
+                continue
+            if uncertain_hands:
+                action_failures.append(
+                    self._failure(
+                        "pick", target.product_name, target.hand, initial_result
+                    )
+                )
+                logger.event(
+                    "抓取恢复",
+                    "skipped",
+                    product_name=target.product_name,
+                    hand=target.hand.value,
+                    reason="other_hand_action_result_unknown",
+                )
+                continue
+            if navigation_state["target_id"] != target_id:
+                # A previous recovery could not return from a base nudge. Do not
+                # start another hand's recovery from an unknown robot position.
+                action_failures.append(
+                    self._failure(
+                        "pick", target.product_name, target.hand, initial_result
+                    )
+                )
+                logger.event(
+                    "抓取恢复",
+                    "skipped",
+                    product_name=target.product_name,
+                    hand=target.hand.value,
+                    reason="robot_position_unknown",
+                )
+                continue
+            outcomes[index] = await recover_pick(index, target, initial_result)
+
+        for target, succeeded in zip(targets, outcomes):
+            if succeeded:
+                target.picked = True
+                held_items[target.hand] = target.product_name
+
+        logger.event(
+            "并行抓取",
+            "succeeded" if any(outcomes) else "failed",
+            outcomes=outcomes,
+            partial=not all(outcomes),
+            **details,
+        )
+        return outcomes
 
     async def _pick_target_best_effort(
         self,
@@ -877,6 +1173,49 @@ class Task1Orchestrator:
         held_items.clear()
         return True
 
+    async def _run_initial_action_attempt(
+        self,
+        *,
+        event_name: str,
+        product_name: str,
+        hand: Hand,
+        action_key: str,
+        action: Callable[[str], Awaitable[None]],
+        logger: _Task1Log,
+    ) -> Task1ServiceError | None:
+        """Execute and log one first attempt without starting recovery."""
+
+        logger.event(
+            event_name,
+            "started",
+            product_name=product_name,
+            hand=hand.value,
+            attempt=1,
+        )
+        try:
+            await action(action_key)
+        except Task1ServiceError as exc:
+            logger.event(
+                event_name,
+                "failed",
+                product_name=product_name,
+                hand=hand.value,
+                attempt=1,
+                error_code=exc.code,
+                message=exc.message,
+                failed_interface=exc.failed_interface,
+                url=exc.url,
+            )
+            return exc
+        logger.event(
+            event_name,
+            "succeeded",
+            product_name=product_name,
+            hand=hand.value,
+            attempt=1,
+        )
+        return None
+
     async def _run_action_with_recovery(
         self,
         *,
@@ -943,37 +1282,16 @@ class Task1Orchestrator:
                 hand=hand.value,
                 direction=initial_nudge_direction,
             )
-        logger.event(
-            event_name,
-            "started",
+
+        initial_error = await self._run_initial_action_attempt(
+            event_name=event_name,
             product_name=product_name,
-            hand=hand.value,
-            attempt=1,
+            hand=hand,
+            action_key=action_key,
+            action=action,
+            logger=logger,
         )
-        initial_error: Task1ServiceError | None = None
-        try:
-            await action(action_key)
-        except Task1ServiceError as exc:
-            initial_error = exc
-            logger.event(
-                event_name,
-                "failed",
-                product_name=product_name,
-                hand=hand.value,
-                attempt=1,
-                error_code=exc.code,
-                message=exc.message,
-                failed_interface=exc.failed_interface,
-                url=exc.url,
-            )
-        else:
-            logger.event(
-                event_name,
-                "succeeded",
-                product_name=product_name,
-                hand=hand.value,
-                attempt=1,
-            )
+        if initial_error is None:
             if initial_nudge_direction is not None:
                 await self._return_from_nudge(
                     operation,
@@ -985,7 +1303,41 @@ class Task1Orchestrator:
                 )
             return True
 
-        assert initial_error is not None
+        return await self._recover_action_failure(
+            initial_error=initial_error,
+            operation=operation,
+            event_name=event_name,
+            product_name=product_name,
+            hand=hand,
+            action_key=action_key,
+            action=action,
+            logger=logger,
+            action_failures=action_failures,
+            uncertain_hands=uncertain_hands,
+            navigation_state=navigation_state,
+            initial_nudge_direction=initial_nudge_direction,
+            before_retry=before_retry,
+        )
+
+    async def _recover_action_failure(
+        self,
+        *,
+        initial_error: Task1ServiceError,
+        operation: str,
+        event_name: str,
+        product_name: str,
+        hand: Hand,
+        action_key: str,
+        action: Callable[[str], Awaitable[None]],
+        logger: _Task1Log,
+        action_failures: list[dict[str, str]],
+        uncertain_hands: set[Hand],
+        navigation_state: dict[str, str | None] | None = None,
+        initial_nudge_direction: str | None = None,
+        before_retry: Callable[[str], Awaitable[None]] | None = None,
+    ) -> bool:
+        """Recover one failed action after its first attempt has settled."""
+
         if initial_error.code in {
             "ACTION_RESULT_UNKNOWN",
             "NETWORK_ERROR",

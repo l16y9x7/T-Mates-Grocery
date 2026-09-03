@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote
+from uuid import uuid4
 
 import requests
 import numpy as np
@@ -24,6 +25,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 
 ROOT = Path(__file__).resolve().parent
@@ -435,7 +437,8 @@ def get_latest_rgb(camera: str = "left") -> Path:
 
 def fetch_camera_snapshot(camera: str = "left") -> Path | None:
     """获取并验证相机快照；任何读取错误都返回 None。"""
-    camera_url = CAMERA_SNAPSHOT_URLS.get(camera.strip().lower())
+    normalized_camera = camera.strip().lower()
+    camera_url = CAMERA_SNAPSHOT_URLS.get(normalized_camera)
     print("CAMERA_URL:", camera_url)
     if camera_url is None:
         raise HTTPException(status_code=400, detail="camera 只能是 left、right 或 head")
@@ -461,15 +464,48 @@ def fetch_camera_snapshot(camera: str = "left") -> Path | None:
     suffix = {"JPEG": ".jpg", "PNG": ".png"}.get(image_format)
     if suffix is None:
         return None
-    snapshot_path = CAMERA_SNAPSHOT_CACHE_DIR / f"latest_camera_rgb{suffix}"
-    temporary_path = snapshot_path.with_suffix(f"{suffix}.tmp")
+    snapshot_path = CAMERA_SNAPSHOT_CACHE_DIR / (
+        f"camera_rgb_{normalized_camera}_{uuid4().hex}{suffix}"
+    )
     try:
         CAMERA_SNAPSHOT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        temporary_path.write_bytes(image_bytes)
-        temporary_path.replace(snapshot_path)
+        write_bytes_atomically(snapshot_path, image_bytes)
     except OSError:
         return None
     return snapshot_path
+
+
+def write_bytes_atomically(destination: Path, content: bytes) -> None:
+    """Atomically write bytes without sharing a temporary path across callers."""
+
+    temporary_path = destination.with_name(
+        f".{destination.name}.{uuid4().hex}.tmp"
+    )
+    try:
+        temporary_path.write_bytes(content)
+        temporary_path.replace(destination)
+    finally:
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def remove_camera_snapshot(snapshot_path: Path) -> None:
+    """Best-effort cleanup for snapshots created in this process's cache."""
+
+    try:
+        cache_directory = CAMERA_SNAPSHOT_CACHE_DIR.resolve()
+        resolved_path = snapshot_path.resolve()
+        resolved_path.relative_to(cache_directory)
+    except (OSError, ValueError):
+        return
+    if not resolved_path.name.startswith("camera_rgb_"):
+        return
+    try:
+        resolved_path.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def fetch_camera_depth(
@@ -531,9 +567,7 @@ def store_monitor_image(image_path: Path) -> str:
     try:
         MONITOR_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
         if not stored_path.exists():
-            temporary_path = stored_path.with_suffix(f"{stored_path.suffix}.tmp")
-            temporary_path.write_bytes(image_bytes)
-            temporary_path.replace(stored_path)
+            write_bytes_atomically(stored_path, image_bytes)
     except OSError as error:
         raise HTTPException(status_code=500, detail=f"存储监控图片失败: {error}") from error
     return str(stored_path.resolve())
@@ -657,7 +691,11 @@ def decode_uploaded_depth_image(
 def get_video_frame(hand: str = "left", task_type: str = "SORTING") -> FileResponse:
     image_path = get_latest_rgb(camera_for_task(task_type, hand))
     media_type = mimetypes.guess_type(image_path.name)[0] or "image/jpeg"
-    return FileResponse(image_path, media_type=media_type)
+    return FileResponse(
+        image_path,
+        media_type=media_type,
+        background=BackgroundTask(remove_camera_snapshot, image_path),
+    )
 
 
 def lookup_sku_by_name(name: str) -> dict[str, Any]:
@@ -3743,6 +3781,8 @@ def locate_product_debug(
                 qwen3_prompt_used=request.qwen3_prompt if allow_prompt_overrides else None,
                 sam3_prompt_used=request.sam3_prompt if allow_prompt_overrides else None,
             )
+        finally:
+            remove_camera_snapshot(image_path)
 
     image_bytes = decode_uploaded_image(request.image_base64)
     image_name = uploaded_image_name(request.image_name)
