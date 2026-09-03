@@ -141,6 +141,7 @@ class HealthResponse(BaseModel):
 class LocateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     product_name: str
+    slot_id: str | None = None
     bbox: list[int | float]
     mask: str | None = None
     image_path: str | None = None

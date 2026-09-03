@@ -2,7 +2,39 @@
 
 这个目录是一个独立的、无 npm 依赖的模拟前端，用于按 `agent/doc/外部系统接口设计.md` 调用统一任务服务。
 
-## 启动
+## 后台管理脚本
+
+先确认机器人统一任务服务已经运行在 `8108`，然后在仓库根目录执行：
+
+```bash
+external-demo/manage.sh start
+```
+
+脚本默认监听 `0.0.0.0:8765`，自动读取本机局域网 IP，并将请求转发到
+`http://127.0.0.1:8108`。常用命令：
+
+```bash
+external-demo/manage.sh start
+external-demo/manage.sh stop
+external-demo/manage.sh restart
+external-demo/manage.sh status
+external-demo/manage.sh logs
+```
+
+PID 保存在 `agent/run/external-demo.pid`，日志保存在
+`agent/log/process/external-demo-<时间>.log`。
+
+如需明确指定本机局域网地址和 Agent 地址：
+
+```bash
+DEMO_PUBLIC_HOST=192.168.200.65 \
+ROBOT_TASK_URL=http://127.0.0.1:8108 \
+external-demo/manage.sh restart
+```
+
+其他局域网电脑访问 `http://192.168.200.65:8765`。
+
+## 前台启动
 
 先确认机器人统一任务服务已经运行在 `8108`，然后在仓库根目录执行：
 

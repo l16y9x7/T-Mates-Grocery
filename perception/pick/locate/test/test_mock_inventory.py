@@ -1,13 +1,22 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from PIL import Image
+
 from pick.locate import main as locate_main
+
+
+def encoded_mask(size: tuple[int, int]) -> str:
+    buffer = io.BytesIO()
+    Image.new("L", size, 255).save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
 class MockInventoryTest(unittest.TestCase):
@@ -190,6 +199,64 @@ class MockInventoryTest(unittest.TestCase):
             "mock_inventory",
             locate_main.LocateDebugRequest.model_json_schema()["properties"],
         )
+
+    def test_single_location_skips_inventory_row_branch_but_keeps_slot(self) -> None:
+        product = {
+            "sku_id": "SKU_SINGLE",
+            "name": "单位置测试商品",
+            "locations": ["H1_L01_C07"],
+            "inventory": ["H1_L01_C07"],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "rgb.jpg"
+            Image.new("RGB", (640, 480), "white").save(image_path)
+
+            def sam_instances(_prompt: str, crop_image: Image.Image):
+                return [
+                    {
+                        "bbox_xyxy": [0.0, 0.0, *map(float, crop_image.size)],
+                        "mask_png_base64": encoded_mask(crop_image.size),
+                        "score": 0.9,
+                    }
+                ]
+
+            with (
+                patch.object(
+                    locate_main,
+                    "load_prompt_pair",
+                    return_value=("qwen prompt", "sam prompt"),
+                ),
+                patch.object(
+                    locate_main,
+                    "get_stable_qwen_bboxes",
+                    return_value=locate_main.QwenConsensusBBoxes(
+                        [[300, 300, 700, 800]],
+                        [],
+                    ),
+                ),
+                patch.object(locate_main, "call_sam3", side_effect=sam_instances),
+                patch.object(
+                    locate_main,
+                    "store_monitor_image",
+                    return_value=str(image_path),
+                ),
+                patch.object(
+                    locate_main,
+                    "detect_red_shelf_front_line",
+                ) as detect_shelf,
+            ):
+                response = locate_main.locate_product_in_image(
+                    product,
+                    image_path,
+                    task_type="SORTING",
+                    level="L1",
+                    hand="left",
+                    slot_id="H1_L01_C07",
+                )
+
+        detect_shelf.assert_not_called()
+        self.assertEqual(response.selected_instance.mapped_slot_id, "H1_L01_C07")
+        self.assertIsNone(response.selected_instance.display_row_index)
 
 
 if __name__ == "__main__":

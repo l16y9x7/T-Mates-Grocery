@@ -286,6 +286,7 @@ class SkuResponse(BaseModel):
     name: str = Field(min_length=1)
     images: list[str]
     locations: list[str]
+    inventory: list[str]
 
 
 class ActionResponse(BaseModel):
