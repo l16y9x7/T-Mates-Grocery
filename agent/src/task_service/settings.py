@@ -56,6 +56,19 @@ class WebSettings(BaseModel):
     paths: WebPathSettings
 
 
+class ExternalServiceSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    access_token: str | None = None
+    callback_url: str | None = None
+    callback_access_token: str | None = None
+    callback_allowed_hosts: list[str] = Field(default_factory=list)
+    request_timeout_seconds: float = Field(gt=0, default=5)
+    heartbeat_seconds: float = Field(gt=0, default=5)
+    max_retries: int = Field(ge=0, default=3)
+    retry_backoff_seconds: float = Field(ge=0, default=1)
+
+
 class TaskServiceSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
@@ -64,6 +77,7 @@ class TaskServiceSettings(BaseModel):
     server: ServerSettings
     tasks: TaskConfigSettings
     web: WebSettings
+    external: ExternalServiceSettings = Field(default_factory=ExternalServiceSettings)
     pick_place_status_url: str
 
     @classmethod
@@ -135,6 +149,10 @@ class TaskServiceSettings(BaseModel):
             "pose_url": document.robot.pose_url,
         }
 
+        external_raw = document.raw.get("external", {})
+        if not isinstance(external_raw, dict):
+            raise RuntimeError("runtime external section must be a YAML object")
+
         return cls(
             config_path=document.path,
             robot=document.robot,
@@ -146,5 +164,6 @@ class TaskServiceSettings(BaseModel):
                 task3=Task3Settings.from_mapping(task3, document.path.parent),
             ),
             web=WebSettings.model_validate(web),
+            external=ExternalServiceSettings.model_validate(external_raw),
             pick_place_status_url=f"{document.local_services.pick_place}/status",
         )

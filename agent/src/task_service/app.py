@@ -24,6 +24,7 @@ from task3_service.models import Task3Result, Task3ServiceError
 from task3_service.service import Task3Orchestrator
 
 from .coordinator import TaskBinding, TaskCoordinator, TaskServiceError
+from .external import ExternalTaskService
 from .settings import TaskServiceSettings
 
 
@@ -48,11 +49,12 @@ def create_app(
     coordinator: TaskCoordinator | None = (
         TaskCoordinator(_bindings(orchestrators)) if orchestrators is not None else None
     )
+    external_service = ExternalTaskService(coordinator, settings.external)
     clients: list[Any] = []
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal coordinator
+        nonlocal coordinator, external_service
         if coordinator is None:
             task0_settings = settings.tasks.task0
             task1_settings = settings.tasks.task1
@@ -73,8 +75,11 @@ def create_app(
                     }
                 )
             )
+        external_service.bind_coordinator(coordinator)
         app.state.task_coordinator = coordinator
+        app.state.external_task_service = external_service
         yield
+        await external_service.close()
         for client in clients:
             await client.aclose()
 
@@ -147,6 +152,8 @@ def create_app(
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> object:
         return await get_coordinator().run(task_id, payload, idempotency_key)
+
+    app.include_router(external_service.router())
 
     from web.app import app as web_app, configure_runtime
 

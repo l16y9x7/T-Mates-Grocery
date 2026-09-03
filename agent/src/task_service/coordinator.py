@@ -122,3 +122,9 @@ class TaskCoordinator:
             task_id: "READY" if result is True else "ERROR"
             for task_id, result in zip(TASK_IDS, results)
         }
+
+    async def task_ready(self, task_id: str) -> bool:
+        """Check one task without reserving the global execution slot."""
+
+        self.validate_task_id(task_id)
+        return await self.bindings[task_id].health_check()

@@ -45,6 +45,14 @@ scripts/setup.sh
 | Web | `127.0.0.1:8108` | `GET /` | 统一任务、取放和机器人接口控制台 |
 | pick-place | `127.0.0.1:8086` | `POST /pick`、`POST /place` | 完成单次定位、取图、位姿估计和抓放 |
 
+外部系统接口位于同一个统一任务服务：`GET /api/external/v1/health`，
+`POST /api/external/v1/tasks/0/runs`，`POST /api/external/v1/task1/orders`，
+`POST /api/external/v1/tasks/2/runs` 和
+`GET /api/external/v1/tasks/{task_run_id}/status`。三个触发接口需要
+`Idempotency-Key`，成功返回 `202 Accepted`，任务进度通过配置的 HTTPS 回调地址上报。
+外部接口配置位于 `config/runtime.production.yaml` 的 `external` 节；按请求传入的
+回调地址必须同时配置 `callback_allowed_hosts` 白名单。
+
 Task0、Task2、Task3 的请求体为 `{}`。Task1 也可用 `{}` 让服务端从当前 SKU 商品池
 随机生成订单；Web 会先调用 `POST /api/task1/mock-order` 展示两件不同商品，允许重新随机，
 再把同一 `order_id` 和 `product_names` 交给 Task1 执行。所有任务均支持可选请求头
