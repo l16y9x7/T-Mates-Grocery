@@ -19,6 +19,14 @@ def encoded_mask(size: tuple[int, int]) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def encoded_mask_width(width: int, size: tuple[int, int] = (20, 20)) -> str:
+    mask = Image.new("L", size, 0)
+    mask.paste(255, (0, 0, width, size[1]))
+    buffer = io.BytesIO()
+    mask.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 class MockInventoryTest(unittest.TestCase):
     def test_local_mock_inventory_overrides_catalog_inventory(self) -> None:
         catalog = {
@@ -141,6 +149,42 @@ class MockInventoryTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 409)
         self.assertIn("当前可见库存范围", str(raised.exception.detail))
+
+    def test_inventory_row_prefers_shelf_front_distance_after_tiny_mask_filter(self) -> None:
+        instances = [
+            locate_main.LocatedInstance(
+                bbox=[10, 10, 30, 30],
+                mask=encoded_mask_width(20),
+                score=0.99,
+                display_row_index=1,
+                shelf_front_distance_ratio=0.15,
+            ),
+            locate_main.LocatedInstance(
+                bbox=[40, 10, 60, 30],
+                mask=encoded_mask_width(19),
+                score=0.90,
+                display_row_index=1,
+                shelf_front_distance_ratio=0.08,
+            ),
+            locate_main.LocatedInstance(
+                bbox=[70, 10, 90, 30],
+                mask=encoded_mask_width(18),
+                score=0.80,
+                display_row_index=1,
+                shelf_front_distance_ratio=0.06,
+            ),
+            locate_main.LocatedInstance(
+                bbox=[100, 10, 120, 30],
+                mask=encoded_mask_width(2),
+                score=0.95,
+                display_row_index=1,
+                shelf_front_distance_ratio=0.01,
+            ),
+        ]
+
+        selected = locate_main.keep_display_rows_for_inventory(instances, 2)
+
+        self.assertEqual([instance.bbox[0] for instance in selected], [40, 70])
 
     def test_debug_mock_inventory_does_not_query_live_sku_service(self) -> None:
         request = locate_main.LocateDebugRequest(
