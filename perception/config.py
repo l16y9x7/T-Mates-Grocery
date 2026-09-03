@@ -11,7 +11,7 @@ SERVICE_BIND_HOST = os.getenv("SERVICE_BIND_HOST", "0.0.0.0")
 # these defaults or override them with environment variables.  Full URL
 # overrides below remain supported for backward compatibility.
 CAMERA_SERVICE_HOST = os.getenv("CAMERA_SERVICE_HOST", "192.168.200.66")
-INFERENCE_SERVICE_HOST = os.getenv("INFERENCE_SERVICE_HOST", "127.0.0.1")
+INFERENCE_SERVICE_HOST = os.getenv("INFERENCE_SERVICE_HOST", "192.168.200.65")
 
 CAMERA_SERVICE_URL = os.getenv(
     "CAMERA_SERVICE_URL",
