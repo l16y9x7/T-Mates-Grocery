@@ -91,6 +91,31 @@ class Task1Mock:
                 200,
                 json={"sku_id": "SKU", "name": name, "images": [], "locations": [location]},
             )
+        if path == "/pick/both":
+            self.pick_attempts += 2
+            request_payload = json.loads(request.content)
+
+            def succeeded(side: str) -> dict[str, object]:
+                item = request_payload[side]
+                return {
+                    "status": "SUCCEEDED",
+                    "product_name": item["product_name"],
+                    "hand": side,
+                    "error_code": None,
+                    "message": None,
+                    "failed_interface": None,
+                    "url": None,
+                    "pose": None,
+                }
+
+            return httpx.Response(
+                200,
+                json={
+                    "status": "SUCCEEDED",
+                    "left": succeeded("left"),
+                    "right": succeeded("right"),
+                },
+            )
         if path == "/pick":
             self.pick_attempts += 1
             if self.pick_failure is not None and (
@@ -153,7 +178,7 @@ class Task1Mock:
 
 
 class PickConcurrencyMock(Task1Mock):
-    """Hold the first pick briefly so tests can observe overlapping requests."""
+    """Return configurable per-hand results for the paired initial pick."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -162,6 +187,59 @@ class PickConcurrencyMock(Task1Mock):
         self.initial_pick_failures: dict[str, dict[str, object]] = {}
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/pick/both":
+            self.requests.append(request)
+            request_payload = payload(request)
+            sides: dict[str, dict[str, object]] = {}
+            for request_index, side in enumerate(("left", "right"), start=1):
+                item = request_payload[side]
+                failure = self.initial_pick_failures.get(item["hand"])
+                if failure is None and self.pick_failure is not None and (
+                    self.pick_failure_limit is None
+                    or request_index <= self.pick_failure_limit
+                ):
+                    failure = self.pick_failure
+                if failure is None:
+                    sides[side] = {
+                        "status": "SUCCEEDED",
+                        "product_name": item["product_name"],
+                        "hand": side,
+                        "error_code": None,
+                        "message": None,
+                        "failed_interface": None,
+                        "url": None,
+                        "pose": None,
+                    }
+                    continue
+                error_code = failure.get("error_code", "EXECUTION_FAILED")
+                sides[side] = {
+                    "status": (
+                        "UNKNOWN"
+                        if error_code
+                        in {"ACTION_RESULT_UNKNOWN", "NETWORK_ERROR", "INVALID_RESPONSE"}
+                        else "FAILED"
+                    ),
+                    "product_name": item["product_name"],
+                    "hand": side,
+                    "error_code": error_code,
+                    "message": failure.get("message", "pick failed"),
+                    "failed_interface": failure.get("failed_interface"),
+                    "url": failure.get("url"),
+                    "pose": failure.get("pose"),
+                }
+            self.pick_attempts += 2
+            statuses = {item["status"] for item in sides.values()}
+            overall = (
+                "SUCCEEDED"
+                if statuses == {"SUCCEEDED"}
+                else "UNKNOWN"
+                if "UNKNOWN" in statuses
+                else "PARTIAL"
+                if "SUCCEEDED" in statuses
+                else "FAILED"
+            )
+            return httpx.Response(200, json={"status": overall, **sides})
+
         if request.url.path != "/pick":
             return await super().handle(request)
 
@@ -935,14 +1013,16 @@ async def test_task1_picks_in_parallel_at_the_same_target_and_level(
     ]
     assert [item.shelf_level for item in result.target_items] == ["L1", "L1"]
     assert [item.hand for item in result.target_items] == [Hand.LEFT, Hand.RIGHT]
-    assert mock.max_active_pick_requests == 2
-    pick_requests = [
-        request for request in mock.requests if request.url.path == "/pick"
+    pair_requests = [
+        request for request in mock.requests if request.url.path == "/pick/both"
     ]
-    assert len(pick_requests) == 2
-    assert len(
-        {request.headers["Idempotency-Key"] for request in pick_requests}
-    ) == 2
+    assert len(pair_requests) == 1
+    assert pair_requests[0].headers["Idempotency-Key"].endswith(
+        ":task1.pick.parallel.pick_both"
+    )
+    pair_payload = payload(pair_requests[0])
+    assert pair_payload["left"]["slot_id"] == "H3_L01_C03"
+    assert pair_payload["right"]["slot_id"] == "H3_L01_C04"
     shelf_pick_poses = [
         payload(request)
         for request in mock.requests
@@ -989,14 +1069,14 @@ async def test_parallel_pick_waits_for_both_initial_calls_before_serial_recovery
             Task1Request(), "parallel-recovery"
         )
 
-    assert mock.max_active_pick_requests == 2
     assert [item.picked for item in result.target_items] == [True, True]
     pick_requests = [
-        request for request in mock.requests if request.url.path == "/pick"
+        request
+        for request in mock.requests
+        if request.url.path in {"/pick", "/pick/both"}
     ]
     assert [request.headers["Idempotency-Key"] for request in pick_requests] == [
-        "parallel-recovery:task1.pick.0.pick",
-        "parallel-recovery:task1.pick.1.pick",
+        "parallel-recovery:task1.pick.parallel.pick_both",
         "parallel-recovery:task1.pick.0.pick:recovery.retry",
     ]
 
@@ -1065,10 +1145,10 @@ async def test_parallel_pick_does_not_recover_while_other_hand_is_unknown() -> N
     assert outcomes == [False, False]
     assert uncertain_hands == {Hand.LEFT}
     assert held_items == {}
-    pick_requests = [
-        request for request in mock.requests if request.url.path == "/pick"
+    pair_requests = [
+        request for request in mock.requests if request.url.path == "/pick/both"
     ]
-    assert len(pick_requests) == 2
+    assert len(pair_requests) == 1
     assert not [
         request
         for request in mock.requests

@@ -25,9 +25,12 @@ import httpx
 import numpy as np
 
 from pick_place_service.models import (
+    DualPickRequest,
+    DualPickResponse,
     FrameBundle,
     LocateResponse,
     PlaceLocateResponse,
+    PickOutcome,
     PickPlaceRequest,
     PickPlaceSettings,
     PoseResponse,
@@ -822,6 +825,35 @@ class SubagentClient:
             raise ServiceError("INVALID_RESPONSE", f"invalid {action} response") from exc
 
 
+class _DualPickPoseBarrier:
+    """Release both pick workers only after every pose is ready."""
+
+    def __init__(self, parties: int) -> None:
+        self._parties = parties
+        self._ready = 0
+        self._aborted = False
+        self._released = False
+        self._lock = asyncio.Lock()
+        self._event = asyncio.Event()
+
+    async def arrive_and_wait(self) -> bool:
+        async with self._lock:
+            if not self._aborted:
+                self._ready += 1
+                if self._ready == self._parties:
+                    self._released = True
+                    self._event.set()
+        await self._event.wait()
+        return self._released and not self._aborted
+
+    async def abort(self) -> None:
+        async with self._lock:
+            if self._released:
+                return
+            self._aborted = True
+            self._event.set()
+
+
 class PickPlaceOrchestrator:
     def __init__(
         self,
@@ -832,6 +864,224 @@ class PickPlaceOrchestrator:
         self.settings = settings
         self.subagents = subagents
         self.frames = frames
+
+    async def run_dual_pick(
+        self,
+        request: DualPickRequest,
+        operation_key: str,
+    ) -> DualPickResponse:
+        """Prepare both pick poses before concurrently dispatching both grasps."""
+
+        barrier = _DualPickPoseBarrier(parties=2)
+        left, right = await asyncio.gather(
+            self._run_dual_pick_item(
+                request.left,
+                f"{operation_key}:left",
+                barrier,
+            ),
+            self._run_dual_pick_item(
+                request.right,
+                f"{operation_key}:right",
+                barrier,
+            ),
+        )
+        statuses = {left.status, right.status}
+        if statuses == {"SUCCEEDED"}:
+            status = "SUCCEEDED"
+        elif "UNKNOWN" in statuses:
+            status = "UNKNOWN"
+        elif "SUCCEEDED" in statuses:
+            status = "PARTIAL"
+        else:
+            status = "FAILED"
+        return DualPickResponse(status=status, left=left, right=right)
+
+    async def _run_dual_pick_item(
+        self,
+        request: PickPlaceRequest,
+        operation_key: str,
+        barrier: "_DualPickPoseBarrier",
+    ) -> PickOutcome:
+        """Run one side of a dual pick and wait at the pose-ready barrier."""
+
+        step = "定位"
+        frame: FrameBundle | None = None
+        execution_pose: PoseResponse | None = None
+        try:
+            log_dir = _create_operation_log(
+                self.settings, request, "pick", operation_key
+            )
+        except Exception as exc:
+            await barrier.abort()
+            LOGGER.exception(
+                "创建双手取放子流程日志失败 product=%s hand=%s key=%s",
+                request.product_name,
+                request.normalized_hand,
+                operation_key,
+            )
+            return PickOutcome(
+                status="FAILED",
+                product_name=request.product_name,
+                hand=request.normalized_hand,
+                error_code=type(exc).__name__,
+                message=str(exc),
+            )
+        log_token = _ACTIVE_LOG_DIR.set(log_dir)
+        operation_token = _ACTIVE_OPERATION_KEY.set(operation_key)
+        call_index_token = _INTERFACE_CALL_INDEX.set(0)
+        try:
+            _append_log_event(
+                "operation",
+                "started",
+                task_type=request.task_type.value,
+                product_name=request.product_name,
+                hand=request.normalized_hand,
+                execution_mode="dual_pose_barrier",
+            )
+            _save_log_json(
+                "request.json",
+                {
+                    "task_type": request.task_type.value,
+                    "product_name": request.product_name,
+                    "hand": request.normalized_hand,
+                    "operation_key": operation_key,
+                    "execution_mode": "dual_pose_barrier",
+                    "request": request.model_dump(mode="json"),
+                },
+            )
+            camera = self.settings.camera_for(
+                "pick", request.normalized_hand, request.task_type
+            )
+            _append_log_event("定位", "started")
+            located = await self.subagents.locate(request, "pick")
+            _append_log_event(
+                "定位",
+                "succeeded",
+                bbox=located.bbox,
+                has_mask=bool(located.mask),
+            )
+            step = "取图"
+            _append_log_event("取图", "started", camera=camera)
+            frame = await self.frames.capture(
+                camera,
+                located.bbox,
+                operation_key,
+                located.mask,
+            )
+            _append_log_event("取图", "succeeded", camera=camera)
+            step = "位姿估计"
+            _append_log_event("位姿估计", "started")
+            execution_pose = await self.subagents.estimate_pose(
+                request, "pick", frame
+            )
+            _append_log_event(
+                "位姿估计", "succeeded", pose=execution_pose.pose
+            )
+
+            step = "等待双手位姿"
+            _append_log_event("双手位姿屏障", "started")
+            should_execute = await barrier.arrive_and_wait()
+            if not should_execute:
+                message = "the other hand failed before both pick poses were ready"
+                _append_log_event(
+                    "双手位姿屏障",
+                    "aborted",
+                    error_code="PAIR_PREPARATION_FAILED",
+                    message=message,
+                )
+                _append_log_event(
+                    "operation",
+                    "failed",
+                    step=step,
+                    error_code="PAIR_PREPARATION_FAILED",
+                    message=message,
+                )
+                return PickOutcome(
+                    status="NOT_EXECUTED",
+                    product_name=request.product_name,
+                    hand=request.normalized_hand,
+                    error_code="PAIR_PREPARATION_FAILED",
+                    message=message,
+                )
+            _append_log_event("双手位姿屏障", "released")
+
+            step = "抓取/释放执行"
+            _append_log_event("抓取/释放执行", "started")
+            await self.subagents.execute(
+                request,
+                "pick",
+                execution_pose,
+                operation_key,
+            )
+            _append_log_event("抓取/释放执行", "succeeded")
+            _append_log_event("operation", "succeeded")
+            LOGGER.info(
+                "双手取放子流程完成 product=%s hand=%s key=%s",
+                request.product_name,
+                request.normalized_hand,
+                operation_key,
+            )
+            return PickOutcome(
+                status="SUCCEEDED",
+                product_name=request.product_name,
+                hand=request.normalized_hand,
+            )
+        except asyncio.CancelledError:
+            await barrier.abort()
+            _append_log_event("operation", "cancelled", step=step)
+            raise
+        except Exception as exc:
+            await barrier.abort()
+            if (
+                isinstance(exc, ServiceError)
+                and step == "抓取/释放执行"
+                and exc.failed_interface == "manipulation_grasp"
+                and exc.code not in {"ACTION_RESULT_UNKNOWN", "NETWORK_ERROR"}
+                and execution_pose is not None
+            ):
+                exc.pose = list(execution_pose.pose)
+            code = getattr(exc, "code", type(exc).__name__)
+            message = str(exc)
+            failed_interface = getattr(exc, "failed_interface", None)
+            url = getattr(exc, "url", None)
+            pose = getattr(exc, "pose", None)
+            unknown = step == "抓取/释放执行" and code in {
+                "ACTION_RESULT_UNKNOWN",
+                "NETWORK_ERROR",
+                "INVALID_RESPONSE",
+            }
+            _append_log_event(
+                "operation",
+                "failed",
+                step=step,
+                error_code=code,
+                message=message,
+                failed_interface=failed_interface,
+                url=url,
+            )
+            LOGGER.exception(
+                "双手取放子流程失败 step=%s product=%s hand=%s key=%s",
+                step,
+                request.product_name,
+                request.normalized_hand,
+                operation_key,
+            )
+            return PickOutcome(
+                status="UNKNOWN" if unknown else "FAILED",
+                product_name=request.product_name,
+                hand=request.normalized_hand,
+                error_code=str(code),
+                message=message,
+                failed_interface=failed_interface,
+                url=url,
+                pose=pose,
+            )
+        finally:
+            if frame is not None and frame.cleanup_path:
+                _remove_directory(Path(frame.cleanup_path))
+            _INTERFACE_CALL_INDEX.reset(call_index_token)
+            _ACTIVE_OPERATION_KEY.reset(operation_token)
+            _ACTIVE_LOG_DIR.reset(log_token)
 
     async def run(self, request: PickPlaceRequest, kind: str, operation_key: str) -> StatusResponse:
         if (
@@ -1051,14 +1301,17 @@ class OperationCache:
     """单进程内按 key 去重整条复合流程。"""
 
     def __init__(self) -> None:
-        self._entries: dict[str, tuple[str, asyncio.Task[StatusResponse]]] = {}
+        self._entries: dict[
+            str,
+            tuple[str, asyncio.Task[StatusResponse | DualPickResponse]],
+        ] = {}
         self._lock = asyncio.Lock()
 
     async def active_count(self) -> int:
         async with self._lock:
             return sum(not task.done() for _, task in self._entries.values())
 
-    async def result(self, key: str) -> StatusResponse | None:
+    async def result(self, key: str) -> StatusResponse | DualPickResponse | None:
         """Return a cached terminal result, or ``None`` while it is running."""
 
         async with self._lock:
@@ -1084,9 +1337,9 @@ class OperationCache:
     async def run(
         self,
         key: str,
-        request: PickPlaceRequest,
-        operation: Callable[[], Awaitable[StatusResponse]],
-    ) -> StatusResponse:
+        request: PickPlaceRequest | DualPickRequest,
+        operation: Callable[[], Awaitable[StatusResponse | DualPickResponse]],
+    ) -> StatusResponse | DualPickResponse:
         fingerprint = hashlib.sha256(
             json.dumps(request.model_dump(mode="json"), sort_keys=True).encode()
         ).hexdigest()

@@ -693,11 +693,12 @@ class Task1Orchestrator:
         uncertain_hands: set[Hand],
         action_failures: list[dict[str, str]],
     ) -> list[bool]:
-        """Run only the two initial pick requests concurrently.
+        """Prepare both poses, then dispatch both initial grasps concurrently.
 
-        Navigation and shelf pose preparation are shared. Any recovery that can
-        move the base or change the robot pose is deliberately processed after
-        both initial requests have settled, one hand at a time.
+        Navigation and shelf pose preparation are shared. 8086 keeps both arms
+        still until both GenPose calls have completed. Any recovery that can
+        move the base or change the robot pose is processed after the paired
+        attempt has settled, one hand at a time.
         """
 
         if not self._can_pick_in_parallel(targets):
@@ -744,56 +745,75 @@ class Task1Orchestrator:
         )
         logger.event("抓取位姿", "succeeded", **details)
 
-        async def initial_pick(
-            target: TargetItem, index: int
-        ) -> Task1ServiceError | None:
-            action_key = f"{task_run_id}:task1.pick.{index}.pick"
-            return await self._run_initial_action_attempt(
-                event_name="抓取",
+        for target in targets:
+            logger.event(
+                "抓取",
+                "started",
                 product_name=target.product_name,
-                hand=target.hand,
-                action_key=action_key,
-                action=lambda key: self.client.pick(
-                    target.product_name,
-                    target.hand,
-                    target.shelf_level,
-                    key,
-                    slot_id=target.product_slot_id,
-                    target_id=target.target_id,
-                ),
-                logger=logger,
+                hand=target.hand.value,
+                attempt=1,
+                execution_mode="dual_pose_barrier",
             )
-
-        initial_results = await asyncio.gather(
-            *(initial_pick(target, index) for index, target in enumerate(targets)),
-            return_exceptions=True,
-        )
+        targets_by_hand = {target.hand: target for target in targets}
+        try:
+            pair_result = await self.client.pick_both(
+                targets_by_hand[Hand.LEFT],
+                targets_by_hand[Hand.RIGHT],
+                f"{task_run_id}:task1.pick.parallel.pick_both",
+            )
+        except Task1ServiceError as exc:
+            initial_results: list[Task1ServiceError | None] = [exc, exc]
+        else:
+            result_by_hand = {
+                Hand.LEFT: pair_result.left,
+                Hand.RIGHT: pair_result.right,
+            }
+            initial_results = []
+            for target in targets:
+                result = result_by_hand[target.hand]
+                if result.status == "SUCCEEDED":
+                    initial_results.append(None)
+                    logger.event(
+                        "抓取",
+                        "succeeded",
+                        product_name=target.product_name,
+                        hand=target.hand.value,
+                        attempt=1,
+                        execution_mode="dual_pose_barrier",
+                    )
+                    continue
+                error = Task1ServiceError(
+                    result.error_code
+                    or (
+                        "PAIR_PREPARATION_FAILED"
+                        if result.status == "NOT_EXECUTED"
+                        else "ACTION_RESULT_UNKNOWN"
+                        if result.status == "UNKNOWN"
+                        else "EXECUTION_FAILED"
+                    ),
+                    result.message or f"dual pick {result.status.lower()}",
+                    failed_interface=result.failed_interface,
+                    url=result.url,
+                    pose=result.pose,
+                )
+                initial_results.append(error)
+                logger.event(
+                    "抓取",
+                    "failed",
+                    product_name=target.product_name,
+                    hand=target.hand.value,
+                    attempt=1,
+                    execution_mode="dual_pose_barrier",
+                    result_status=result.status,
+                    error_code=error.code,
+                    message=error.message,
+                    failed_interface=error.failed_interface,
+                    url=error.url,
+                )
         outcomes = [False for _ in targets]
-        unexpected_error = next(
-            (
-                result
-                for result in initial_results
-                if isinstance(result, BaseException)
-                and not isinstance(result, Task1ServiceError)
-            ),
-            None,
-        )
         for index, initial_result in enumerate(initial_results):
             if initial_result is None:
                 outcomes[index] = True
-        if unexpected_error is not None:
-            for target, succeeded in zip(targets, outcomes):
-                if succeeded:
-                    target.picked = True
-                    held_items[target.hand] = target.product_name
-            logger.event(
-                "并行抓取",
-                "failed",
-                outcomes=outcomes,
-                error=repr(unexpected_error),
-                **details,
-            )
-            raise unexpected_error
 
         async def recover_pick(
             index: int,

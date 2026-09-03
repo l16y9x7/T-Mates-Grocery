@@ -7,7 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from runtime_config import RuntimeDocument, load_runtime_document
 
@@ -58,6 +58,42 @@ class PickPlaceRequest(BaseModel):
         return self.hand.lower()
 
 
+class DualPickRequest(BaseModel):
+    """Two sorting picks that must both have poses before either arm moves."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    left: PickPlaceRequest
+    right: PickPlaceRequest
+
+    @model_validator(mode="after")
+    def valid_dual_pick(self) -> "DualPickRequest":
+        if (
+            self.left.task_type is not TaskType.SORTING
+            or self.right.task_type is not TaskType.SORTING
+        ):
+            raise ValueError("dual pick only supports SORTING requests")
+        if (
+            self.left.normalized_hand != "left"
+            or self.right.normalized_hand != "right"
+        ):
+            raise ValueError("dual pick requires left and right hand requests")
+        if self.left.level is None or self.left.level != self.right.level:
+            raise ValueError("dual pick requests must use the same shelf level")
+        if (
+            self.left.location_id is None
+            or self.left.location_id != self.right.location_id
+        ):
+            raise ValueError("dual pick requests must use the same location_id")
+        if (
+            self.left.slot_id is None
+            or self.right.slot_id is None
+            or self.left.slot_id == self.right.slot_id
+        ):
+            raise ValueError("dual pick requests must use distinct slot_id values")
+        return self
+
+
 def normalize_product_name(value: str) -> str:
     """去掉空格和符号后再比较商品名。
 
@@ -70,6 +106,31 @@ def normalize_product_name(value: str) -> str:
 class StatusResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["SUCCEEDED"]
+
+
+class PickOutcome(BaseModel):
+    """Terminal result for one hand in a dual-pick operation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["SUCCEEDED", "FAILED", "NOT_EXECUTED", "UNKNOWN"]
+    product_name: str = Field(min_length=1)
+    hand: Literal["left", "right"]
+    error_code: str | None = None
+    message: str | None = None
+    failed_interface: str | None = None
+    url: str | None = None
+    pose: list[float] | None = None
+
+
+class DualPickResponse(BaseModel):
+    """Combined terminal result after the pose barrier and dual grasp dispatch."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["SUCCEEDED", "PARTIAL", "FAILED", "UNKNOWN"]
+    left: PickOutcome
+    right: PickOutcome
 
 
 class HealthResponse(BaseModel):

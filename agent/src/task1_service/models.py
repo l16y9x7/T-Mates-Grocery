@@ -295,6 +295,31 @@ class ActionResponse(BaseModel):
     status: Literal["SUCCEEDED"]
 
 
+class PickOutcomeResponse(BaseModel):
+    """One hand's terminal result returned by 8086 /pick/both."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["SUCCEEDED", "FAILED", "NOT_EXECUTED", "UNKNOWN"]
+    product_name: str = Field(min_length=1)
+    hand: Literal["left", "right"]
+    error_code: str | None = None
+    message: str | None = None
+    failed_interface: str | None = None
+    url: str | None = None
+    pose: list[float] | None = None
+
+
+class DualPickActionResponse(BaseModel):
+    """Combined result returned after both poses cross the execution barrier."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["SUCCEEDED", "PARTIAL", "FAILED", "UNKNOWN"]
+    left: PickOutcomeResponse
+    right: PickOutcomeResponse
+
+
 class TargetItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

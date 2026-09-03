@@ -15,6 +15,7 @@ import pytest
 import pick_place_service.service as service_module
 from pick_place_service.app import create_app
 from pick_place_service.models import (
+    DualPickRequest,
     FrameBundle,
     LocateResponse,
     PlaceLocateResponse,
@@ -137,6 +138,76 @@ class FakeFrames:
         ]
 
 
+class DualPickSubagents(FakeSubagents):
+    def __init__(self) -> None:
+        super().__init__()
+        self.left_pose_ready = asyncio.Event()
+        self.allow_right_pose = asyncio.Event()
+        self.execute_started = {"left": asyncio.Event(), "right": asyncio.Event()}
+        self.both_execute_started = asyncio.Event()
+        self.active_execute = 0
+        self.max_active_execute = 0
+        self.fail_pose_hand: str | None = None
+
+    async def estimate_pose(
+        self,
+        request: PickPlaceRequest,
+        kind: str,
+        frame: FrameBundle,
+        *,
+        log_suffix: str | None = None,
+    ) -> PoseResponse:
+        if request.normalized_hand == "left":
+            self.left_pose_ready.set()
+        else:
+            await self.allow_right_pose.wait()
+        if request.normalized_hand == self.fail_pose_hand:
+            raise ServiceError("POSE_FAILED", "pose failed")
+        return await super().estimate_pose(
+            request, kind, frame, log_suffix=log_suffix
+        )
+
+    async def execute(
+        self,
+        request: PickPlaceRequest,
+        kind: str,
+        pose: PoseResponse,
+        operation_key: str,
+    ) -> None:
+        hand = request.normalized_hand
+        self.active_execute += 1
+        self.max_active_execute = max(self.max_active_execute, self.active_execute)
+        self.execute_started[hand].set()
+        if self.active_execute == 2:
+            self.both_execute_started.set()
+        try:
+            await self.both_execute_started.wait()
+            await super().execute(request, kind, pose, operation_key)
+        finally:
+            self.active_execute -= 1
+
+
+def dual_pick_request() -> DualPickRequest:
+    return DualPickRequest(
+        left=PickPlaceRequest(
+            task_type="SORTING",
+            product_name="左手商品",
+            hand="left",
+            level="L1",
+            location_id="H3_INSPECT",
+            slot_id="H3_L01_C03",
+        ),
+        right=PickPlaceRequest(
+            task_type="SORTING",
+            product_name="右手商品",
+            hand="right",
+            level="L1",
+            location_id="H3_INSPECT",
+            slot_id="H3_L01_C04",
+        ),
+    )
+
+
 def make_app(fake: FakeSubagents):
     settings = PickPlaceSettings(
         perception_url="http://perception",
@@ -147,6 +218,106 @@ def make_app(fake: FakeSubagents):
     )
     orchestrator = PickPlaceOrchestrator(settings, fake, FakeFrames())
     return create_app(settings, orchestrator=orchestrator)
+
+
+@pytest.mark.asyncio
+async def test_dual_pick_waits_for_both_poses_then_executes_both_hands(
+    tmp_path: Path,
+) -> None:
+    fake = DualPickSubagents()
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://manipulation",
+        camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
+        calibration_file="camera.json",
+        log_dir=str(tmp_path / "logs"),
+    )
+    orchestrator = PickPlaceOrchestrator(settings, fake, FakeFrames())
+
+    execution = asyncio.create_task(
+        orchestrator.run_dual_pick(dual_pick_request(), "dual-barrier")
+    )
+    await asyncio.wait_for(fake.left_pose_ready.wait(), timeout=1)
+    await asyncio.sleep(0)
+    assert not fake.execute_started["left"].is_set()
+    assert not fake.execute_started["right"].is_set()
+
+    fake.allow_right_pose.set()
+    await asyncio.wait_for(fake.both_execute_started.wait(), timeout=1)
+    result = await asyncio.wait_for(execution, timeout=1)
+
+    assert result.status == "SUCCEEDED"
+    assert result.left.status == "SUCCEEDED"
+    assert result.right.status == "SUCCEEDED"
+    assert fake.max_active_execute == 2
+
+
+@pytest.mark.asyncio
+async def test_dual_pick_does_not_move_either_arm_when_one_pose_fails(
+    tmp_path: Path,
+) -> None:
+    fake = DualPickSubagents()
+    fake.fail_pose_hand = "right"
+    fake.allow_right_pose.set()
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://manipulation",
+        camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
+        calibration_file="camera.json",
+        log_dir=str(tmp_path / "logs"),
+    )
+    orchestrator = PickPlaceOrchestrator(settings, fake, FakeFrames())
+
+    result = await orchestrator.run_dual_pick(
+        dual_pick_request(), "dual-pose-failure"
+    )
+
+    assert result.status == "FAILED"
+    assert result.left.status == "NOT_EXECUTED"
+    assert result.right.status == "FAILED"
+    assert not fake.execute_started["left"].is_set()
+    assert not fake.execute_started["right"].is_set()
+
+
+@pytest.mark.asyncio
+async def test_dual_pick_endpoint_is_idempotent(tmp_path: Path) -> None:
+    fake = DualPickSubagents()
+    fake.allow_right_pose.set()
+    settings = PickPlaceSettings(
+        perception_url="http://perception",
+        manipulation_url="http://manipulation",
+        camera_url="http://camera",
+        pick_cameras=PICK_CAMERAS,
+        calibration_file="camera.json",
+        log_dir=str(tmp_path / "logs"),
+    )
+    app = create_app(
+        settings,
+        orchestrator=PickPlaceOrchestrator(settings, fake, FakeFrames()),
+    )
+    payload = dual_pick_request().model_dump(mode="json")
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://pick-place"
+    ) as client:
+        first = await client.post(
+            "/pick/both",
+            json=payload,
+            headers={"Idempotency-Key": "dual-idempotent"},
+        )
+        second = await client.post(
+            "/pick/both",
+            json=payload,
+            headers={"Idempotency-Key": "dual-idempotent"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json() == second.json()
+    assert first.json()["status"] == "SUCCEEDED"
+    assert fake.calls.count(("pick", "execute")) == 2
 
 
 @pytest.mark.asyncio

@@ -14,10 +14,13 @@ from pydantic import ValidationError
 
 from task1_service.models import (
     ActionResponse,
+    DualPickActionResponse,
     Hand,
     HealthResponse,
     InterfaceMetric,
+    PickOutcomeResponse,
     SkuResponse,
+    TargetItem,
     Task1ServiceError,
     Task1Settings,
     TaskType,
@@ -402,6 +405,65 @@ class Task1Client:
             self.settings.timeouts.pick_seconds,
         )
 
+    async def pick_both(
+        self,
+        left: TargetItem,
+        right: TargetItem,
+        idempotency_key: str,
+    ) -> DualPickActionResponse:
+        """Prepare both poses in 8086, then dispatch both single-hand grasps."""
+
+        def item_payload(target: TargetItem) -> dict[str, object]:
+            return {
+                "task_type": TaskType.SORTING.value,
+                "product_name": target.product_name,
+                "hand": target.hand.value,
+                "level": target.shelf_level,
+                "slot_id": target.product_slot_id,
+                "location_id": target.target_id,
+            }
+
+        payload = {
+            "left": item_payload(left),
+            "right": item_payload(right),
+        }
+        try:
+            response = await self._request(
+                "pick_place",
+                "POST",
+                "/pick/both",
+                json=payload,
+                headers={"Idempotency-Key": idempotency_key},
+                timeout_seconds=self.settings.timeouts.pick_seconds,
+                result_unknown_on_exhaustion=True,
+            )
+        except Task1ServiceError as exc:
+            if exc.code != "ACTION_RESULT_UNKNOWN":
+                raise
+            try:
+                response = await self._reconcile_pick_place_response(
+                    idempotency_key, exc
+                )
+            except Task1ServiceError:
+                return _unknown_dual_pick_response(left, right, exc)
+
+        try:
+            result = DualPickActionResponse.model_validate(response.json())
+            if (
+                result.left.hand != "left"
+                or result.right.hand != "right"
+                or result.left.product_name != left.product_name
+                or result.right.product_name != right.product_name
+            ):
+                raise ValueError("dual-pick response does not match request")
+            return result
+        except (ValueError, ValidationError) as exc:
+            error = Task1ServiceError(
+                "INVALID_RESPONSE",
+                "invalid dual-pick response from pick_place",
+            )
+            return _unknown_dual_pick_response(left, right, error)
+
     async def place(
         self,
         product_name: str,
@@ -482,6 +544,17 @@ class Task1Client:
     async def _reconcile_pick_place_action(
         self, idempotency_key: str, original_error: Task1ServiceError
     ) -> None:
+        response = await self._reconcile_pick_place_response(
+            idempotency_key, original_error
+        )
+        try:
+            ActionResponse.model_validate(response.json())
+        except (ValueError, ValidationError) as exc:
+            raise original_error from exc
+
+    async def _reconcile_pick_place_response(
+        self, idempotency_key: str, original_error: Task1ServiceError
+    ) -> httpx.Response:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + ACTION_RECONCILIATION_SECONDS
         while True:
@@ -506,11 +579,7 @@ class Task1Client:
                     raise original_error from query_error
                 raise
             if response.status_code == 200:
-                try:
-                    ActionResponse.model_validate(response.json())
-                except (ValueError, ValidationError) as exc:
-                    raise original_error from exc
-                return
+                return response
             try:
                 status = response.json().get("status")
             except (AttributeError, ValueError):
@@ -655,3 +724,27 @@ def _execution_pose(value: object) -> list[float] | None:
     ):
         return None
     return [float(item) for item in value]
+
+
+def _unknown_dual_pick_response(
+    left: TargetItem,
+    right: TargetItem,
+    error: Task1ServiceError,
+) -> DualPickActionResponse:
+    def outcome(target: TargetItem) -> PickOutcomeResponse:
+        return PickOutcomeResponse(
+            status="UNKNOWN",
+            product_name=target.product_name,
+            hand=target.hand.value.lower(),
+            error_code=error.code,
+            message=error.message,
+            failed_interface=error.failed_interface,
+            url=error.url,
+            pose=error.pose,
+        )
+
+    return DualPickActionResponse(
+        status="UNKNOWN",
+        left=outcome(left),
+        right=outcome(right),
+    )

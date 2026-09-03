@@ -9,8 +9,21 @@ import httpx
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 
-from pick_place_service.models import HealthResponse, PickPlaceRequest, PickPlaceSettings, ServiceError, StatusResponse
-from pick_place_service.service import CameraFrameProvider, OperationCache, PickPlaceOrchestrator, SubagentClient
+from pick_place_service.models import (
+    DualPickRequest,
+    DualPickResponse,
+    HealthResponse,
+    PickPlaceRequest,
+    PickPlaceSettings,
+    ServiceError,
+    StatusResponse,
+)
+from pick_place_service.service import (
+    CameraFrameProvider,
+    OperationCache,
+    PickPlaceOrchestrator,
+    SubagentClient,
+)
 
 
 def create_app(
@@ -69,7 +82,7 @@ def create_app(
     @app.get("/operations/result", response_model=None)
     async def operation_result(
         idempotency_key: str,
-    ) -> StatusResponse | JSONResponse:
+    ) -> StatusResponse | DualPickResponse | JSONResponse:
         result = await cache.result(idempotency_key)
         if result is None:
             return JSONResponse(status_code=202, content={"status": "RUNNING"})
@@ -83,11 +96,43 @@ def create_app(
         if not idempotency_key or not idempotency_key.strip():
             raise ServiceError("MISSING_IDEMPOTENCY_KEY", "Idempotency-Key header is required", status_code=400)
         assert orchestrator is not None
-        return await cache.run(
+        result = await cache.run(
             idempotency_key,
             request,
             lambda: orchestrator.run(request, kind, idempotency_key),
         )
+        if not isinstance(result, StatusResponse):
+            raise ServiceError(
+                "INVALID_RESPONSE",
+                "single pick/place operation returned a dual-pick response",
+            )
+        return result
+
+    @app.post("/pick/both", response_model=DualPickResponse)
+    async def pick_both(
+        request: DualPickRequest,
+        idempotency_key: Annotated[
+            str | None, Header(alias="Idempotency-Key")
+        ] = None,
+    ) -> DualPickResponse:
+        if not idempotency_key or not idempotency_key.strip():
+            raise ServiceError(
+                "MISSING_IDEMPOTENCY_KEY",
+                "Idempotency-Key header is required",
+                status_code=400,
+            )
+        assert orchestrator is not None
+        result = await cache.run(
+            idempotency_key,
+            request,
+            lambda: orchestrator.run_dual_pick(request, idempotency_key),
+        )
+        if not isinstance(result, DualPickResponse):
+            raise ServiceError(
+                "INVALID_RESPONSE",
+                "dual-pick operation returned a single-operation response",
+            )
+        return result
 
     @app.post("/pick", response_model=StatusResponse)
     async def pick(
