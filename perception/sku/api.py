@@ -6,6 +6,7 @@ import mimetypes
 import os
 import re
 import sys
+import threading
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -13,7 +14,7 @@ import uvicorn
 from fastapi import Body, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
@@ -33,6 +34,7 @@ LOCATION_PATTERN = re.compile(
 INSPECTION_TARGET_PATTERN = re.compile(r"^H(?:1|12|2|23|3)_INSPECT$")
 CandidatePoseType = Literal["", "SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
 InspectionPoseType = Literal["SHELF_VIEW_UPPER", "SHELF_VIEW_LOWER"]
+InventoryModification = Literal["replendish", "deplete"]
 
 
 class HealthResponse(BaseModel):
@@ -44,6 +46,7 @@ class ProductResponse(BaseModel):
     name: str
     images: list[str]
     locations: list[str]
+    inventory: list[str]
 
 
 class SlotProductResponse(ProductResponse):
@@ -58,6 +61,27 @@ class CandidateSkuRequest(BaseModel):
 class InspectionCandidateSkuRequest(BaseModel):
     location_id: str
     pose_type: InspectionPoseType
+
+
+class InventorySlotRequest(BaseModel):
+    slot_id: str = Field(min_length=1)
+
+
+class InventoryModifyRequest(InventorySlotRequest):
+    modification: InventoryModification
+
+
+class InventoryModifyResponse(ProductResponse):
+    slot_id: str
+    modification: InventoryModification
+    modified: bool
+
+
+class InventoryResetResponse(BaseModel):
+    reset: bool
+    modified_products: int
+    product_count: int
+    inventory_count: int
 
 
 class ErrorResponse(BaseModel):
@@ -78,7 +102,12 @@ class ApiError(Exception):
 
 
 class SkuCatalog:
-    def __init__(self, payload: dict[str, Any], catalog_root: Path = ROOT) -> None:
+    def __init__(
+        self,
+        payload: dict[str, Any],
+        catalog_root: Path = ROOT,
+        catalog_path: Path | None = None,
+    ) -> None:
         products = payload.get("products")
         if not isinstance(products, list):
             raise ValueError("products.json 中的 products 必须是数组")
@@ -88,6 +117,9 @@ class SkuCatalog:
         self._by_sku: dict[str, dict[str, Any]] = {}
         self._by_location: dict[str, dict[str, Any]] = {}
         self._inspection_candidate_rows: dict[str, dict[int, tuple[str, ...]]] = {}
+        self._payload = payload
+        self._catalog_path = catalog_path
+        self._inventory_lock = threading.Lock()
 
         for product in products:
             if not isinstance(product, dict):
@@ -96,6 +128,7 @@ class SkuCatalog:
             name = product.get("name")
             sku_id = product.get("sku_id")
             locations = product.get("locations")
+            inventory = product.get("inventory")
             images = product.get("images")
             if not isinstance(sku_id, str) or not sku_id.strip():
                 raise ValueError("存在无效 SKU ID")
@@ -105,6 +138,21 @@ class SkuCatalog:
                 raise ValueError(f"商品 {name!r} 没有有效位置")
             if not isinstance(images, list):
                 raise ValueError(f"商品 {name!r} 的 images 必须是数组")
+            if inventory is None:
+                inventory = list(locations)
+                product["inventory"] = inventory
+            if (
+                not isinstance(inventory, list)
+                or not all(isinstance(slot, str) and slot.strip() for slot in inventory)
+            ):
+                raise ValueError(f"商品 {name!r} 的 inventory 必须是位置数组")
+            normalized_locations = {slot.strip().upper() for slot in locations}
+            normalized_inventory = [slot.strip().upper() for slot in inventory]
+            if len(normalized_inventory) != len(set(normalized_inventory)):
+                raise ValueError(f"商品 {name!r} 的 inventory 存在重复位置")
+            if not set(normalized_inventory).issubset(normalized_locations):
+                raise ValueError(f"商品 {name!r} 的 inventory 包含非标准位置")
+            product["inventory"] = normalized_inventory
 
             for image in images:
                 if not isinstance(image, str) or not image:
@@ -162,7 +210,8 @@ class SkuCatalog:
     @classmethod
     def load(cls, path: Path) -> "SkuCatalog":
         payload = json.loads(path.read_text(encoding="utf-8"))
-        return cls(payload, path.resolve().parent)
+        resolved_path = path.resolve()
+        return cls(payload, resolved_path.parent, resolved_path)
 
     def load_inspection_candidates(self, path: Path) -> None:
         """Load explicit per-view, per-shelf-level candidates for inspection."""
@@ -392,6 +441,88 @@ class SkuCatalog:
     def all_names(self) -> list[str]:
         return list(self._by_name)
 
+    def modify_inventory_slot(
+        self,
+        slot_id: str,
+        modification: InventoryModification,
+    ) -> tuple[dict[str, Any] | None, bool]:
+        """Idempotently replenish or deplete one standard inventory slot."""
+
+        normalized_slot = slot_id.strip().upper()
+        if LOCATION_PATTERN.fullmatch(normalized_slot) is None:
+            raise ValueError("invalid slot_id")
+        if modification not in {"replendish", "deplete"}:
+            raise ValueError("invalid modification")
+        with self._inventory_lock:
+            product = self._by_location.get(normalized_slot)
+            if product is None:
+                return None, False
+            inventory = list(product["inventory"])
+            if modification == "deplete":
+                updated_inventory = [
+                    slot for slot in inventory if slot != normalized_slot
+                ]
+            else:
+                updated_inventory = list(inventory)
+                if normalized_slot not in updated_inventory:
+                    updated_inventory.append(normalized_slot)
+                location_order = {
+                    slot: index for index, slot in enumerate(product["locations"])
+                }
+                updated_inventory.sort(key=location_order.__getitem__)
+            if updated_inventory == inventory:
+                return self._copy_product(product), False
+            product["inventory"] = updated_inventory
+            try:
+                self._persist_catalog()
+            except OSError:
+                product["inventory"] = inventory
+                raise
+            return self._copy_product(product), True
+
+    def reset_inventory(self) -> dict[str, int | bool]:
+        """Restore every product's inventory to its complete locations list."""
+
+        with self._inventory_lock:
+            products = list(self._by_sku.values())
+            previous_inventory = {
+                product["sku_id"]: list(product["inventory"])
+                for product in products
+            }
+            modified_products = sum(
+                product["inventory"] != product["locations"]
+                for product in products
+            )
+            if modified_products:
+                for product in products:
+                    product["inventory"] = list(product["locations"])
+                try:
+                    self._persist_catalog()
+                except OSError:
+                    for product in products:
+                        product["inventory"] = previous_inventory[product["sku_id"]]
+                    raise
+            return {
+                "reset": True,
+                "modified_products": modified_products,
+                "product_count": len(products),
+                "inventory_count": sum(
+                    len(product["inventory"]) for product in products
+                ),
+            }
+
+    def _persist_catalog(self) -> None:
+        if self._catalog_path is None:
+            raise OSError("catalog path is unavailable")
+        temporary_path = self._catalog_path.with_suffix(
+            self._catalog_path.suffix + ".tmp"
+        )
+        temporary_path.write_text(
+            json.dumps(self._payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary_path.replace(self._catalog_path)
+
     @staticmethod
     def _name_lookup_key(name: str) -> str:
         return (
@@ -411,6 +542,7 @@ class SkuCatalog:
             "name": product["name"],
             "images": list(product["images"]),
             "locations": list(product["locations"]),
+            "inventory": list(product["inventory"]),
         }
 
 
@@ -560,6 +692,44 @@ def create_app(
     @app.get("/sku/get_all_names", response_model=list[str])
     def get_all_names() -> list[str]:
         return catalog.all_names()
+
+    @app.post(
+        "/sku/modify_inventory",
+        response_model=InventoryModifyResponse,
+        responses=ERROR_RESPONSES,
+    )
+    def modify_inventory(
+        request: InventoryModifyRequest = Body(...),
+    ) -> InventoryModifyResponse:
+        try:
+            product, modified = catalog.modify_inventory_slot(
+                request.slot_id,
+                request.modification,
+            )
+        except ValueError as error:
+            raise ApiError(400, "INVALID_LOCATION_ID") from error
+        except OSError as error:
+            raise ApiError(503, "CATALOG_WRITE_FAILED") from error
+        if product is None:
+            raise ApiError(404, "LOCATION_NOT_FOUND")
+        return InventoryModifyResponse(
+            **product,
+            slot_id=request.slot_id.strip().upper(),
+            modification=request.modification,
+            modified=modified,
+        )
+
+    @app.post(
+        "/sku/reset_inventory",
+        response_model=InventoryResetResponse,
+        responses=ERROR_RESPONSES,
+    )
+    def reset_inventory() -> InventoryResetResponse:
+        try:
+            result = catalog.reset_inventory()
+        except OSError as error:
+            raise ApiError(503, "CATALOG_WRITE_FAILED") from error
+        return InventoryResetResponse(**result)
 
     @app.get(
         "/images/{image_path:path}",

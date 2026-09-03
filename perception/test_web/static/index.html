@@ -120,18 +120,18 @@
         <button id="clearLocateImage" type="button" disabled>清除离线数据，使用相机</button>
         <span id="locateImageStatus" class="status">当前使用腕部相机</span>
         <div>
-          <strong>离线深度数据</strong>
-          <small>可选：二维 NPY、16 位 PNG/TIFF，或与 RGB 同尺寸的 16UC1 RAW/BIN。</small>
+          <strong>离线深度数据（当前 Pick/Locate 已停用）</strong>
+          <small>深度不会发送或参与候选选择。</small>
         </div>
-        <input id="locateDepthInput" type="file" accept=".npy,.raw,.bin,.png,.tif,.tiff,image/png,image/tiff" />
+        <input id="locateDepthInput" type="file" accept=".npy,.raw,.bin,.png,.tif,.tiff,image/png,image/tiff" disabled />
         <label class="image-picker">
           <span>RAW 字节序</span>
-          <select id="locateDepthByteOrder">
+          <select id="locateDepthByteOrder" disabled>
             <option value="little">little-endian</option>
             <option value="big">big-endian</option>
           </select>
         </label>
-        <span id="locateDepthStatus" class="status">未上传深度数据，将使用无深度回退</span>
+        <span id="locateDepthStatus" class="status">深度不会发送或参与选择</span>
       </section>
 
       <section class="workspace">

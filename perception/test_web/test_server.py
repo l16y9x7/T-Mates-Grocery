@@ -205,8 +205,11 @@ class PromptMappingTest(unittest.TestCase):
         self.assertIn("重跑当前项（--overwrite）", index_html)
         self.assertIn("requestPayload.image_base64", app_js)
         self.assertIn('id="runFullLocate"', qwen_html)
+        self.assertIn('id="locateInventory"', qwen_html)
+        self.assertIn('id="locateSlot"', qwen_html)
         self.assertIn('image_name: originalImageName', qwen_js)
         self.assertIn('image_base64: originalImageDataUrl', qwen_js)
+        self.assertIn('mock_inventory: mockInventory', qwen_js)
 
     def test_qwen_review_generates_reference_mask_from_existing_finding(self) -> None:
         review_html = (server.STATIC_DIR / "qwen_review.html").read_text(
@@ -1408,6 +1411,34 @@ CANDIDATE 2: 旧商品B;
             },
         )
 
+    def test_locate_debug_proxy_forwards_request_scoped_mock_inventory(self) -> None:
+        response = Mock(ok=True, status_code=200)
+        response.json.return_value = {
+            "image_base64": "aW1hZ2U=",
+            "qwen_bboxes": [],
+            "instances": [],
+        }
+        with patch.object(server.requests, "post", return_value=response) as post_mock:
+            server.run_locate_debug(
+                server.LocateDebugProxyRequest(
+                    task_type="SORTING",
+                    product_name="测试商品",
+                    level="L1",
+                    hand="left",
+                    slot_id="H1_L01_C03",
+                    mock_inventory=["H1_L01_C02", "H1_L01_C03"],
+                    image_name="rgb.jpg",
+                    image_base64="aW1hZ2U=",
+                )
+            )
+
+        payload = post_mock.call_args.kwargs["json"]
+        self.assertEqual(payload["slot_id"], "H1_L01_C03")
+        self.assertEqual(
+            payload["mock_inventory"],
+            ["H1_L01_C02", "H1_L01_C03"],
+        )
+
     def test_locate_debug_proxy_allows_offline_hard_case_without_depth(self) -> None:
         response = Mock(ok=True, status_code=200)
         response.json.return_value = {
@@ -1571,6 +1602,8 @@ CANDIDATE 2: 旧商品B;
                 [
                     {
                         "name": "商品",
+                        "locations": [],
+                        "inventory": [],
                         "qwen3_prompt": "Qwen Prompt",
                         "sam3_prompt": "SAM Prompt",
                     }

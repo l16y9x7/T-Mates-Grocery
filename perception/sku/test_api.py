@@ -27,6 +27,7 @@ class SkuApiTest(unittest.TestCase):
                 "name": "NFC桔汁",
                 "images": ["images/SKU_001.jpg"],
                 "locations": ["H3_L01_C01", "H3_L01_C02"],
+                "inventory": ["H3_L01_C01", "H3_L01_C02"],
             },
         )
 
@@ -40,6 +41,7 @@ class SkuApiTest(unittest.TestCase):
                 "name": "NFC桔汁",
                 "images": ["images/SKU_001.jpg"],
                 "locations": ["H3_L01_C01", "H3_L01_C02"],
+                "inventory": ["H3_L01_C01", "H3_L01_C02"],
             },
         )
 
@@ -71,6 +73,7 @@ class SkuApiTest(unittest.TestCase):
                 "name": "NFC桔汁",
                 "images": ["images/SKU_001.jpg"],
                 "locations": ["H3_L01_C01", "H3_L01_C02"],
+                "inventory": ["H3_L01_C01", "H3_L01_C02"],
             },
         )
 
@@ -236,6 +239,9 @@ class SkuApiTest(unittest.TestCase):
         self.assertIn("/sku/get_candidate_SKU", paths)
         self.assertIn("/sku/get_row_layout", paths)
         self.assertIn("/sku/get_inspection_candidate_SKU", paths)
+        self.assertNotIn("/sku/inventory", paths)
+        self.assertIn("/sku/modify_inventory", paths)
+        self.assertIn("/sku/reset_inventory", paths)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Qwen3 / SAM3 Crop 直接测试</title>
-    <link rel="stylesheet" href="/static/qwen_debug.css?v=5" />
+    <link rel="stylesheet" href="/static/qwen_debug.css?v=6-mock-inventory" />
   </head>
   <body>
     <main>
@@ -29,15 +29,15 @@
           <small id="imageStatus">尚未载入图片</small>
         </div>
         <div class="image-input">
-          <span>对应深度数据（完整 Locate 可选）</span>
-          <input id="depthFileInput" class="file-input" type="file" accept=".npy,.raw,.bin,.png,.tif,.tiff,image/png,image/tiff" />
+          <span>对应深度数据（当前 Pick/Locate 已停用）</span>
+          <input id="depthFileInput" class="file-input" type="file" accept=".npy,.raw,.bin,.png,.tif,.tiff,image/png,image/tiff" disabled />
           <label>RAW 字节序
-            <select id="depthByteOrder">
+            <select id="depthByteOrder" disabled>
               <option value="little">little-endian</option>
               <option value="big">big-endian</option>
             </select>
           </label>
-          <small id="depthStatus">未载入深度数据</small>
+          <small id="depthStatus">深度不会发送或参与选择</small>
         </div>
       </section>
 
@@ -67,6 +67,16 @@
             <select id="locateHand">
               <option value="left">left</option>
               <option value="right">right</option>
+            </select>
+          </label>
+          <fieldset class="mock-inventory-fieldset">
+            <legend>模拟当前库存（仅本次请求）</legend>
+            <span class="mock-inventory-hint">取消勾选已经被拿走的槽位</span>
+            <div id="locateInventory" class="mock-inventory-options"></div>
+          </fieldset>
+          <label>本次要 Pick 的 slot_id
+            <select id="locateSlot">
+              <option value="">请先勾选剩余库存</option>
             </select>
           </label>
           <button id="runFullLocate" class="run locate-run" type="button">运行完整 Sorting Locate</button>
@@ -170,6 +180,6 @@
         </article>
       </section>
     </main>
-    <script src="/static/qwen_debug.js?v=8-npy-depth"></script>
+    <script src="/static/qwen_debug.js?v=10-mock-inventory"></script>
   </body>
 </html>

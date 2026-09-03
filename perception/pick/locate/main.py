@@ -57,6 +57,8 @@ HARD_CASE_LAYOUT_OVERRIDES_PATH = (
     ROOT.parents[1] / "hard_case_layout_overrides.json"
 )
 HARD_CASE_VIEW_LAYOUT_PATH = ROOT.parents[1] / "hard_case_view_layout.json"
+MULTI_ROW_PRODUCTS_PATH = ROOT / "multi_row_products.json"
+MOCK_SKU_CATALOG_PATH = ROOT.parents[1] / "sku" / "products.json"
 SUPPORTED_TASK_TYPES = ("SORTING", "SHORTAGE", "MISPLACED")
 PROMPT_MAPPING_PATHS = {
     "SORTING": PROMPT_MAPPING_PATH,
@@ -172,6 +174,18 @@ HARD_CASE_FRONT_DISTANCE_GAP_RATIO = float(
 )
 HARD_CASE_MASK_LOWER_CONTACT_QUANTILE = float(
     os.getenv("HARD_CASE_MASK_LOWER_CONTACT_QUANTILE", "0.80")
+)
+MULTI_ROW_CONTACT_GAP_RATIO = float(
+    os.getenv("MULTI_ROW_CONTACT_GAP_RATIO", "0.05")
+)
+MULTI_ROW_MASK_LOWER_CONTACT_QUANTILE = float(
+    os.getenv("MULTI_ROW_MASK_LOWER_CONTACT_QUANTILE", "0.50")
+)
+MULTI_ROW_DEPTH_GAP_MM = float(
+    os.getenv("MULTI_ROW_DEPTH_GAP_MM", "45")
+)
+PICK_HISTORY_OVERLAP_RATIO = float(
+    os.getenv("PICK_HISTORY_OVERLAP_RATIO", "0.50")
 )
 CAMERA_DEPTH_UNIT_MM = float(os.getenv("CAMERA_DEPTH_UNIT_MM", "1.0"))
 REQUEST_TIMEOUT_SECONDS = 120
@@ -301,6 +315,11 @@ class LocateRequest(BaseModel):
     depth_is_bigendian: bool = False
     qwen3_prompt: str | None = None
     sam3_prompt: str | None = None
+    previous_picked_bboxes: list[list[int]] = Field(default_factory=list)
+
+
+class LocateDebugRequest(LocateRequest):
+    mock_inventory: list[str] | None = None
 
 
 class LocatedInstance(BaseModel):
@@ -312,6 +331,11 @@ class LocatedInstance(BaseModel):
     hard_case_group_index: int | None = None
     mapped_product_name: str | None = None
     mapped_slot_id: str | None = None
+    display_row_index: int | None = None
+    display_position_in_row: int | None = None
+    display_row_source: str | None = None
+    shelf_front_distance_ratio: float | None = None
+    history_overlap_count: int = 0
     is_selected: bool = False
 
 
@@ -389,6 +413,7 @@ class LocateDebugResponse(BaseModel):
 
 class LocateResponse(BaseModel):
     product_name: str
+    slot_id: str | None = None
     bbox: list[int]
     mask: str
     image_path: str
@@ -662,6 +687,103 @@ def lookup_sku_by_name(name: str) -> dict[str, Any]:
     ):
         raise HTTPException(status_code=502, detail="SKU 查询响应缺少 sku_id 或 name")
     return product
+
+
+def load_mock_sku_catalog() -> list[dict[str, Any]]:
+    """Load the repository catalog used by offline/debug tooling."""
+
+    try:
+        payload = json.loads(MOCK_SKU_CATALOG_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=500, detail="mock SKU 商品库不存在") from error
+    except (OSError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"读取 mock SKU 商品库失败: {error}",
+        ) from error
+    products = payload.get("products") if isinstance(payload, dict) else None
+    if not isinstance(products, list):
+        raise HTTPException(status_code=500, detail="mock SKU 商品库缺少 products 数组")
+    return [product for product in products if isinstance(product, dict)]
+
+
+def lookup_mock_sku_by_name(
+    name: str,
+    mock_inventory: list[str],
+) -> dict[str, Any]:
+    """Build one SKU record with request-scoped inventory and no SKU API call."""
+
+    product = next(
+        (
+            item
+            for item in load_mock_sku_catalog()
+            if isinstance(item.get("name"), str) and item["name"].strip() == name
+        ),
+        None,
+    )
+    if product is None:
+        raise HTTPException(status_code=404, detail=f"mock SKU 中不存在商品: {name}")
+    if not isinstance(product.get("sku_id"), str):
+        raise HTTPException(status_code=500, detail="mock SKU 商品缺少 sku_id")
+
+    raw_locations = product.get("locations")
+    locations = {
+        value.strip().upper()
+        for value in raw_locations
+        if isinstance(value, str) and LOCATION_PATTERN.fullmatch(value.strip().upper())
+    } if isinstance(raw_locations, list) else set()
+    normalized_inventory: list[str] = []
+    for value in mock_inventory:
+        if not isinstance(value, str):
+            raise HTTPException(status_code=400, detail="mock_inventory 必须是槽位字符串数组")
+        normalized = value.strip().upper()
+        if LOCATION_PATTERN.fullmatch(normalized) is None:
+            raise HTTPException(status_code=400, detail=f"mock 库存槽位格式无效: {normalized}")
+        if normalized not in locations:
+            raise HTTPException(
+                status_code=400,
+                detail=f"mock 库存槽位与商品不一致: {normalized}",
+            )
+        if normalized not in normalized_inventory:
+            normalized_inventory.append(normalized)
+
+    mocked_product = dict(product)
+    mocked_product["inventory"] = normalized_inventory
+    return mocked_product
+
+
+def lookup_mock_sku_row(location_id: str) -> list[dict[str, Any]]:
+    """Resolve a physical row from the local catalog for mock hard cases."""
+
+    normalized_location = location_id.strip().upper()
+    target_match = LOCATION_PATTERN.fullmatch(normalized_location)
+    if target_match is None:
+        raise HTTPException(status_code=400, detail="mock SKU 行 location_id 格式无效")
+    row: list[dict[str, Any]] = []
+    for product in load_mock_sku_catalog():
+        raw_locations = product.get("locations")
+        if not isinstance(raw_locations, list):
+            continue
+        for value in raw_locations:
+            normalized = value.strip().upper() if isinstance(value, str) else ""
+            match = LOCATION_PATTERN.fullmatch(normalized)
+            if (
+                match is None
+                or match.group("shelf") != target_match.group("shelf")
+                or match.group("level") != target_match.group("level")
+            ):
+                continue
+            item = dict(product)
+            item["location_id"] = normalized
+            row.append(item)
+    row.sort(
+        key=lambda item: int(
+            LOCATION_PATTERN.fullmatch(item["location_id"]).group("column")  # type: ignore[union-attr]
+        )
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail=f"mock SKU 中不存在货架行: {normalized_location}")
+    return row
 
 
 def fetch_sku_reference_image(product: dict[str, Any]) -> QwenReferenceImage:
@@ -1150,6 +1272,101 @@ def hard_case_level_required(
     )
 
 
+def load_multi_row_products(
+    path: str | Path | None = None,
+) -> frozenset[str]:
+    """Load product names whose SORTING candidates may span several display rows.
+
+    The special ``*`` entry enables the behavior for every SORTING product, so
+    newly added SKUs do not silently miss repeated-pick/history handling.
+    """
+
+    config_path = Path(path) if path is not None else MULTI_ROW_PRODUCTS_PATH
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=500, detail="多排商品配置不存在") from error
+    except (OSError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"读取多排商品配置失败: {error}",
+        ) from error
+    products = payload.get("products") if isinstance(payload, dict) else None
+    if not (
+        isinstance(products, list)
+        and all(isinstance(name, str) and name.strip() for name in products)
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail="多排商品配置 products 必须是非空字符串数组",
+        )
+    return frozenset(name.strip() for name in products)
+
+
+def uses_multi_row_pick(product_name: str, task_type: str) -> bool:
+    if task_type.strip().upper() != "SORTING":
+        return False
+    configured_products = load_multi_row_products()
+    return "*" in configured_products or product_name.strip() in configured_products
+
+
+def inventory_slots_for_pick(
+    product: dict[str, Any],
+    task_type: str,
+    slot_id: str | None,
+    level: str | None,
+) -> list[str]:
+    """Return current same-shelf-row inventory ordered by physical column."""
+
+    if task_type.strip().upper() != "SORTING" or not (slot_id or "").strip():
+        return []
+    normalized_slot = (slot_id or "").strip().upper()
+    target_match = LOCATION_PATTERN.fullmatch(normalized_slot)
+    if target_match is None:
+        raise HTTPException(status_code=400, detail="slot_id 格式无效")
+    if level is not None and normalize_level(level) != f"L{int(target_match.group('level'))}":
+        raise HTTPException(
+            status_code=400,
+            detail=f"level 与 slot_id 不一致: level={level}, slot={normalized_slot}",
+        )
+
+    raw_locations = product.get("locations")
+    locations = {
+        value.strip().upper()
+        for value in raw_locations
+        if isinstance(value, str) and LOCATION_PATTERN.fullmatch(value.strip().upper())
+    } if isinstance(raw_locations, list) else set()
+    if normalized_slot not in locations:
+        raise HTTPException(status_code=400, detail="slot_id 与商品不一致")
+
+    raw_inventory = product.get("inventory")
+    if not isinstance(raw_inventory, list):
+        raw_inventory = list(locations)
+    inventory = {
+        value.strip().upper()
+        for value in raw_inventory
+        if isinstance(value, str) and LOCATION_PATTERN.fullmatch(value.strip().upper())
+    }
+    if normalized_slot not in inventory:
+        raise HTTPException(status_code=409, detail=f"slot_id 已不在库存中: {normalized_slot}")
+
+    shelf = target_match.group("shelf")
+    row_level = target_match.group("level")
+    row_slots = [
+        value
+        for value in inventory
+        if (
+            (match := LOCATION_PATTERN.fullmatch(value)) is not None
+            and match.group("shelf") == shelf
+            and match.group("level") == row_level
+        )
+    ]
+    row_slots.sort(
+        key=lambda value: int(LOCATION_PATTERN.fullmatch(value).group("column"))  # type: ignore[union-attr]
+    )
+    return row_slots
+
+
 def select_location_for_level(
     product: dict[str, Any], level: str, hand: str = "left"
 ) -> tuple[str, re.Match[str]]:
@@ -1173,8 +1390,9 @@ def select_location_for_level(
 def hard_case_standard_order(
     target_location: str,
     config: HardCaseGroupConfig,
+    sku_row_lookup: Callable[[str], list[dict[str, Any]]] | None = None,
 ) -> list[str]:
-    row = lookup_sku_row(target_location)
+    row = (sku_row_lookup or lookup_sku_row)(target_location)
     order = [
         product["name"]
         for product in row
@@ -1803,42 +2021,6 @@ def mask_foreground_pixel_count(mask_base64: str) -> int:
     return sum(histogram[128:])
 
 
-def estimate_instance_depth_mm(
-    instance: LocatedInstance,
-    depth_image: Image.Image,
-    *,
-    min_valid_pixels: int = PICK_MIN_VALID_DEPTH_PIXELS,
-) -> float | None:
-    """计算实例 mask 内非零深度的中位数，单位为毫米。"""
-    encoded = instance.mask.split(",", 1)[-1]
-    try:
-        mask_bytes = base64.b64decode(encoded, validate=True)
-        with Image.open(io.BytesIO(mask_bytes)) as source_mask:
-            mask_image = source_mask.convert("L")
-    except (ValueError, binascii.Error, UnidentifiedImageError, OSError):
-        return None
-    if mask_image.size != depth_image.size:
-        return None
-
-    valid_depths = sorted(
-        float(depth_value) * CAMERA_DEPTH_UNIT_MM
-        for mask_value, depth_value in zip(
-            mask_image.getdata(),
-            depth_image.getdata(),
-        )
-        if mask_value >= 128
-        and isinstance(depth_value, (int, float))
-        and depth_value > 0
-    )
-    if len(valid_depths) < max(1, min_valid_pixels):
-        return None
-
-    middle = len(valid_depths) // 2
-    if len(valid_depths) % 2:
-        return valid_depths[middle]
-    return (valid_depths[middle - 1] + valid_depths[middle]) / 2
-
-
 def select_frontmost_instance(
     instances: list[LocatedInstance],
 ) -> LocatedInstance:
@@ -2165,21 +2347,6 @@ def keep_frontmost_in_overlap_chains(
     return [instance for _, instance in sorted(selected, key=lambda item: item[0])]
 
 
-def keep_frontmost_in_source_groups(
-    instances: list[LocatedInstance],
-) -> list[LocatedInstance]:
-    """Apply overlap-chain filtering independently inside each Qwen display crop."""
-    by_source: dict[int | None, list[LocatedInstance]] = defaultdict(list)
-    for instance in instances:
-        by_source[instance.source_qwen_index].append(instance)
-    filtered = [
-        item
-        for source_instances in by_source.values()
-        for item in keep_frontmost_in_overlap_chains(source_instances)
-    ]
-    return sorted(filtered, key=lambda item: (item.source_qwen_index or 0, item.bbox[0]))
-
-
 def drop_smallest_mask_area_outlier(
     instances: list[LocatedInstance],
 ) -> list[LocatedInstance]:
@@ -2341,14 +2508,30 @@ def detect_red_shelf_front_line(
                 key=lambda candidate: candidate[0],
             )
         approximate_intercept = intercept_bin * intercept_bin_size
-        residuals = sorted(
-            y - slope * x
+        supporting_points = [
+            (x, y)
             for x, y in points
             if abs((y - slope * x) - approximate_intercept)
             <= intercept_bin_size
-        )
-        if not residuals:
+        ]
+        if not supporting_points:
             return None
+
+        # Refine the quantized Hough slope with a continuous least-squares fit
+        # over its supported red-edge points. The Hough stage supplies the
+        # robust inlier set; this stage removes the 0.025 slope quantization that
+        # otherwise becomes visible as row drift toward the image edges.
+        mean_x = sum(x for x, _y in supporting_points) / len(supporting_points)
+        mean_y = sum(y for _x, y in supporting_points) / len(supporting_points)
+        denominator = sum((x - mean_x) ** 2 for x, _y in supporting_points)
+        if denominator > 0:
+            refined_slope = sum(
+                (x - mean_x) * (y - mean_y)
+                for x, y in supporting_points
+            ) / denominator
+            if -0.30 <= refined_slope <= 0.30:
+                slope = refined_slope
+        residuals = sorted(y - slope * x for x, y in supporting_points)
         return slope, residuals[len(residuals) // 2]
 
     upper_edge_line = fit_supported_line(
@@ -2370,43 +2553,361 @@ def detect_red_shelf_front_line(
     return fallback_line if is_plausible_shelf_line(fallback_line) else None
 
 
-def instance_lower_contact_y(instance: LocatedInstance) -> float:
-    """Estimate the object's main lower contour without trusting mask tails."""
+def instance_lower_contour_points(
+    instance: LocatedInstance,
+) -> list[tuple[float, float]]:
+    """Return one lower-mask point per sufficiently supported image column."""
+
+    fallback = [
+        (
+            instance_center_x(instance),
+            float(instance.bbox[3]),
+        )
+    ]
     encoded = instance.mask.split(",", 1)[-1]
     if not encoded:
-        return instance.bbox[3]
+        return fallback
     try:
         mask_bytes = base64.b64decode(encoded, validate=True)
         with Image.open(io.BytesIO(mask_bytes)) as source_mask:
             mask = source_mask.convert("L")
     except (ValueError, binascii.Error, UnidentifiedImageError, OSError):
-        return instance.bbox[3]
+        return fallback
 
     left = max(0, int(math.floor(instance.bbox[0])))
     top = max(0, int(math.floor(instance.bbox[1])))
     right = min(mask.width, int(math.ceil(instance.bbox[2])))
     bottom = min(mask.height, int(math.ceil(instance.bbox[3])))
     if left >= right or top >= bottom:
-        return instance.bbox[3]
+        return fallback
 
     pixels = mask.load()
-    column_bottoms: list[int] = []
+    contour_points: list[tuple[float, float]] = []
     for x in range(left, right):
         for y in range(bottom - 1, top - 1, -1):
             if pixels[x, y] >= 128:
-                column_bottoms.append(y + 1)
+                contour_points.append((x + 0.5, float(y + 1)))
                 break
     minimum_columns = max(3, int((right - left) * 0.20))
-    if len(column_bottoms) < minimum_columns:
-        return instance.bbox[3]
+    return contour_points if len(contour_points) >= minimum_columns else fallback
 
-    column_bottoms.sort()
+
+def instance_lower_contact_y(instance: LocatedInstance) -> float:
+    """Estimate the object's main lower contour without trusting mask tails."""
+
+    column_bottoms = sorted(
+        y for _x, y in instance_lower_contour_points(instance)
+    )
+
     quantile = min(1.0, max(0.0, HARD_CASE_MASK_LOWER_CONTACT_QUANTILE))
     quantile_index = min(
         len(column_bottoms) - 1,
         max(0, math.ceil(quantile * len(column_bottoms)) - 1),
     )
     return min(instance.bbox[3], float(column_bottoms[quantile_index]))
+
+
+def instance_shelf_front_distance(
+    instance: LocatedInstance,
+    shelf_front_line: tuple[float, float],
+    *,
+    lower_contact_quantile: float = HARD_CASE_MASK_LOWER_CONTACT_QUANTILE,
+) -> tuple[float, float]:
+    """Return robust signed perpendicular distance to the shelf-front line.
+
+    Positive values place the mask above/behind the shelf front; negative values
+    mean that the mask crosses below it. Sampling the full lower contour avoids
+    the perspective error caused by comparing one global bottom Y with the line
+    only at the bbox center.
+    """
+
+    slope, intercept = shelf_front_line
+    normal_scale = math.sqrt(slope * slope + 1.0)
+    perpendicular_distances = sorted(
+        (slope * x - y + intercept) / normal_scale
+        for x, y in instance_lower_contour_points(instance)
+    )
+    # A lower contour corresponds to a smaller distance. This is the
+    # perpendicular-distance equivalent of the previous 80th-percentile Y.
+    lower_distance_quantile = 1.0 - min(
+        1.0,
+        max(0.0, lower_contact_quantile),
+    )
+    quantile_index = min(
+        len(perpendicular_distances) - 1,
+        max(
+            0,
+            math.ceil(
+                lower_distance_quantile * len(perpendicular_distances)
+            )
+            - 1,
+        ),
+    )
+    distance_pixels = perpendicular_distances[quantile_index]
+    perpendicular_height = max(
+        1.0,
+        (instance.bbox[3] - instance.bbox[1]) / normal_scale,
+    )
+    return distance_pixels, distance_pixels / perpendicular_height
+
+
+def cluster_display_row_measurements(
+    measurements: list[tuple[int, float]],
+    *,
+    row_gap_ratio: float,
+) -> dict[int, int]:
+    """Assign rows by gaps between sorted shelf-front distances."""
+
+    row_by_index: dict[int, int] = {}
+    previous_value: float | None = None
+    row_index = 1
+    for instance_index, value in sorted(measurements, key=lambda item: item[1]):
+        if previous_value is not None and value - previous_value > row_gap_ratio:
+            row_index += 1
+        row_by_index[instance_index] = row_index
+        previous_value = value
+    return row_by_index
+
+
+def assign_display_row_indices(
+    instances: list[LocatedInstance],
+    *,
+    shelf_front_line: tuple[float, float] | None,
+    contact_gap_ratio: float = MULTI_ROW_CONTACT_GAP_RATIO,
+) -> list[LocatedInstance]:
+    """Annotate visible depth rows, where row 1 is nearest to the shelf front."""
+
+    if not instances:
+        return []
+
+    if shelf_front_line is None:
+        return [
+            instance.model_copy(
+                update={
+                    "display_row_index": 1,
+                    "display_row_source": "unresolved",
+                }
+            )
+            for instance in instances
+        ]
+
+    measurements: list[tuple[int, float]] = []
+    for index, instance in enumerate(instances):
+        _distance_pixels, signed_distance_ratio = instance_shelf_front_distance(
+            instance,
+            shelf_front_line,
+            lower_contact_quantile=MULTI_ROW_MASK_LOWER_CONTACT_QUANTILE,
+        )
+        measurements.append((index, max(0.0, signed_distance_ratio)))
+    source = "shelf_front"
+    row_by_index = cluster_display_row_measurements(
+        measurements,
+        row_gap_ratio=max(0.0, contact_gap_ratio),
+    )
+
+    annotated: list[LocatedInstance] = []
+    ratio_by_index = dict(measurements) if source == "shelf_front" else {}
+    for index, instance in enumerate(instances):
+        annotated.append(
+            instance.model_copy(
+                update={
+                    "display_row_index": row_by_index.get(index, 1),
+                    "display_row_source": source,
+                    "shelf_front_distance_ratio": (
+                        round(ratio_by_index[index], 4)
+                        if index in ratio_by_index
+                        else None
+                    ),
+                }
+            )
+        )
+    return annotated
+
+
+def keep_nearest_display_row(
+    instances: list[LocatedInstance],
+) -> list[LocatedInstance]:
+    """Keep the nearest assigned row while guaranteeing at least one candidate."""
+
+    assigned = [
+        instance.display_row_index
+        for instance in instances
+        if instance.display_row_index is not None
+    ]
+    if not assigned:
+        return instances
+    nearest_row = min(assigned)
+    selected = [
+        instance
+        for instance in instances
+        if instance.display_row_index == nearest_row
+    ]
+    return selected or instances
+
+
+def keep_display_rows_for_inventory(
+    instances: list[LocatedInstance],
+    required_count: int,
+) -> list[LocatedInstance]:
+    """Fill physical slots from nearest display rows without rear-row bridges."""
+
+    if not instances or required_count <= 0:
+        return []
+    selected: list[LocatedInstance] = []
+    rows = sorted({instance.display_row_index or 1 for instance in instances})
+    for row_index in rows:
+        row_instances = keep_frontmost_in_overlap_chains(
+            [
+                instance
+                for instance in instances
+                if (instance.display_row_index or 1) == row_index
+            ]
+        )
+        available = [
+            instance
+            for instance in row_instances
+            if not any(
+                bbox_overlap_by_smaller_area(instance.bbox, existing.bbox)
+                >= SAM_BBOX_OVERLAP_MIN_RATIO
+                for existing in selected
+            )
+        ]
+        needed = required_count - len(selected)
+        if len(available) > needed:
+            available = sorted(
+                available,
+                key=lambda instance: (
+                    mask_foreground_pixel_count(instance.mask),
+                    instance.score if instance.score is not None else -1.0,
+                    (instance.bbox[2] - instance.bbox[0])
+                    * (instance.bbox[3] - instance.bbox[1]),
+                ),
+                reverse=True,
+            )[:needed]
+        selected.extend(available)
+        if len(selected) >= required_count:
+            break
+    return sorted(selected, key=instance_center_x)
+
+
+def map_inventory_slots_to_instances(
+    instances: list[LocatedInstance],
+    inventory_slots: list[str],
+    target_slot_id: str,
+    image_width: float,
+) -> tuple[list[LocatedInstance], LocatedInstance]:
+    """Map a visible left/right inventory slice to image-left-to-right boxes."""
+
+    ordered_instances = sorted(instances, key=instance_center_x)
+    visible_count = min(len(ordered_instances), len(inventory_slots))
+    ordered_instances = ordered_instances[:visible_count]
+    if visible_count == 0:
+        visible_inventory_slots: list[str] = []
+    elif visible_count >= len(inventory_slots):
+        visible_inventory_slots = list(inventory_slots)
+    else:
+        detected_left = min(instance.bbox[0] for instance in ordered_instances)
+        detected_right = max(instance.bbox[2] for instance in ordered_instances)
+        detected_group_center = (detected_left + detected_right) / 2
+        if detected_group_center <= image_width / 2:
+            visible_inventory_slots = inventory_slots[-visible_count:]
+        else:
+            visible_inventory_slots = inventory_slots[:visible_count]
+    mapped_instances: list[LocatedInstance] = []
+    selected_instance: LocatedInstance | None = None
+    for position, (instance, mapped_slot) in enumerate(
+        zip(ordered_instances, visible_inventory_slots),
+        start=1,
+    ):
+        updated = instance.model_copy(
+            update={
+                "mapped_slot_id": mapped_slot,
+                "display_position_in_row": position,
+                "is_selected": mapped_slot == target_slot_id,
+            }
+        )
+        mapped_instances.append(updated)
+        if mapped_slot == target_slot_id:
+            selected_instance = updated
+    if selected_instance is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"目标槽位不在当前可见库存范围: {target_slot_id}; "
+                f"visible={visible_inventory_slots}"
+            ),
+        )
+    return mapped_instances, selected_instance
+
+
+def assign_display_positions(
+    instances: list[LocatedInstance],
+) -> list[LocatedInstance]:
+    """Annotate the left-to-right position inside each assigned display row."""
+
+    positions: dict[int, int] = {}
+    by_row: dict[int, list[int]] = defaultdict(list)
+    for index, instance in enumerate(instances):
+        by_row[instance.display_row_index or 1].append(index)
+    for indices in by_row.values():
+        for position, index in enumerate(
+            sorted(indices, key=lambda value: instance_center_x(instances[value])),
+            start=1,
+        ):
+            positions[index] = position
+    return [
+        instance.model_copy(
+            update={"display_position_in_row": positions[index]}
+        )
+        for index, instance in enumerate(instances)
+    ]
+
+
+def apply_pick_bbox_history(
+    instances: list[LocatedInstance],
+    previous_bboxes_normalized: list[list[int]],
+    image_size: tuple[int, int],
+    *,
+    overlap_threshold: float = PICK_HISTORY_OVERLAP_RATIO,
+) -> list[LocatedInstance]:
+    """Raise row indices for candidates exposed behind previously picked boxes."""
+
+    if not instances or not previous_bboxes_normalized:
+        return instances
+    width, height = image_size
+    history_boxes = [
+        [
+            float(bbox[0]) / 1000.0 * width,
+            float(bbox[1]) / 1000.0 * height,
+            float(bbox[2]) / 1000.0 * width,
+            float(bbox[3]) / 1000.0 * height,
+        ]
+        for bbox in previous_bboxes_normalized
+        if len(bbox) == 4 and bbox[2] > bbox[0] and bbox[3] > bbox[1]
+    ]
+    threshold = max(0.0, min(1.0, overlap_threshold))
+    annotated: list[LocatedInstance] = []
+    for instance in instances:
+        overlap_count = sum(
+            bbox_overlap_by_smaller_area(instance.bbox, history_bbox) >= threshold
+            for history_bbox in history_boxes
+        )
+        geometry_row = instance.display_row_index or 1
+        history_row = overlap_count + 1
+        row_index = max(geometry_row, history_row)
+        source = instance.display_row_source or "unresolved"
+        if overlap_count:
+            source = f"{source}+history"
+        annotated.append(
+            instance.model_copy(
+                update={
+                    "display_row_index": row_index,
+                    "display_row_source": source,
+                    "history_overlap_count": overlap_count,
+                }
+            )
+        )
+    return annotated
 
 
 def keep_front_depth_row(
@@ -2418,39 +2919,42 @@ def keep_front_depth_row(
         return instances
     heights = [max(0.0, item.bbox[3] - item.bbox[1]) for item in instances]
     if shelf_front_line is not None:
-        slope, intercept = shelf_front_line
+        slope, _intercept = shelf_front_line
+        normal_scale = math.sqrt(slope * slope + 1.0)
         measurements: list[tuple[LocatedInstance, float, float, float]] = []
         for item, height in zip(instances, heights):
-            shelf_y = slope * instance_center_x(item) + intercept
-            lower_contact_y = instance_lower_contact_y(item)
-            # The mask/bbox may end slightly above the visible red edge or extend
-            # through it. Perspective and image-edge clipping therefore scale the
-            # tolerance with each individual object, not the largest object.
-            lower_tolerance = max(
-                12.0,
-                height * HARD_CASE_FRONT_LOWER_TOLERANCE_RATIO,
+            _distance_pixels, signed_distance_ratio = instance_shelf_front_distance(
+                item,
+                shelf_front_line,
             )
-            if lower_contact_y > shelf_y + lower_tolerance:
+            # The mask/bbox may end slightly above the visible red edge or extend
+            # through it. Use the same line-normal coordinate as multi-row
+            # assignment so shelf slope cannot shift candidates between rows.
+            perpendicular_height = max(1.0, height / normal_scale)
+            lower_tolerance_ratio = max(
+                12.0 / perpendicular_height,
+                HARD_CASE_FRONT_LOWER_TOLERANCE_RATIO,
+            )
+            if signed_distance_ratio < -lower_tolerance_ratio:
                 continue
-            distance_above = shelf_y - lower_contact_y
             # Masks that slightly cross the shelf line belong to the same
             # zero-distance front cluster; how far they cross is handled by the
             # lower-tolerance rejection above.
-            distance_ratio = max(0.0, distance_above) / max(1.0, height)
-            base_upper_tolerance = max(
-                12.0,
-                height * HARD_CASE_FRONT_UPPER_TOLERANCE_RATIO,
+            distance_ratio = max(0.0, signed_distance_ratio)
+            base_upper_tolerance_ratio = max(
+                12.0 / perpendicular_height,
+                HARD_CASE_FRONT_UPPER_TOLERANCE_RATIO,
             )
-            maximum_upper_tolerance = max(
-                12.0,
-                height * HARD_CASE_FRONT_MAX_UPPER_TOLERANCE_RATIO,
+            maximum_upper_tolerance_ratio = max(
+                12.0 / perpendicular_height,
+                HARD_CASE_FRONT_MAX_UPPER_TOLERANCE_RATIO,
             )
             measurements.append(
                 (
                     item,
                     distance_ratio,
-                    distance_above - base_upper_tolerance,
-                    distance_above - maximum_upper_tolerance,
+                    signed_distance_ratio - base_upper_tolerance_ratio,
+                    signed_distance_ratio - maximum_upper_tolerance_ratio,
                 )
             )
 
@@ -2542,7 +3046,9 @@ def apply_hard_case_ordering(
     slot_id: str | None = None,
     target_id: str | None = None,
     shelf_front_line: tuple[float, float] | None = None,
+    sku_row_lookup: Callable[[str], list[dict[str, Any]]] | None = None,
 ) -> tuple[list[LocatedInstance], HardCaseDebugInfo | None]:
+    resolved_sku_row_lookup = sku_row_lookup or lookup_sku_row
     slot_context = validate_slot_hard_case_context(
         product,
         task_type,
@@ -2582,7 +3088,7 @@ def apply_hard_case_ordering(
         assert target_match is not None
         normalized_target_id = view.target_id
         visible_slot_order = list(view.visible_slot_order)
-        row = lookup_sku_row(target_location)
+        row = resolved_sku_row_lookup(target_location)
         row_by_slot = {
             str(item.get("location_id", "")).strip().upper(): item
             for item in row
@@ -2628,7 +3134,11 @@ def apply_hard_case_ordering(
         directional_groups = display_groups
     else:
         target_location, target_match = select_location_for_level(product, level, hand)
-        standard_order = hard_case_standard_order(target_location, config)
+        standard_order = hard_case_standard_order(
+            target_location,
+            config,
+            resolved_sku_row_lookup,
+        )
         if target_name not in standard_order:
             raise HTTPException(status_code=502, detail="目标 SKU 不在指定层品牌顺序中")
         layout_override = hard_case_layout_order_for_request(
@@ -2772,6 +3282,8 @@ def locate_product_in_image(
     depth_image: Image.Image | None = None,
     depth_image_provider: Callable[[tuple[int, int]], Image.Image | None] | None = None,
     capture_postprocess_errors: bool = False,
+    previous_picked_bboxes: list[list[int]] | None = None,
+    sku_row_lookup: Callable[[str], list[dict[str, Any]]] | None = None,
 ) -> LocateDebugResponse:
     """使用已查询的 SKU 信息，在指定 RGB 图片上运行完整定位流程。"""
     if not image_path.is_file():
@@ -2795,6 +3307,17 @@ def locate_product_in_image(
         slot_id=slot_id,
         target_id=target_id,
     )
+    inventory_slots = (
+        inventory_slots_for_pick(
+            product,
+            task_type,
+            slot_id,
+            normalized_level,
+        )
+        if hard_case is None
+        else []
+    )
+    inventory_target_slot = (slot_id or "").strip().upper()
     qwen_prompt = (qwen_prompt_override or "").strip()
     sam_prompt = (sam_prompt_override or "").strip()
     if not qwen_prompt or not sam_prompt:
@@ -2929,6 +3452,10 @@ def locate_product_in_image(
         hard_case is None
         and uses_max_mask_area_pick(canonical_name, task_type)
     )
+    multi_row_pick = bool(inventory_slots) or (
+        hard_case is None
+        and uses_multi_row_pick(canonical_name, task_type)
+    )
     if upper_confidence_pick:
         located_instances = keep_instances_from_nearest_qwen_shelf_row(
             located_instances,
@@ -2954,37 +3481,45 @@ def locate_product_in_image(
                 status_code=404,
                 detail="SAM3 候选占原始 Qwen bbox 的面积均过小",
             )
-    depth_enabled_for_task = task_type.strip().upper() != "SHORTAGE"
     if hard_case is None and not special_no_depth_pick:
-        # Reject visibly incomplete/sliver masks before depth. Otherwise a tiny
-        # mask on a nearer neighboring object can establish the front-row depth
-        # and discard the complete target before area/overlap rules can run.
+        # Reject visibly incomplete/sliver masks before row and overlap rules.
         located_instances = keep_visibly_complete_pick_candidates(
             located_instances
         )
+    shelf_front_line = (
+        detect_red_shelf_front_line(original_image)
+        if hard_case is not None or multi_row_pick
+        else None
+    )
+    if multi_row_pick:
+        located_instances = assign_display_row_indices(
+            located_instances,
+            shelf_front_line=shelf_front_line,
+        )
+        if not inventory_slots:
+            located_instances = apply_pick_bbox_history(
+                located_instances,
+                previous_picked_bboxes or [],
+                original_image.size,
+            )
+        located_instances = assign_display_positions(located_instances)
+        # Keep all annotated rows auditable. Inventory-aware requests admit
+        # progressively farther rows until every remaining physical slot can be
+        # mapped; legacy requests still keep only the nearest display row.
+        raw_sam_instances = list(located_instances)
+        located_instances = (
+            keep_display_rows_for_inventory(
+                located_instances,
+                len(inventory_slots),
+            )
+            if inventory_slots
+            else keep_nearest_display_row(located_instances)
+        )
     if (
-        not special_no_depth_pick
-        and hard_case is None
-        and depth_enabled_for_task
-        and len(located_instances) > 1
+        hard_case is None
+        and not special_no_depth_pick
+        and not inventory_slots
     ):
-        if depth_image is None and depth_image_provider is not None:
-            depth_image = depth_image_provider(original_image.size)
-        if depth_image is not None and depth_image.size == original_image.size:
-            located_instances = [
-                instance.model_copy(
-                    update={
-                        "depth_mm": estimate_instance_depth_mm(instance, depth_image)
-                    }
-                )
-                for instance in located_instances
-            ]
-            raw_sam_instances = list(located_instances)
-            # Depth must remove the rear row before overlap-chain de-duplication;
-            # otherwise a rear/partial mask can bridge several front products and
-            # make the entire component collapse to the wrong instance.
-            located_instances = keep_front_row_pick_candidates(located_instances)
-    if hard_case is None and not special_no_depth_pick:
         located_instances = keep_frontmost_in_overlap_chains(located_instances)
         # Preserve the original global outlier rule for normal SKUs. A hard-case
         # row can contain a legitimately smaller perspective-edge display group,
@@ -2995,11 +3530,14 @@ def locate_product_in_image(
         # first-row filtering must run before overlap de-duplication so rear/partial
         # masks cannot transitively merge separate front-row product columns.
         located_instances = list(located_instances)
-    shelf_front_line = (
-        detect_red_shelf_front_line(original_image)
-        if hard_case is not None
-        else None
-    )
+    inventory_selected_instance: LocatedInstance | None = None
+    if inventory_slots:
+        located_instances, inventory_selected_instance = map_inventory_slots_to_instances(
+            located_instances,
+            inventory_slots,
+            inventory_target_slot,
+            original_image.width,
+        )
     hard_case_debug: HardCaseDebugInfo | None = None
     postprocess_error: HTTPException | None = None
     try:
@@ -3012,6 +3550,7 @@ def locate_product_in_image(
             slot_id=slot_id,
             target_id=target_id,
             shelf_front_line=shelf_front_line,
+            sku_row_lookup=sku_row_lookup,
         )
     except HTTPException as error:
         if not capture_postprocess_errors:
@@ -3025,6 +3564,8 @@ def locate_product_in_image(
         if len(hard_case_selected) != 1:
             raise HTTPException(status_code=500, detail="hard case 目标实例标记无效")
         selected_instance = hard_case_selected[0]
+    elif inventory_selected_instance is not None:
+        selected_instance = inventory_selected_instance
     elif max_mask_area_pick:
         # Preserve all candidates so the selected mask area remains auditable
         # against SAM3's original numbering.
@@ -3130,12 +3671,18 @@ def locate_product_debug(
     *,
     capture_inference_errors: bool = False,
     allow_prompt_overrides: bool = False,
+    mock_inventory: list[str] | None = None,
 ) -> LocateDebugResponse:
     product_name = request.product_name.strip()
     task_type = normalize_task_type(request.task_type)
     if not product_name:
         raise HTTPException(status_code=400, detail="product_name 不能为空")
-    product = lookup_sku_by_name(product_name)
+    if mock_inventory is not None:
+        if task_type != "SORTING":
+            raise HTTPException(status_code=400, detail="mock_inventory 仅支持 SORTING 调试")
+        product = lookup_mock_sku_by_name(product_name, mock_inventory)
+    else:
+        product = lookup_sku_by_name(product_name)
     requested_level = (request.level or "").strip()
     level = normalize_level(requested_level) if requested_level else None
     if level is None and hard_case_level_required(
@@ -3169,39 +3716,21 @@ def locate_product_debug(
     prompt_overrides["slot_id"] = request.slot_id
     prompt_overrides["target_id"] = request.target_id
     prompt_overrides["capture_postprocess_errors"] = capture_inference_errors
-    has_depth_name = request.depth_image_name is not None
-    has_depth_base64 = request.depth_image_base64 is not None
-    if has_depth_name != has_depth_base64:
-        raise HTTPException(
-            status_code=400,
-            detail="depth_image_name 和 depth_image_base64 必须同时提供或同时省略",
-        )
+    prompt_overrides["previous_picked_bboxes"] = request.previous_picked_bboxes
+    if mock_inventory is not None:
+        prompt_overrides["sku_row_lookup"] = lookup_mock_sku_row
     if request.image_base64 is None:
         if request.image_name is not None:
             raise HTTPException(
                 status_code=400,
                 detail="指定 image_name 时必须同时提供 image_base64",
             )
-        if has_depth_name:
-            raise HTTPException(
-                status_code=400,
-                detail="离线深度数据必须与离线 RGB 图片同时提供",
-            )
         live_camera = camera_for_task(task_type, request.hand)
-        depth_image_provider = (
-            None
-            if task_type == "SHORTAGE"
-            else lambda expected_size: fetch_camera_depth(
-                live_camera,
-                expected_size,
-            )
-        )
         image_path = get_latest_rgb(live_camera)
         try:
             return locate_product_in_image(
                 product,
                 image_path,
-                depth_image_provider=depth_image_provider,
                 **prompt_overrides,
             )
         except HTTPException as error:
@@ -3220,28 +3749,10 @@ def locate_product_debug(
     with tempfile.TemporaryDirectory(prefix="locate-upload-") as temporary_directory:
         image_path = Path(temporary_directory) / image_name
         image_path.write_bytes(image_bytes)
-        depth_image: Image.Image | None = None
-        skip_uploaded_depth = (
-            uses_upper_confidence_pick(product_name, task_type)
-            or uses_max_mask_area_pick(product_name, task_type)
-        )
-        if has_depth_name and has_depth_base64 and not skip_uploaded_depth:
-            try:
-                with Image.open(image_path) as source_image:
-                    expected_size = source_image.size
-            except (UnidentifiedImageError, OSError) as error:
-                raise HTTPException(status_code=400, detail=f"读取上传 RGB 图片失败: {error}") from error
-            depth_image = decode_uploaded_depth_image(
-                request.depth_image_base64 or "",
-                request.depth_image_name or "",
-                expected_size,
-                is_bigendian=request.depth_is_bigendian,
-            )
         try:
             return locate_product_in_image(
                 product,
                 image_path,
-                depth_image=depth_image,
                 **prompt_overrides,
             )
         except HTTPException as error:
@@ -3327,134 +3838,15 @@ def keep_visibly_complete_pick_candidates(
     return filtered or instances
 
 
-def bbox_vertical_overlap_by_smaller_height(
-    first_bbox: list[float],
-    second_bbox: list[float],
-) -> float:
-    first_height = max(0.0, first_bbox[3] - first_bbox[1])
-    second_height = max(0.0, second_bbox[3] - second_bbox[1])
-    smaller_height = min(first_height, second_height)
-    if smaller_height <= 0:
-        return 0.0
-    overlap = max(
-        0.0,
-        min(first_bbox[3], second_bbox[3])
-        - max(first_bbox[1], second_bbox[1]),
-    )
-    return overlap / smaller_height
-
-
-def bbox_horizontal_gap(first_bbox: list[float], second_bbox: list[float]) -> float:
-    """返回两个 bbox 的水平净间距；水平重叠时为 0。"""
-    if first_bbox[2] < second_bbox[0]:
-        return second_bbox[0] - first_bbox[2]
-    if second_bbox[2] < first_bbox[0]:
-        return first_bbox[0] - second_bbox[2]
-    return 0.0
-
-
-def keep_depth_unoccluded_pick_candidates(
-    instances: list[LocatedInstance],
-    *,
-    depth_margin_mm: float = PICK_OCCLUSION_DEPTH_MARGIN_MM,
-    max_neighbor_gap_ratio: float = PICK_OCCLUSION_MAX_NEIGHBOR_GAP_RATIO,
-    min_vertical_overlap_ratio: float = PICK_OCCLUSION_MIN_VERTICAL_OVERLAP_RATIO,
-) -> list[LocatedInstance]:
-    """移除左右两侧都存在更近邻居的后排实例。"""
-    if len(instances) < 3:
-        return instances
-
-    selected: list[LocatedInstance] = []
-    for candidate in instances:
-        candidate_depth = candidate.depth_mm
-        if (
-            candidate_depth is None
-            or not math.isfinite(candidate_depth)
-            or candidate_depth <= 0
-        ):
-            selected.append(candidate)
-            continue
-
-        candidate_width = max(0.0, candidate.bbox[2] - candidate.bbox[0])
-        candidate_center_x = (candidate.bbox[0] + candidate.bbox[2]) / 2
-        closer_sides: set[str] = set()
-        for neighbor in instances:
-            if neighbor is candidate:
-                continue
-            neighbor_depth = neighbor.depth_mm
-            if (
-                neighbor_depth is None
-                or not math.isfinite(neighbor_depth)
-                or neighbor_depth <= 0
-                or neighbor_depth + max(0.0, depth_margin_mm) >= candidate_depth
-            ):
-                continue
-            if (
-                bbox_vertical_overlap_by_smaller_height(
-                    candidate.bbox,
-                    neighbor.bbox,
-                )
-                < min_vertical_overlap_ratio
-            ):
-                continue
-            neighbor_width = max(0.0, neighbor.bbox[2] - neighbor.bbox[0])
-            allowed_gap = (
-                max(0.0, max_neighbor_gap_ratio)
-                * min(candidate_width, neighbor_width)
-            )
-            if bbox_horizontal_gap(candidate.bbox, neighbor.bbox) > allowed_gap:
-                continue
-
-            neighbor_center_x = (neighbor.bbox[0] + neighbor.bbox[2]) / 2
-            if neighbor_center_x < candidate_center_x:
-                closer_sides.add("left")
-            elif neighbor_center_x > candidate_center_x:
-                closer_sides.add("right")
-
-        if closer_sides != {"left", "right"}:
-            selected.append(candidate)
-
-    return selected or instances
-
-
-def keep_front_row_pick_candidates(
-    instances: list[LocatedInstance],
-    *,
-    depth_tolerance_mm: float = PICK_FRONT_ROW_DEPTH_TOLERANCE_MM,
-) -> list[LocatedInstance]:
-    """保留深度最小的一层候选；完全无有效深度时沿用原候选。"""
-    candidates_with_depth = [
-        instance
-        for instance in instances
-        if instance.depth_mm is not None
-        and math.isfinite(instance.depth_mm)
-        and instance.depth_mm > 0
-    ]
-    if not candidates_with_depth:
-        return instances
-
-    nearest_depth_mm = min(
-        instance.depth_mm for instance in candidates_with_depth
-    )
-    maximum_front_depth_mm = nearest_depth_mm + max(0.0, depth_tolerance_mm)
-    return [
-        instance
-        for instance in candidates_with_depth
-        if instance.depth_mm <= maximum_front_depth_mm
-    ]
-
-
 def select_pick_instance(
     instances: list[LocatedInstance],
     image_size: list[int],
 ) -> LocatedInstance:
-    """先排除遮挡并保留最前排候选，再选择最靠近画面中心的实例。"""
+    """Filter unusable candidates, then choose the instance nearest image center."""
     if not instances:
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
 
-    candidates = keep_depth_unoccluded_pick_candidates(instances)
-    candidates = keep_visibly_complete_pick_candidates(candidates)
-    candidates = keep_front_row_pick_candidates(candidates)
+    candidates = keep_visibly_complete_pick_candidates(instances)
     image_center_x = image_size[0] / 2
     image_center_y = image_size[1] / 2
     return min(
@@ -3484,6 +3876,7 @@ def make_locate_response(debug_response: LocateDebugResponse) -> LocateResponse:
         )
     return LocateResponse(
         product_name=debug_response.product_name,
+        slot_id=selected_instance.mapped_slot_id,
         bbox=normalize_bbox_to_1_1000(
             selected_instance.bbox,
             debug_response.image_size,
@@ -3499,11 +3892,12 @@ def locate_product(request: LocateRequest) -> LocateResponse:
 
 
 @router.post("/perception/pick/locate/debug", response_model=LocateDebugResponse)
-def locate_product_debug_api(request: LocateRequest) -> LocateDebugResponse:
+def locate_product_debug_api(request: LocateDebugRequest) -> LocateDebugResponse:
     return locate_product_debug(
         request,
         capture_inference_errors=True,
         allow_prompt_overrides=True,
+        mock_inventory=request.mock_inventory,
     )
 
 

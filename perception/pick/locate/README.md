@@ -26,7 +26,7 @@ python main.py
 
 可使用 `SKU_API_URL`、`QWEN3_URL`、`QWEN3_MODEL`、`SAM3_URL` 环境变量覆盖。
 
-未随请求上传图片时，只从根目录 `config.py` 配置的相机服务获取当前 RGB，不读取本地测试图片。`SORTING` 按 `hand` 使用 `left_wrist`/`right_wrist`；`SHORTAGE` 和 `MISPLACED` 固定使用 `head`。其中 `SHORTAGE` 不请求深度，`MISPLACED` 使用与 RGB 对齐的 `head` 深度。非本机 IP 统一由 `CAMERA_SERVICE_HOST` 配置；仍可通过 `CAMERA_SERVICE_URL`、`CAMERA_SNAPSHOT_URL` 和 `CAMERA_SNAPSHOT_TIMEOUT_SECONDS` 覆盖地址与超时，通过 `CAMERA_SNAPSHOT_CACHE_DIR` 指定快照缓存目录。
+未随请求上传图片时，只从根目录 `config.py` 配置的相机服务获取当前 RGB，不读取本地测试图片。`SORTING` 按 `hand` 使用 `left_wrist`/`right_wrist`；`SHORTAGE` 和 `MISPLACED` 固定使用 `head`。当前整个 Pick/Locate 流程均不请求或使用深度。非本机 IP 统一由 `CAMERA_SERVICE_HOST` 配置；仍可通过 `CAMERA_SERVICE_URL`、`CAMERA_SNAPSHOT_URL` 和 `CAMERA_SNAPSHOT_TIMEOUT_SECONDS` 覆盖地址与超时，通过 `CAMERA_SNAPSHOT_CACHE_DIR` 指定快照缓存目录。
 
 ## 接口
 
@@ -66,7 +66,10 @@ python main.py
 - `image_name` 用于标识上传图片并原样写入响应，只允许不包含路径的 JPG/PNG 文件名。
 - `image_name` 不用于服务器端查找文件；指定它时必须同时提供 `image_base64`。
 - `level` 默认可省略；仅当 `SORTING` 的商品名和 `hand` 命中 `hard_case_config.json` 中的顺序定位特例时必须提供。
+- 普通 `SORTING` 可传 `slot_id` 启用库存定位。Locate 从 SKU 的 `inventory` 中取得目标所在货架层的剩余位置，按列号从左到右映射检测 bbox；正式响应会原样返回所选 `slot_id`。成功抓取后的库存删除由外层 agent 调用 SKU 服务完成。
 - 电解质和非猫薄荷脉动的 hard case 必须同时提供 `slot_id` 和 `target_id`；服务会校验商品、层、货位、手和导航点一致。
+- `multi_row_products.json` 配置可能存在前后多排陈列的商品；`*` 表示所有普通 SORTING 商品默认参与多排排号，因此也覆盖后续新增 SKU。hard case 仍使用独立的顺序映射逻辑。
+- Locate 本身不保存抓取历史。外部 agent 在确认抓取成功后，将之前正式响应的归一化 bbox 放入 `previous_picked_bboxes`；多排排号会据此避开已经抓取过的位置。
 
 处理流程：
 
@@ -77,7 +80,7 @@ python main.py
 5. 对跨采样 bbox 聚类，只保留至少由两个不同采样支持且匹配 IoU 严格大于 `0.85` 的目标；同一目标的坐标取支持框平均值。
 6. 将 Qwen `[0,1000]` bbox 转为 `1280×720` 推理画布像素坐标，向外扩张 10% 后裁图，并在每个去重后的 crop 上调用 SAM3。
 7. 将 SAM3 bbox 和 mask 按 X/Y 比例映射回原始 RGB 图片；响应的 `image_size` 是原图尺寸，`inference_image_size` 是 `[1280, 720]`。
-8. 普通 case 在存在有效深度且有多个 SAM 实例时，先计算每个 mask 内的深度中位数，并保留距最近实例 30 mm 内的第一排；没有有效深度时保持原候选。
+8. 多排商品逐列提取 mask 下轮廓，计算下轮廓点到拟合红色货架前沿的有符号垂距，并以垂距中位数归一化后按距离升序分排：相邻候选的归一化距离差大于 `0.05` 时开始下一排。传入 `slot_id` 时，先取最前排去重候选；少于该商品同层 `inventory` 数量才依次从后一排补齐。若最终检测数仍少于库存数，检测框整体位于画面左半边时取库存排序后的后 `detected` 个槽位，位于右半边时取前 `detected` 个槽位，再按 bbox 从左到右映射并选择目标槽位。库存模式不执行最小 mask 离群删除。未传 `slot_id` 时沿用只保留最前排及中心选择的兼容逻辑。当前 Pick/Locate 不请求、解码或使用深度。
 9. 对第一排候选构建重叠链，每条链只保留按 mask 面积与密度判断最靠前的一个实例，然后执行最终 PICK。
 
 ### SORTING hard case 顺序定位
@@ -94,8 +97,8 @@ python main.py
 
 SAM3 实例优先按 Qwen 陈列堆来源组成陈列列；Qwen 只返回一个合并区域时，使用过滤后的
 第一排 SAM 实例作为可见列。hard case 不使用深度做跨列筛选；系统拟合原图中红色货架
-前沿的上边缘，按每个 bbox 底边到透视
-前沿线的距离做几何初筛；商品底边位于红线上方的基础容差为自身高度的 25%。
+前沿的上边缘，逐列计算 mask 下轮廓到前沿线的有符号垂距做几何初筛；商品底边位于
+红线上方的基础容差为自身垂线方向高度的 25%。
 基础筛选按 bbox 重叠链估算后最多只剩一列时，才在归一化距离连续的前提下渐进放宽，最大
 为 35%；已有两列或更多时不放宽。检测不到红线时才回退到瓶底高度规则，框高
 和 mask 面积不作为硬淘汰条件。以上比例可通过
@@ -135,7 +138,12 @@ SAM3 实例优先按 Qwen 陈列堆来源组成陈列列；Qwen 只返回一个�
 
 ### `POST /perception/pick/locate/debug`
 
-测试专用接口，输入与正式接口相同，但额外返回 `image_base64`、`image_media_type`、`sku_id`、`image_name`、`image_path`、`image_size`、共识后的 `qwen_bboxes` 和全部 `instances`。其中 `image_base64` 是本次推理实际使用的原图，调用方不需要访问 Locate 服务所在机器的本地文件。
+测试专用接口，输入与正式接口相同，但额外返回 `image_base64`、`image_media_type`、`sku_id`、`image_name`、`image_path`、`image_size`、共识后的 `qwen_bboxes` 和全部 `instances`。多排商品的实例包含 `display_row_index`（`1` 为最前排）、`display_position_in_row`（该排从左到右的序号）、`display_row_source`、`shelf_front_distance_ratio` 和 `history_overlap_count`。其中 `image_base64` 是本次推理实际使用的原图，调用方不需要访问 Locate 服务所在机器的本地文件。
+
+Debug 接口还支持仅供 mock 测试使用的 `mock_inventory` 字符串数组。提供该字段时只支持
+`SORTING`，服务从仓库内 `sku/products.json` 读取商品静态信息，用该数组覆盖本次请求的
+库存，并完全跳过 25540 的商品及货架行查询；`slot_id` 必须属于该数组。正式
+`POST /perception/pick/locate` 的请求模型不包含此字段，生产库存行为不变。
 
 若原图已经取得，但 Qwen3/SAM3 推理失败，Debug 接口仍返回 HTTP 200 和该原图，并通过 `error`、`error_status_code` 记录原始错误；此时 `qwen_bboxes`、`instances` 可以为空。正式接口仍按原始状态码返回错误，不改变生产调用语义。`test_inference.py` 使用该接口记录 Qwen bbox，并分别绘制 Qwen 图和 SAM3 bbox/mask 图。
 
@@ -203,9 +211,8 @@ product_name
 
 `image_name_mapping.json` 和 `2026-08-04` 目录只属于测试脚本；Locate API 本身不依赖这两个路径。测试脚本也是独立的 HTTP 客户端，不导入或调用本地 `main.py`。
 
-Debug API 的离线图片请求可额外提供 `depth_image_name`、`depth_image_base64` 和可选的
-`depth_is_bigendian`。深度文件支持二维数值型 NPY、16 位单通道 PNG/TIFF 或无头 16UC1 RAW/BIN，且
-尺寸必须与 RGB 一致。未提供离线深度数据时，上传 RGB 的流程继续使用无深度回退。
+为兼容已有调用，Debug API 暂时仍接受 `depth_image_name`、`depth_image_base64` 和
+`depth_is_bigendian` 字段，但 Pick/Locate 当前直接忽略这些字段，不解码也不参与候选选择。
 
 对于竖直堆叠、抓取时需要拿顶部单件的特定 SORTING SKU，服务不读取深度，而是在 SAM3
 最高分前 `0.10` 的候选中选择 bbox 中心最高的实例。当前包括得宝纸巾、海氏海诺创口贴、

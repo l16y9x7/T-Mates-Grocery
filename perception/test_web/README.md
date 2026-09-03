@@ -133,10 +133,8 @@ Locate 服务自行调用相机快照接口。Debug 响应中的 `image_base64` 
 `image_name + image_base64`，完整 Locate 流程使用该原始离线图片；点击“清除图片，
 使用相机”后恢复腕部相机。未选择文件时请求字段保持原样，不发送任何本地图片。
 
-离线普通 case 还可以同时上传深度数据。支持与 RGB 同尺寸的二维数值型 `.npy` 数组、
-16 位单通道 PNG/TIFF，或者无文件头的 16UC1 `.raw`/`.bin`；RAW 默认按 little-endian 解析，也可在网页切换为
-big-endian。只上传 RGB 时保留无深度回退；上传深度数据但没有对应 RGB、尺寸不一致或
-深度格式或尺寸不正确时，接口返回 HTTP 400。NPY 自带数据类型和字节序，不使用网页的 RAW 字节序选项。
+当前 Pick/Locate 已停用深度；8082 的 Locate Debug 和 qwen-debug 不再发送离线深度数据。
+批测结果页仍可展示已有 record 的深度预览，便于人工对照，但不会参与 Locate 候选选择。
 
 SORTING 是否进入 hard case，按 `perception/hard_case_config.json` 中的
 `商品名 + level + hand` 精确组合判断；未命中的组合按普通 case 运行。
@@ -149,8 +147,13 @@ SORTING 是否进入 hard case，按 `perception/hard_case_config.json` 中的
 
 `/qwen-debug` 仍保留独立的 Qwen bbox 和单 crop SAM3 测试，并在页面顶部新增“完整
 Locate Debug（普通 case + hard case）”。该区域使用载入图片的原始分辨率，选择标准
-商品名、level 和 hand 后调用 `/api/locate-debug`，不使用页面里手工编辑的独立 Prompt，因而
-执行的是当前代码保存的 Prompt、Qwen 三次共识、SAM 后处理和 hard-case location 顺序。
+商品名、level 和 hand 后，可以勾选本次模拟仍在货架上的槽位，再从剩余槽位中选择本次
+要 Pick 的 `slot_id`。例如取消 C01、保留 C02/C03 并选择 C03，只影响这一次请求；不会
+读取或修改 25540 的正式库存。页面把 `mock_inventory + slot_id` 代理到 Debug API，后端
+使用仓库内 `sku/products.json` 的静态 locations 构造本次 SKU 记录。
+
+该区域调用 `/api/locate-debug`，不使用页面里手工编辑的独立 Prompt，因而执行的是当前
+代码保存的 Prompt、Qwen 三次共识、SAM 后处理和 hard-case location 顺序。
 首页和 `/qwen-debug` 都会额外显示正式 Locate 最终实例的原图 bbox 与带边距 crop。
 hard case 使用 `is_selected`，普通 case 与正式接口一致选择最靠近图像中心的实例。
 

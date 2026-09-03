@@ -1,6 +1,6 @@
 # 感知模块 SKU 表
 
-本目录只保存商品感知所需的最小信息：商品 ID、名称、参考图片和标准位置。
+本目录保存商品 ID、名称、参考图片、标准位置和当前库存位置。
 
 ## 文件说明
 
@@ -13,18 +13,19 @@
 
 ## 当前状态
 
-每个商品只允许以下四个字段：
+每个商品包含以下字段：
 
 ```json
 {
   "sku_id": "SKU_001",
   "name": "NFC桔汁",
   "images": ["images/SKU_001.jpg"],
-  "locations": ["H3_L01_C01", "H3_L01_C02"]
+  "locations": ["H3_L01_C01", "H3_L01_C02"],
+  "inventory": ["H3_L01_C01", "H3_L01_C02"]
 }
 ```
 
-一个商品可能出现在多个标准货位，因此 `locations` 始终使用数组。尺寸、重量、物理属性、姿态和抓放方案不在本目录保存。
+一个商品可能出现在多个标准货位，因此 `locations` 始终使用数组且不会随抓取改变。`inventory` 初始复制 `locations`，成功抓取后按 `slot_id` 删除，用于表示当前仍需抓取的物理位置。
 
 层号与列号约定：
 
@@ -46,7 +47,8 @@ python build_catalog.py
 python extract_images.py
 ```
 
-`build_catalog.py` 会保留现有 `images` 字段，不会在刷新货位时清空图片。
+`build_catalog.py` 会保留现有 `images` 字段，并把全部 `inventory` 重置为对应的
+`locations`；运行中的单槽位补货/扣减应调用库存接口。
 
 修改后运行校验：
 
@@ -85,6 +87,8 @@ python api.py --port 8080
 | `GET` | `/sku/get_candidate_SKU` | JSON 请求体：`location_id`、`pose_type` | 按货架层分组的候选 SKU |
 | `GET` | `/sku/get_row_layout` | JSON 请求体：`location_id`、`pose_type` | 当前层逐物理列的商品（保留重复 SKU） |
 | `GET` | `/sku/get_inspection_candidate_SKU` | JSON 请求体：巡检点 `location_id`、`pose_type` | 按巡检视角和货架层分组的候选 SKU |
+| `POST` | `/sku/modify_inventory` | JSON 请求体：`slot_id`、`modification` | 使用 `replendish` 或 `deplete` 幂等修改一个库存位置 |
+| `POST` | `/sku/reset_inventory` | 无 | 将全部商品的 `inventory` 重置为 `locations` |
 | `GET` | `/images/...` | 无 | 获取图片文件 |
 | `GET` | `/docs` | 无 | FastAPI 自动接口文档 |
 
@@ -113,8 +117,27 @@ GET /sku/search_by_location?location=H2_L03_C03
   "sku_id": "SKU_080",
   "name": "外星人电解质水白桃口味0糖",
   "images": ["images/SKU_080.jpg"],
-  "locations": ["H2_L03_C03"]
+  "locations": ["H2_L03_C03"],
+  "inventory": ["H2_L03_C03"]
 }
+```
+
+成功抓取后扣减对应库存位置：
+
+```http
+POST /sku/modify_inventory
+Content-Type: application/json
+
+{"slot_id": "H2_L01_C02", "modification": "deplete"}
+```
+
+补回库存时将 `modification` 改为 `replendish`。两个操作都是幂等的，响应中的
+`modified` 表示本次是否实际改变了库存。
+
+重置全部库存：
+
+```http
+POST /sku/reset_inventory
 ```
 
 按商品名获取图片路径：

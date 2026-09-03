@@ -382,7 +382,7 @@ function clearOfflineImage() {
   locateDepthInput.value = "";
   clearLocateImage.disabled = true;
   setStatus("#locateImageStatus", "当前使用腕部相机", "");
-  setStatus("#locateDepthStatus", "未上传深度数据，将使用无深度回退", "");
+  setStatus("#locateDepthStatus", "深度不会发送或参与选择", "");
 }
 
 async function api(url, options = {}) {
@@ -789,14 +789,6 @@ async function runQwen() {
       requestPayload.image_name = offlineImageName;
       requestPayload.image_base64 = offlineImageBase64;
     }
-    if (offlineDepthBase64) {
-      if (!offlineImageBase64) {
-        throw new Error("上传离线深度数据时必须同时上传对应 RGB 图片");
-      }
-      requestPayload.depth_image_name = offlineDepthName;
-      requestPayload.depth_image_base64 = offlineDepthBase64;
-      requestPayload.depth_is_bigendian = locateDepthByteOrder.value === "big";
-    }
     const result = await api("/api/locate-debug", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -817,6 +809,11 @@ async function runQwen() {
             bbox: instance.bbox,
             score: instance.score,
             depth_mm: instance.depth_mm,
+            display_row_index: instance.display_row_index,
+            display_position_in_row: instance.display_position_in_row,
+            display_row_source: instance.display_row_source,
+            shelf_front_distance_ratio: instance.shelf_front_distance_ratio,
+            history_overlap_count: instance.history_overlap_count,
             mapped_product_name: instance.mapped_product_name,
             is_selected: instance.is_selected,
             mask: `<base64 ${instance.mask.length} chars>`,
@@ -891,7 +888,7 @@ async function runQwen() {
       drawBox(
         rawSamContext,
         instance.bbox,
-        `#${index + 1} ${score}`,
+        `#${index + 1}${instance.display_row_index ? ` R${instance.display_row_index}-${instance.display_position_in_row || 1}` : ""} ${score}`,
         colors[index % colors.length],
       );
     });
@@ -912,7 +909,7 @@ async function runQwen() {
       drawBox(
         samContext,
         instance.bbox,
-        `${selectedLabel}${groupLabel}${mappedName || `#${index + 1}`} ${score}`,
+        `${selectedLabel}${groupLabel}${mappedName || `#${index + 1}`}${instance.display_row_index ? ` R${instance.display_row_index}-${instance.display_position_in_row || 1}` : ""} ${score}`,
         instance.is_selected ? "#22c55e" : colors[index % colors.length],
       );
     });
@@ -939,10 +936,15 @@ async function runQwen() {
             }
           : null,
         candidates: instances.map(
-          ({ bbox, score, depth_mm, hard_case_group_index, mapped_product_name, is_selected }) => ({
+          ({ bbox, score, depth_mm, display_row_index, display_position_in_row, display_row_source, shelf_front_distance_ratio, history_overlap_count, hard_case_group_index, mapped_product_name, is_selected }) => ({
             bbox,
             score,
             depth_mm,
+            display_row_index,
+            display_position_in_row,
+            display_row_source,
+            shelf_front_distance_ratio,
+            history_overlap_count,
             hard_case_group_index,
             mapped_product_name,
             is_selected,

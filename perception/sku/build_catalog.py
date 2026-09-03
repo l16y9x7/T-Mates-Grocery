@@ -204,6 +204,7 @@ def build() -> dict[str, object]:
                 "name": name,
                 "images": images,
                 "locations": locations_by_name[name],
+                "inventory": list(locations_by_name[name]),
             }
         )
 

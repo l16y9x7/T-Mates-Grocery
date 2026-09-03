@@ -257,12 +257,50 @@ async function drawMask(base64, color) {
 async function loadLocateSkus() {
   const result = await api("/api/skus?task_type=SORTING");
   const options = document.querySelector("#locateSkuOptions");
+  window.locateSkuRecords = result.skus || [];
   options.replaceChildren();
-  (result.skus || []).forEach(({ name }) => {
+  window.locateSkuRecords.forEach(({ name }) => {
     const option = document.createElement("option");
     option.value = name;
     options.append(option);
   });
+  populateLocateInventory();
+}
+
+function selectedMockInventory() {
+  return Array.from(document.querySelectorAll('#locateInventory input[type="checkbox"]:checked'))
+    .map((input) => input.value);
+}
+
+function populateLocateTargetSlots() {
+  const slotSelect = document.querySelector("#locateSlot");
+  const selected = slotSelect.value;
+  const inventory = selectedMockInventory();
+  slotSelect.replaceChildren(new Option(
+    inventory.length ? "选择本次目标槽位" : "请先勾选剩余库存",
+    "",
+  ));
+  inventory.forEach((slotId) => slotSelect.add(new Option(slotId, slotId)));
+  if (inventory.includes(selected)) slotSelect.value = selected;
+}
+
+function populateLocateInventory() {
+  const productName = document.querySelector("#locateSku").value.trim();
+  const inventoryContainer = document.querySelector("#locateInventory");
+  const product = (window.locateSkuRecords || []).find(({ name }) => name === productName);
+  const inventory = product?.locations || [];
+  inventoryContainer.replaceChildren();
+  inventory.forEach((slotId) => {
+    const label = document.createElement("label");
+    label.className = "mock-inventory-option";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = slotId;
+    input.checked = true;
+    label.append(input, document.createTextNode(slotId));
+    inventoryContainer.append(label);
+  });
+  populateLocateTargetSlots();
 }
 
 async function runFullLocate() {
@@ -272,6 +310,14 @@ async function runFullLocate() {
   const productName = document.querySelector("#locateSku").value.trim();
   if (!productName) {
     return setStatus("#fullLocateStatus", "请输入目标商品名称", "error");
+  }
+  const mockInventory = selectedMockInventory();
+  const targetSlot = document.querySelector("#locateSlot").value;
+  if (!mockInventory.length) {
+    return setStatus("#fullLocateStatus", "请至少勾选一个仍在货架上的库存槽位", "error");
+  }
+  if (!targetSlot) {
+    return setStatus("#fullLocateStatus", "请选择本次要 Pick 的目标槽位", "error");
   }
   const button = document.querySelector("#runFullLocate");
   button.disabled = true;
@@ -285,15 +331,10 @@ async function runFullLocate() {
         product_name: productName,
         level: document.querySelector("#locateLevel").value,
         hand: document.querySelector("#locateHand").value,
+        slot_id: targetSlot,
+        mock_inventory: mockInventory,
         image_name: originalImageName,
         image_base64: originalImageDataUrl,
-        ...(depthImageDataUrl
-          ? {
-              depth_image_name: depthImageName,
-              depth_image_base64: depthImageDataUrl,
-              depth_is_bigendian: depthByteOrder.value === "big",
-            }
-          : {}),
       }),
     });
     const image = new Image();
@@ -312,13 +353,19 @@ async function runFullLocate() {
     }
     const context = fullLocateCanvas.getContext("2d");
     instances.forEach((instance, index) => {
-      const mapped = instance.mapped_product_name || `#${index + 1}`;
+      const mapped = instance.mapped_slot_id || instance.mapped_product_name || `#${index + 1}`;
       const group = instance.hard_case_group_index ? `G${instance.hard_case_group_index} ` : "";
       const selected = instance.is_selected ? "目标 " : "";
+      const row = instance.display_row_index
+        ? ` R${instance.display_row_index}-${instance.display_position_in_row || 1}`
+        : "";
+      const distance = Number.isFinite(Number(instance.shelf_front_distance_ratio))
+        ? ` d=${Number(instance.shelf_front_distance_ratio).toFixed(3)}`
+        : "";
       drawBox(
         context,
         instance.bbox,
-        `${selected}${group}${mapped}`,
+        `${selected}${group}${mapped}${row}${distance}`,
         instance.is_selected ? "#22c55e" : colors[index % colors.length],
       );
     });
@@ -343,7 +390,12 @@ async function runFullLocate() {
       finalLocateBboxCanvas.height = image.naturalHeight;
       const bboxContext = finalLocateBboxCanvas.getContext("2d");
       bboxContext.drawImage(image, 0, 0);
-      drawBox(bboxContext, selectedInstance.bbox, `最终目标 ${productName}`, "#22c55e");
+      drawBox(
+        bboxContext,
+        selectedInstance.bbox,
+        `最终目标 ${selectedInstance.mapped_slot_id || productName}`,
+        "#22c55e",
+      );
       document.querySelector("#finalLocateBboxEmpty").hidden = true;
 
       const [x1, y1, x2, y2] = selectedInstance.bbox;
@@ -510,4 +562,10 @@ detectionSelect.addEventListener("change", drawSelectedCrop);
 document.querySelector("#runQwen").addEventListener("click", runQwen);
 document.querySelector("#runSam").addEventListener("click", runSam);
 document.querySelector("#runFullLocate").addEventListener("click", runFullLocate);
+document.querySelector("#locateSku").addEventListener("input", populateLocateInventory);
+document.querySelector("#locateInventory").addEventListener("change", populateLocateTargetSlots);
+document.querySelector("#locateSlot").addEventListener("change", (event) => {
+  const match = /^H[1-3]_L0([1-5])_C\d{2}$/.exec(event.target.value);
+  if (match) document.querySelector("#locateLevel").value = `L${match[1]}`;
+});
 loadLocateSkus().catch((error) => setStatus("#fullLocateStatus", error.message, "error"));

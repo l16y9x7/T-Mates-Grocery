@@ -208,6 +208,8 @@ class LocateDebugProxyRequest(BaseModel):
     product_name: str
     level: str
     hand: str
+    slot_id: str | None = None
+    mock_inventory: list[str] | None = None
     image_name: str | None = None
     image_base64: str | None = None
     depth_image_name: str | None = None
@@ -2823,6 +2825,8 @@ def list_skus(
         skus.append(
             {
                 "name": sku["name"],
+                "locations": list(sku.get("locations", [])),
+                "inventory": list(sku.get("inventory", sku.get("locations", []))),
                 "qwen3_prompt": (
                     prompt_pair["qwen3_prompt"] if prompt_pair is not None else None
                 ),
@@ -2963,6 +2967,10 @@ def run_locate_debug(request: LocateDebugProxyRequest) -> dict:
         payload["qwen3_prompt"] = request.qwen3_prompt
     if request.sam3_prompt is not None:
         payload["sam3_prompt"] = request.sam3_prompt
+    if request.slot_id is not None and request.slot_id.strip():
+        payload["slot_id"] = request.slot_id.strip().upper()
+    if request.mock_inventory is not None:
+        payload["mock_inventory"] = request.mock_inventory
     try:
         response = requests.post(
             LOCATE_DEBUG_URL,
@@ -4218,7 +4226,15 @@ def load_skus() -> list[dict]:
             continue
         name = product.get("name")
         if isinstance(name, str) and name.strip():
-            skus.append({"name": name.strip()})
+            skus.append(
+                {
+                    "name": name.strip(),
+                    "locations": list(product.get("locations", [])),
+                    "inventory": list(
+                        product.get("inventory", product.get("locations", []))
+                    ),
+                }
+            )
     return skus
 
 

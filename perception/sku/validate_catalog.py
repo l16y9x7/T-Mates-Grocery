@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parent
 IMAGES_ROOT = ROOT / "images_new"
 SKU_PATTERN = re.compile(r"^SKU_\d{3}$")
 LOCATION_PATTERN = re.compile(r"^H[1-3]_L0[1-5]_C\d{2}$")
-PRODUCT_FIELDS = {"sku_id", "name", "images", "locations"}
+PRODUCT_FIELDS = {"sku_id", "name", "images", "locations", "inventory"}
 
 
 def load_json(filename: str) -> dict:
@@ -52,6 +52,7 @@ def main() -> None:
         require(set(product) == PRODUCT_FIELDS, f"{product.get('sku_id')} 包含非精简字段")
         images = product["images"]
         locations = product["locations"]
+        inventory = product["inventory"]
         require(
             isinstance(images, list) and images,
             f"{product['sku_id']} 必须至少有一张图片",
@@ -101,6 +102,16 @@ def main() -> None:
         require(
             all(isinstance(location, str) and LOCATION_PATTERN.fullmatch(location) for location in locations),
             f"{product['sku_id']} 存在格式错误的位置",
+        )
+        require(isinstance(inventory, list), f"{product['sku_id']} 的 inventory 必须是数组")
+        require(len(inventory) == len(set(inventory)), f"{product['sku_id']} 的 inventory 存在重复位置")
+        require(
+            all(isinstance(location, str) and LOCATION_PATTERN.fullmatch(location) for location in inventory),
+            f"{product['sku_id']} 的 inventory 存在格式错误的位置",
+        )
+        require(
+            set(inventory).issubset(set(locations)),
+            f"{product['sku_id']} 的 inventory 包含非标准位置",
         )
         all_locations.extend(locations)
         repeated_product_count += len(locations) > 1
