@@ -15,9 +15,11 @@ from pydantic import ValidationError
 from task1_service.models import (
     ActionResponse,
     DualPickActionResponse,
+    GripperStatusResponse,
     Hand,
     HealthResponse,
     InterfaceMetric,
+    InventoryModifyResponse,
     PickOutcomeResponse,
     SkuResponse,
     TargetItem,
@@ -35,6 +37,18 @@ HEALTH_PATHS = {
 }
 ACTION_RECONCILIATION_SECONDS = 15.0
 ACTION_RECONCILIATION_INTERVAL_SECONDS = 0.5
+GRIPPER_GRASP_POSITION_LIMIT = 217
+GRIPPER_CHECK_EXEMPT_SKU_IDS = frozenset(
+    {
+        "SKU_107",
+        "SKU_104",
+        "SKU_056",
+        "SKU_032",
+        "SKU_031",
+        "SKU_027",
+        "SKU_026",
+    }
+)
 
 
 @dataclass
@@ -375,6 +389,54 @@ class Task1Client:
         if location not in result.locations:
             raise Task1ServiceError("INVALID_RESPONSE", "SKU response location does not match request")
         return result
+
+    async def is_object_grasped(self, hand: Hand, sku_id: str) -> bool:
+        """Return whether the requested hand is holding a non-bagged SKU."""
+
+        if sku_id.strip().upper() in GRIPPER_CHECK_EXEMPT_SKU_IDS:
+            return True
+        response = await self._request(
+            "pose",
+            "GET",
+            "/manipulation/gripper/status",
+            params={"hand": hand.value},
+            timeout_seconds=self.settings.timeouts.health_seconds,
+        )
+        try:
+            result = GripperStatusResponse.model_validate(response.json())
+        except (ValueError, ValidationError) as exc:
+            raise Task1ServiceError(
+                "INVALID_RESPONSE", "gripper status response is invalid"
+            ) from exc
+        if result.hand is not hand:
+            raise Task1ServiceError(
+                "INVALID_RESPONSE", "gripper status hand does not match request"
+            )
+
+        # 夹爪朝 255 闭合；已请求闭合但停在 217 以下，表示被商品阻挡并夹住了商品。
+        return (
+            result.gripper.requested_position > GRIPPER_GRASP_POSITION_LIMIT
+            and result.gripper.position < GRIPPER_GRASP_POSITION_LIMIT
+        )
+
+    async def deplete_inventory(self, slot_id: str) -> None:
+        response = await self._request(
+            "sku",
+            "POST",
+            "/sku/modify_inventory",
+            json={"slot_id": slot_id, "modification": "deplete"},
+            timeout_seconds=self.settings.timeouts.sku_seconds,
+        )
+        try:
+            result = InventoryModifyResponse.model_validate(response.json())
+        except (ValueError, ValidationError) as exc:
+            raise Task1ServiceError(
+                "INVALID_RESPONSE", "SKU inventory response is invalid"
+            ) from exc
+        if result.slot_id.upper() != slot_id.strip().upper():
+            raise Task1ServiceError(
+                "INVALID_RESPONSE", "SKU inventory slot does not match request"
+            )
 
     async def pick(
         self,

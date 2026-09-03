@@ -51,6 +51,8 @@ class Task1Mock:
         self.nudge_return_failures = 0
         self.pose_failure_keys: set[str] = set()
         self.navigation_failure = False
+        self.gripper_requested_position = 255
+        self.gripper_position = 216
 
     @property
     def transport(self) -> httpx.MockTransport:
@@ -97,6 +99,28 @@ class Task1Mock:
                     "images": [],
                     "locations": [location],
                     "inventory": [location],
+                },
+            )
+        if path == "/sku/modify_inventory":
+            request_payload = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "slot_id": request_payload["slot_id"],
+                    "modification": "deplete",
+                    "modified": True,
+                },
+            )
+        if path == "/manipulation/gripper/status":
+            return httpx.Response(
+                200,
+                json={
+                    "status": "SUCCEEDED",
+                    "hand": request.url.params["hand"],
+                    "gripper": {
+                        "requested_position": self.gripper_requested_position,
+                        "position": self.gripper_position,
+                    },
                 },
             )
         if path == "/pick/both":
@@ -325,6 +349,20 @@ async def test_sku_requests_use_query_parameters_without_get_bodies() -> None:
     assert all(request.content == b"" for request in sku_requests)
 
 
+@pytest.mark.asyncio
+async def test_gripper_threshold_and_bagged_sku_bypass() -> None:
+    mock = Task1Mock()
+    client = Task1Client(settings(), transport=mock.transport)
+    async with client:
+        assert await client.is_object_grasped(Hand.LEFT, "SKU_001") is True
+        mock.gripper_requested_position = 217
+        assert await client.is_object_grasped(Hand.LEFT, "SKU_001") is False
+        request_count = len(mock.requests)
+        assert await client.is_object_grasped(Hand.RIGHT, "SKU_107") is True
+
+    assert len(mock.requests) == request_count
+
+
 def test_production_config_loads_complete_product_hand_options() -> None:
     options_path = CONFIG_DIR / "product-hand-options.yaml"
     with options_path.open("r", encoding="utf-8") as options_file:
@@ -522,6 +560,17 @@ async def test_task1_runs_full_pick_place_flow() -> None:
     assert result.order.catalog_size == 2
     assert result.order.product_names == list(mock.names)
     assert "/sku/get_all_names" in paths(mock)
+    gripper_requests = [
+        request
+        for request in mock.requests
+        if request.url.path == "/manipulation/gripper/status"
+    ]
+    assert len(gripper_requests) == 2
+    assert {
+        payload(r)["slot_id"]
+        for r in mock.requests
+        if r.url.path == "/sku/modify_inventory"
+    } == {item.product_slot_id for item in result.target_items}
 
 
 @pytest.mark.asyncio
@@ -671,6 +720,7 @@ def test_task1_rejects_unmapped_new_style_slot_with_business_error() -> None:
     orchestrator = Task1Orchestrator(settings(), None)  # type: ignore[arg-type]
     target = TargetItem(
         product_name="未配置商品",
+        sku_id="SKU",
         product_slot_id="H1_L01_C99",
         target_id="",
         shelf_level="L1",
@@ -735,6 +785,7 @@ def test_task1_rejects_two_products_when_only_same_slot_is_available() -> None:
     targets = [
         TargetItem(
             product_name=product_name,
+            sku_id="SKU",
             product_slot_id=shared_slot,
             target_id="",
             shelf_level="L1",
@@ -770,6 +821,7 @@ def test_task1_prefers_same_target_and_level_for_parallel_pick() -> None:
     targets = [
         TargetItem(
             product_name="多层商品",
+            sku_id="SKU",
             product_slot_id="H2_L04_C02",
             target_id="",
             shelf_level="L4",
@@ -777,6 +829,7 @@ def test_task1_prefers_same_target_and_level_for_parallel_pick() -> None:
         ),
         TargetItem(
             product_name="五层商品",
+            sku_id="SKU",
             product_slot_id="H2_L05_C04",
             target_id="",
             shelf_level="L5",
@@ -804,6 +857,7 @@ def test_parallel_pick_eligibility_does_not_require_different_product_names() ->
     targets = [
         TargetItem(
             product_name="同款商品",
+            sku_id="SKU",
             product_slot_id="H3_L01_C03",
             target_id="H3_INSPECT",
             shelf_level="L1",
@@ -811,6 +865,7 @@ def test_parallel_pick_eligibility_does_not_require_different_product_names() ->
         ),
         TargetItem(
             product_name="同款商品",
+            sku_id="SKU",
             product_slot_id="H3_L01_C04",
             target_id="H3_INSPECT",
             shelf_level="L1",
@@ -1119,6 +1174,7 @@ async def test_parallel_pick_does_not_recover_while_other_hand_is_unknown() -> N
     targets = [
         TargetItem(
             product_name="未知左手商品",
+            sku_id="SKU",
             product_slot_id="H3_L01_C03",
             target_id="H3_INSPECT",
             shelf_level="L1",
@@ -1126,6 +1182,7 @@ async def test_parallel_pick_does_not_recover_while_other_hand_is_unknown() -> N
         ),
         TargetItem(
             product_name="失败右手商品",
+            sku_id="SKU",
             product_slot_id="H3_L01_C04",
             target_id="H3_INSPECT",
             shelf_level="L1",

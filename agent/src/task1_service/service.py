@@ -147,16 +147,16 @@ class Task1Orchestrator:
                 logger.event("SKU货位转换", "started", product_name=name)
                 try:
                     sku = await self.client.search_by_name(name)
-                    if not sku.locations:
+                    if not sku.inventory:
                         raise Task1ServiceError(
-                            "AMBIGUOUS_PRODUCT_SLOT",
-                            f"SKU {name} must resolve to at least one location",
+                            "OUT_OF_STOCK",
+                            f"SKU {name} has no inventory slot",
                             status_code=422,
                         )
                     invalid_slot = next(
                         (
                             location
-                            for location in sku.locations
+                            for location in sku.inventory
                             if not PRODUCT_SLOT_PATTERN.fullmatch(location)
                         ),
                         None,
@@ -168,7 +168,7 @@ class Task1Orchestrator:
                             status_code=422,
                         )
                     candidate_slots = sorted(
-                        sku.locations,
+                        sku.inventory,
                         key=lambda location: (
                             SHELF_LEVEL_PRIORITY[shelf_level(location)],
                             location,
@@ -177,6 +177,7 @@ class Task1Orchestrator:
                     slot_id = candidate_slots[0]
                     target = TargetItem(
                         product_name=name,
+                        sku_id=sku.sku_id,
                         product_slot_id=slot_id,
                         target_id="",
                         shelf_level=shelf_level(slot_id),
@@ -772,15 +773,30 @@ class Task1Orchestrator:
             for target in targets:
                 result = result_by_hand[target.hand]
                 if result.status == "SUCCEEDED":
-                    initial_results.append(None)
-                    logger.event(
-                        "抓取",
-                        "succeeded",
-                        product_name=target.product_name,
-                        hand=target.hand.value,
-                        attempt=1,
-                        execution_mode="dual_pose_barrier",
-                    )
+                    try:
+                        await self._confirm_grasp(target)
+                    except Task1ServiceError as exc:
+                        initial_results.append(exc)
+                        logger.event(
+                            "抓取",
+                            "failed",
+                            product_name=target.product_name,
+                            hand=target.hand.value,
+                            attempt=1,
+                            execution_mode="dual_pose_barrier",
+                            error_code=exc.code,
+                            message=exc.message,
+                        )
+                    else:
+                        initial_results.append(None)
+                        logger.event(
+                            "抓取",
+                            "succeeded",
+                            product_name=target.product_name,
+                            hand=target.hand.value,
+                            attempt=1,
+                            execution_mode="dual_pose_barrier",
+                        )
                     continue
                 error = Task1ServiceError(
                     result.error_code
@@ -828,14 +844,7 @@ class Task1Orchestrator:
                 product_name=target.product_name,
                 hand=target.hand,
                 action_key=action_key,
-                action=lambda key, target=target: self.client.pick(
-                    target.product_name,
-                    target.hand,
-                    target.shelf_level,
-                    key,
-                    slot_id=target.product_slot_id,
-                    target_id=target.target_id,
-                ),
+                action=lambda key, target=target: self._pick_and_confirm(target, key),
                 logger=logger,
                 action_failures=action_failures,
                 uncertain_hands=uncertain_hands,
@@ -849,6 +858,7 @@ class Task1Orchestrator:
 
         uncertain_codes = {
             "ACTION_RESULT_UNKNOWN",
+            "GRIPPER_STATUS_UNKNOWN",
             "NETWORK_ERROR",
             "INVALID_RESPONSE",
         }
@@ -909,6 +919,9 @@ class Task1Orchestrator:
             if succeeded:
                 target.picked = True
                 held_items[target.hand] = target.product_name
+                await self._deplete_inventory_best_effort(
+                    target, logger, action_failures
+                )
 
         logger.event(
             "并行抓取",
@@ -1055,14 +1068,7 @@ class Task1Orchestrator:
             product_name=target.product_name,
             hand=target.hand,
             action_key=f"{task_run_id}:task1.pick.{index}.pick",
-            action=lambda key: self.client.pick(
-                target.product_name,
-                target.hand,
-                target.shelf_level,
-                key,
-                slot_id=target.product_slot_id,
-                target_id=target.target_id,
-            ),
+            action=lambda key: self._pick_and_confirm(target, key),
             logger=logger,
             action_failures=action_failures,
             uncertain_hands=uncertain_hands,
@@ -1077,7 +1083,77 @@ class Task1Orchestrator:
         if succeeded:
             target.picked = True
             held_items[target.hand] = target.product_name
+            await self._deplete_inventory_best_effort(
+                target, logger, action_failures
+            )
         return succeeded
+
+    async def _pick_and_confirm(self, target: TargetItem, action_key: str) -> None:
+        await self.client.pick(
+            target.product_name,
+            target.hand,
+            target.shelf_level,
+            action_key,
+            slot_id=target.product_slot_id,
+            target_id=target.target_id,
+        )
+        await self._confirm_grasp(target)
+
+    async def _confirm_grasp(self, target: TargetItem) -> None:
+        try:
+            grasped = await self.client.is_object_grasped(target.hand, target.sku_id)
+        except Task1ServiceError as exc:
+            raise Task1ServiceError(
+                "GRIPPER_STATUS_UNKNOWN",
+                f"could not confirm {target.hand.value} gripper status: {exc.message}",
+                failed_interface="manipulation_gripper_status",
+                url=exc.url,
+            ) from exc
+        if not grasped:
+            raise Task1ServiceError(
+                "GRASP_NOT_CONFIRMED",
+                f"{target.hand.value} gripper did not confirm an object",
+                failed_interface="manipulation_gripper_status",
+            )
+
+    async def _deplete_inventory_best_effort(
+        self,
+        target: TargetItem,
+        logger: "_Task1Log",
+        action_failures: list[dict[str, str]],
+    ) -> None:
+        logger.event(
+            "库存扣减",
+            "started",
+            product_name=target.product_name,
+            sku_id=target.sku_id,
+            product_slot_id=target.product_slot_id,
+        )
+        try:
+            await self.client.deplete_inventory(target.product_slot_id)
+        except Task1ServiceError as exc:
+            action_failures.append(
+                self._failure(
+                    "inventory_deplete", target.product_name, target.hand, exc
+                )
+            )
+            logger.event(
+                "库存扣减",
+                "failed",
+                product_name=target.product_name,
+                sku_id=target.sku_id,
+                product_slot_id=target.product_slot_id,
+                error_code=exc.code,
+                message=exc.message,
+            )
+            return
+        logger.event(
+            "库存扣减",
+            "succeeded",
+            product_name=target.product_name,
+            sku_id=target.sku_id,
+            product_slot_id=target.product_slot_id,
+        )
 
     async def _prepare_delivery(
         self,
@@ -1360,6 +1436,7 @@ class Task1Orchestrator:
 
         if initial_error.code in {
             "ACTION_RESULT_UNKNOWN",
+            "GRIPPER_STATUS_UNKNOWN",
             "NETWORK_ERROR",
             "INVALID_RESPONSE",
         }:

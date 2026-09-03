@@ -296,6 +296,29 @@ class ActionResponse(BaseModel):
     status: Literal["SUCCEEDED"]
 
 
+class GripperState(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    requested_position: int = Field(ge=0, le=255)
+    position: int = Field(ge=0, le=255)
+
+
+class GripperStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    status: Literal["SUCCEEDED"]
+    hand: Hand
+    gripper: GripperState
+
+
+class InventoryModifyResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    slot_id: str = Field(min_length=1)
+    modification: Literal["deplete"]
+    modified: bool
+
+
 class PickOutcomeResponse(BaseModel):
     """One hand's terminal result returned by 8086 /pick/both."""
 
@@ -325,6 +348,7 @@ class TargetItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     product_name: str
+    sku_id: str = Field(min_length=1)
     product_slot_id: str
     target_id: str
     shelf_level: str
