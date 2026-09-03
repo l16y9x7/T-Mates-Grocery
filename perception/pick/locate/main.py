@@ -1348,6 +1348,24 @@ def uses_multi_row_pick(product_name: str, task_type: str) -> bool:
     return "*" in configured_products or product_name.strip() in configured_products
 
 
+def valid_product_locations(product: dict[str, Any]) -> frozenset[str]:
+    raw_locations = product.get("locations")
+    if not isinstance(raw_locations, list):
+        return frozenset()
+    return frozenset(
+        value.strip().upper()
+        for value in raw_locations
+        if isinstance(value, str)
+        and LOCATION_PATTERN.fullmatch(value.strip().upper())
+    )
+
+
+def supports_inventory_row_mapping(product: dict[str, Any]) -> bool:
+    """Only products with several catalog slots need row/column inference."""
+
+    return len(valid_product_locations(product)) > 1
+
+
 def inventory_slots_for_pick(
     product: dict[str, Any],
     task_type: str,
@@ -1368,12 +1386,7 @@ def inventory_slots_for_pick(
             detail=f"level 与 slot_id 不一致: level={level}, slot={normalized_slot}",
         )
 
-    raw_locations = product.get("locations")
-    locations = {
-        value.strip().upper()
-        for value in raw_locations
-        if isinstance(value, str) and LOCATION_PATTERN.fullmatch(value.strip().upper())
-    } if isinstance(raw_locations, list) else set()
+    locations = valid_product_locations(product)
     if normalized_slot not in locations:
         raise HTTPException(status_code=400, detail="slot_id 与商品不一致")
 
@@ -2582,7 +2595,10 @@ def detect_red_shelf_front_line(
             return False
         slope, intercept = line
         center_y = slope * width / 2 + intercept
-        return height * 0.55 <= center_y <= height * 0.98
+        # A close wrist-camera view can put the shelf surface in the last few
+        # image rows. Keep a small one-pixel guard, but do not reject a valid
+        # interrupted shelf edge merely because it lies below 98% of the frame.
+        return height * 0.55 <= center_y <= height * 0.995
 
     if is_plausible_shelf_line(upper_edge_line):
         assert upper_edge_line is not None
@@ -3356,6 +3372,13 @@ def locate_product_in_image(
         else []
     )
     inventory_target_slot = (slot_id or "").strip().upper()
+    inventory_row_mapping = supports_inventory_row_mapping(product)
+    inventory_row_slots = inventory_slots if inventory_row_mapping else []
+    single_location_target_slot = (
+        inventory_target_slot
+        if inventory_slots and not inventory_row_mapping
+        else None
+    )
     qwen_prompt = (qwen_prompt_override or "").strip()
     sam_prompt = (sam_prompt_override or "").strip()
     if not qwen_prompt or not sam_prompt:
@@ -3490,9 +3513,9 @@ def locate_product_in_image(
         hard_case is None
         and uses_max_mask_area_pick(canonical_name, task_type)
     )
-    multi_row_pick = bool(inventory_slots) or (
-        hard_case is None
-        and uses_multi_row_pick(canonical_name, task_type)
+    multi_row_pick = hard_case is None and inventory_row_mapping and (
+        bool(inventory_row_slots)
+        or uses_multi_row_pick(canonical_name, task_type)
     )
     if upper_confidence_pick:
         located_instances = keep_instances_from_nearest_qwen_shelf_row(
@@ -3534,7 +3557,7 @@ def locate_product_in_image(
             located_instances,
             shelf_front_line=shelf_front_line,
         )
-        if not inventory_slots:
+        if not inventory_row_slots:
             located_instances = apply_pick_bbox_history(
                 located_instances,
                 previous_picked_bboxes or [],
@@ -3548,15 +3571,15 @@ def locate_product_in_image(
         located_instances = (
             keep_display_rows_for_inventory(
                 located_instances,
-                len(inventory_slots),
+                len(inventory_row_slots),
             )
-            if inventory_slots
+            if inventory_row_slots
             else keep_nearest_display_row(located_instances)
         )
     if (
         hard_case is None
         and not special_no_depth_pick
-        and not inventory_slots
+        and not inventory_row_slots
     ):
         located_instances = keep_frontmost_in_overlap_chains(located_instances)
         # Preserve the original global outlier rule for normal SKUs. A hard-case
@@ -3569,10 +3592,10 @@ def locate_product_in_image(
         # masks cannot transitively merge separate front-row product columns.
         located_instances = list(located_instances)
     inventory_selected_instance: LocatedInstance | None = None
-    if inventory_slots:
+    if inventory_row_slots:
         located_instances, inventory_selected_instance = map_inventory_slots_to_instances(
             located_instances,
-            inventory_slots,
+            inventory_row_slots,
             inventory_target_slot,
             original_image.width,
         )
@@ -3621,6 +3644,11 @@ def locate_product_in_image(
             located_instances,
             list(original_image.size),
         )
+    if single_location_target_slot is not None and hard_case_debug is None:
+        # The caller still receives the validated slot, but a one-location SKU
+        # does not need shelf-line detection, display-row inference, or column
+        # mapping to arrive at that already-unambiguous result.
+        selected_instance.mapped_slot_id = single_location_target_slot
     selected_instance_index = next(
         index
         for index, instance in enumerate(located_instances, start=1)

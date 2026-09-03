@@ -76,6 +76,23 @@ class HardCaseShelfFrontTest(unittest.TestCase):
         expected_center_y = (top_left + top_right) / 2
         self.assertAlmostEqual(detected_center_y, expected_center_y, delta=8)
 
+    def test_detects_bottom_shelf_edge_interrupted_by_gripper(self) -> None:
+        image = Image.new("RGB", (640, 480), "#20262b")
+        draw = ImageDraw.Draw(image)
+        draw.polygon(
+            [(0, 469), (639, 475), (639, 479), (0, 474)],
+            fill="#c83b2f",
+        )
+        # Simulate a dark gripper hiding a wide middle section of the red edge.
+        draw.rectangle((65, 455, 275, 479), fill="#111111")
+
+        line = detect_red_shelf_front_line(image)
+
+        self.assertIsNotNone(line)
+        assert line is not None
+        slope, intercept = line
+        self.assertAlmostEqual(slope * 320 + intercept, 472, delta=5)
+
     def test_single_base_column_relaxes_from_twenty_five_to_thirty_five(self) -> None:
         right_full = instance([259.1, 215.3, 340.1, 342.6])
         left_full = instance([94.9, 216.2, 190.6, 355.5])
