@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#101a26" />
+    <title>外部系统模拟台 · 机器人任务接口</title>
+    <link rel="stylesheet" href="/static/styles.css?v=1" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div class="brand"><span class="brand-mark">TX</span><span>EXTERNAL SYSTEM</span></div>
+        <div class="connection"><span id="connectionDot" class="status-dot"></span><span id="connectionText">正在连接任务服务</span></div>
+      </header>
+
+      <section class="page-intro">
+        <div>
+          <p class="eyebrow">ROBOT RETAIL / API WORKFLOW LAB</p>
+          <h1>外部系统模拟台</h1>
+          <p class="lede">用真实外部接口触发机器人任务，观察受理、执行、回调与最终结果。</p>
+        </div>
+        <div class="intro-meta"><span>协议</span><strong>HTTP · JSON</strong><span>服务</span><strong id="serviceUrl">-</strong></div>
+      </section>
+
+      <section class="health-strip" aria-labelledby="healthTitle">
+        <div class="section-label"><span id="healthTitle">系统健康</span><span class="index">01</span></div>
+        <div class="health-main"><div><span id="healthBadge" class="badge unknown">未检查</span><strong id="healthMessage">点击刷新，读取当前接单能力</strong></div><button id="healthButton" class="button secondary" type="button"><span>↻</span>刷新健康状态</button></div>
+        <div id="healthTasks" class="health-tasks"></div>
+        <div id="dependencies" class="dependencies"></div>
+      </section>
+
+      <section class="workspace">
+        <form id="taskForm" class="panel task-panel">
+          <div class="panel-heading"><div><span class="eyebrow">REQUEST BUILDER</span><h2>发起异步任务</h2></div><span class="index">02</span></div>
+          <div class="task-tabs" role="tablist" aria-label="任务类型">
+            <button class="task-tab active" type="button" data-task="0" role="tab" aria-selected="true"><b>0</b><span>理货</span><small>建立货架基准</small></button>
+            <button class="task-tab" type="button" data-task="1" role="tab" aria-selected="false"><b>1</b><span>取货</span><small>提交两件商品订单</small></button>
+            <button class="task-tab" type="button" data-task="2" role="tab" aria-selected="false"><b>2</b><span>补货</span><small>恢复货架库存</small></button>
+          </div>
+          <div class="form-grid">
+            <label class="field"><span>业务任务号</span><input id="externalTaskId" required /></label>
+            <label class="field"><span>幂等键</span><input id="idempotencyKey" required /></label>
+          </div>
+          <section id="orderFields" class="order-fields" hidden>
+            <div class="subheading"><span>订单商品</span><button id="randomOrderButton" class="text-button" type="button">⤨ 重新随机</button></div>
+            <div class="order-items"><label class="field"><span>商品 1</span><select id="productOne"></select></label><label class="field"><span>商品 2</span><select id="productTwo"></select></label></div>
+            <div class="order-summary"><span id="orderId">订单号 -</span><span id="catalogSize">商品池读取中</span></div>
+          </section>
+          <label class="callback-toggle"><input id="callbackEnabled" type="checkbox" /><span>请求状态回调</span><small>需在机器人服务配置 `callback_allowed_hosts` 后启用</small></label>
+          <div class="request-preview"><div><span>METHOD</span><strong id="requestMethod">POST</strong></div><div><span>ENDPOINT</span><strong id="requestEndpoint">/api/external/v1/tasks/0/runs</strong></div></div>
+          <button id="submitButton" class="button primary" type="submit"><span>→</span><span id="submitLabel">发送理货请求</span></button>
+          <p id="formMessage" class="form-message" role="alert"></p>
+        </form>
+
+        <section class="panel status-panel" aria-live="polite">
+          <div class="panel-heading"><div><span class="eyebrow">LIVE RUN</span><h2>任务状态</h2></div><span id="runStatus" class="badge unknown">等待启动</span></div>
+          <div class="run-identity"><span>当前运行 ID</span><strong id="runId">尚未创建任务</strong></div>
+          <div class="progress-block"><div><span id="progressLabel">等待任务触发</span><strong id="progressValue">0%</strong></div><div class="progress-track"><span id="progressBar"></span></div></div>
+          <div class="status-copy"><strong id="displayTitle">准备接收任务</strong><p id="displayMessage">健康检查通过后，选择一个任务开始。</p></div>
+          <div id="currentStep" class="current-step"><span>当前步骤</span><strong>等待启动</strong></div>
+          <div id="notice" class="notice info">状态反馈会显示在这里</div>
+          <div class="status-facts"><div><span>事件序号</span><strong id="sequence">-</strong></div><div><span>事件类型</span><strong id="eventType">-</strong></div><div><span>反馈模式</span><strong id="feedbackMode">状态查询</strong></div></div>
+        </section>
+      </section>
+
+      <section class="lower-grid">
+        <section class="panel timeline-panel"><div class="panel-heading"><div><span class="eyebrow">EVENT STREAM</span><h2>流程时间线</h2></div><button id="clearTimelineButton" class="icon-button" title="清空时间线" type="button">⌫</button></div><div id="timeline" class="timeline"><div class="empty-state">任务受理后，状态事件将按序显示。</div></div></section>
+        <section class="panel api-panel"><div class="panel-heading"><div><span class="eyebrow">HTTP TRACE</span><h2>接口调用</h2></div><span id="apiCount" class="index">0</span></div><div id="apiLog" class="api-log"><div class="empty-state">尚未发起接口调用。</div></div></section>
+      </section>
+
+      <section class="contract-band"><div><span class="eyebrow">IMPLEMENTED CONTRACT</span><h2>外部接口链路</h2></div><div class="contract-flow"><span>健康检查</span><i>→</i><span>触发任务</span><i>→</i><span>状态反馈</span><i>→</i><span>完成 / 失败</span></div><p>前端请求经本地演示网关转发到 `8108`，网关也提供状态回调接收地址；未启用回调时使用 `task_run_id` 状态查询作为实时反馈。</p></section>
+      <footer><span>外部系统接口设计 · schema v1.0</span><span id="callbackUrl">callback: -</span></footer>
+    </main>
+    <script src="/static/app.js?v=1"></script>
+  </body>
+</html>
