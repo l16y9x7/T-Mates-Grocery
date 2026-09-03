@@ -75,13 +75,15 @@ class Task1Mock:
             return httpx.Response(200, json=list(self.names))
         if path == "/sku/search_by_name":
             name = request.url.params["name"]
+            locations = self.sku_locations.get(name, [self.names[name]])
             return httpx.Response(
                 200,
                 json={
                     "sku_id": "SKU",
                     "name": name,
                     "images": [],
-                    "locations": self.sku_locations.get(name, [self.names[name]]),
+                    "locations": locations,
+                    "inventory": locations,
                 },
             )
         if path == "/sku/search_by_location":
@@ -89,7 +91,13 @@ class Task1Mock:
             name = next(name for name, slot in self.names.items() if slot == location)
             return httpx.Response(
                 200,
-                json={"sku_id": "SKU", "name": name, "images": [], "locations": [location]},
+                json={
+                    "sku_id": "SKU",
+                    "name": name,
+                    "images": [],
+                    "locations": [location],
+                    "inventory": [location],
+                },
             )
         if path == "/pick/both":
             self.pick_attempts += 2
