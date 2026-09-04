@@ -293,7 +293,7 @@
   },
   "百事可乐瓶装": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的百事可乐pepsi瓶，返回bbox。最终返回格式：{\"name\": \"百事可乐pepsi瓶\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "pepsi bottle"
+    "sam3_prompt": "bottle with blue cap"
   },
   "百岁山矿泉水": {
     "qwen3_prompt": "你正在俯视一个托盘，找到其中的百岁山矿泉水瓶，输出完整的bbox。返回格式：{\"name\": \"百岁山矿泉水瓶\", \"bbox\": [x1, y1, x2, y2]}",
