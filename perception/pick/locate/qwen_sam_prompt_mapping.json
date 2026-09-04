@@ -1,6 +1,6 @@
 {
   "7喜瓶装": {
-    "qwen3_prompt": "找到图中货架上的所有绿色7喜饮料瓶，不是水溶C100，返回一个完整包含所有7喜瓶的大bbox。最终返回格式：{\"name\": \"7喜瓶\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图中货架上的所有绿色7喜饮料瓶，返回一个完整包含所有7喜瓶的大bbox。最终返回格式：{\"name\": \"7喜瓶\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost bottle"
   },
   "Dove沐浴乳": {
@@ -44,23 +44,15 @@
     "sam3_prompt": "frontmost green Lay's package"
   },
   "NFC桔汁": {
-    "qwen3_prompt": "找到图中货架上所有的NFC桔汁盒堆，返回这些NFC桔汁盒堆的bbox，每一堆分开。最终返回格式：{\"name\": \"NFC桔汁盒堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图中货架上所有的NFC桔汁盒，返回包含这些NFC桔汁盒的一个大bbox。最终返回格式：{\"name\": \"NFC桔汁盒堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost carton"
-  },
-  "三只松鼠每日坚果": {
-    "qwen3_prompt": "找到图片中货架上的三只松鼠包装，输出满足条件的所有三只松鼠包装的bbox。返回格式：{\"name\": \"三只松鼠包装\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost package"
-  },
-  "三色藜麦": {
-    "qwen3_prompt": "找到图片中货架上的非罐装三色藜麦包装袋，输出满足条件的所有三色藜麦包装袋的bbox，每一堆分开。返回格式：{\"name\": \"三色藜麦包装袋\", \"bbox\": [x1, y1, x2, y2]}",
-    "sam3_prompt": "frontmost rectangular package"
   },
   "上好佳鲜虾条": {
     "qwen3_prompt": "找到图片中货架上的所有黄色虾条包装袋，输出满足条件的所有黄色虾条包装袋的bbox。返回格式：{\"name\": \"黄色虾条包装袋\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost snack package"
   },
   "东方树叶茉莉花茶": {
-    "qwen3_prompt": "找到图片中货架上的所有黄色水瓶堆，输出黄色水瓶堆的bbox，每一堆分开。返回格式：{\"name\": \"黄色水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的所有黄色水瓶堆，输出包含所有黄色水瓶堆的大bbox。返回格式：{\"name\": \"黄色水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost bottle"
   },
   "中盐精制盐": {
@@ -296,7 +288,7 @@
     "sam3_prompt": "frontmost pepsi bottle"
   },
   "百岁山矿泉水": {
-    "qwen3_prompt": "找到图片中货架上的百岁山矿泉水瓶堆，一共有三排，输出一个完整的大bbox。返回格式：{\"name\": \"百岁山矿泉水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的百岁山矿泉水瓶堆，不是宝矿力水特，输出一个完整的大bbox。返回格式：{\"name\": \"百岁山矿泉水瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost transparent bottle"
   },
   "百草味海苔肉松蛋卷": {
@@ -324,7 +316,7 @@
     "sam3_prompt": "frontmost green cup"
   },
   "美年达瓶装": {
-    "qwen3_prompt": "找到图片中货架上的美年达饮料堆，输出满足条件的所有美年达饮料堆的bbox，每一堆分开。返回格式：{\"name\": \"美年达饮料堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的美年达饮料，输出一个大的包含所有美年达的bbox。返回格式：{\"name\": \"美年达饮料堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost orange bottle"
   },
   "脉动猫薄荷瓶": {
@@ -368,7 +360,7 @@
     "sam3_prompt": "frontmost white and pink box"
   },
   "芬达罐装": {
-    "qwen3_prompt": "找到图片中货架上的橙色罐装芬达堆，输出满足条件的所有橙色罐装芬达堆的bbox，每一堆分开。返回格式：{\"name\": \"橙色罐装芬达堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的橙色罐装芬达堆，输出一个包含所有橙色罐装芬达堆的大bbox。返回格式：{\"name\": \"橙色罐装芬达堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost fanta can"
   },
   "草原红太阳烧烤料原味": {
