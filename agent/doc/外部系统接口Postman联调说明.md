@@ -228,6 +228,131 @@ Mock 默认每个阶段间隔约 1 秒，可以重复点击 `Send` 查看状态�
 `status_callback_url` 不是本系统提供的接口，而是外部系统需要提供的 HTTP `POST` 接口。
 机器人或 Mock 会主动向该地址发送完整任务状态。
 
+### 9.1 回调请求结构
+
+请求体统一使用以下结构。下面以 Task1 取货过程中的一条状态为例：
+
+```json
+{
+  "schema_version": "1.0",
+  "event_id": "evt-task1-20260904-0008",
+  "sequence": 8,
+  "event_type": "TASK_PROGRESS",
+  "occurred_at": "2026-09-04T10:30:08+08:00",
+  "external_task_id": "ORD-20260904-0001",
+  "external_order_id": "ORD-20260904-0001",
+  "task_run_id": "task1-20260904-103000-a1b2c3d4",
+  "task_type": "TASK1_PICKUP",
+  "task_name": "取货",
+  "status": "RUNNING",
+  "display_title": "正在为您取货",
+  "display_message": "已取到 1 件商品，正在处理第 2 件商品",
+  "current_step": {
+    "code": "PICKING",
+    "label": "正在取第 2 件商品",
+    "progress_percent": 40,
+    "message": "机器人正在货架区域取货，请稍候"
+  },
+  "location": {
+    "code": "SHELF",
+    "label": "货架区域"
+  },
+  "next_step": {
+    "code": "NAVIGATING_TO_DELIVERY",
+    "label": "前往交付台",
+    "message": "两件商品取货完成后，将送到交付台"
+  },
+  "estimated_remaining_seconds": 90,
+  "summary": {
+    "total_items": 2,
+    "items_completed": 1,
+    "items_in_progress": 1,
+    "items_failed": 0,
+    "items_held": 1
+  },
+  "items": [
+    {
+      "sku_id": "SKU_001",
+      "product_name": "可口可乐罐装",
+      "status": "PICKED",
+      "status_label": "已取到",
+      "picked": true,
+      "placed": false,
+      "message": "商品已取到，等待送到交付台"
+    },
+    {
+      "sku_id": "SKU_002",
+      "product_name": "百事可乐瓶装",
+      "status": "PENDING",
+      "status_label": "等待处理",
+      "picked": false,
+      "placed": false,
+      "message": "等待处理"
+    }
+  ],
+  "user_notice": {
+    "level": "INFO",
+    "code": "PICKING_IN_PROGRESS",
+    "message": "取货正在进行中，请稍候"
+  },
+  "last_updated_at": "2026-09-04T10:30:08+08:00",
+  "error": null
+}
+```
+
+### 9.2 公共字段说明
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `schema_version` | string | 当前固定为 `1.0` |
+| `event_id` | string | 当前状态事件唯一 ID，用于去重 |
+| `sequence` | integer | 同一 `task_run_id` 下严格递增的序号 |
+| `event_type` | string | `TASK_ACCEPTED`、`TASK_PROGRESS`、`TASK_HEARTBEAT` 或 `TASK_COMPLETED` |
+| `occurred_at` | string | 状态发生时间，ISO 8601 格式并带时区 |
+| `external_task_id` | string | 外部任务号 |
+| `external_order_id` | string/null | Task1 订单号；Task0、Task2 为 `null` 或不传 |
+| `task_run_id` | string | 本次任务运行 ID |
+| `task_type` | string | `TASK0_INVENTORY`、`TASK1_PICKUP` 或 `TASK2_REPLENISHMENT` |
+| `task_name` | string | `理货`、`取货` 或 `补货` |
+| `status` | string | `ACCEPTED`、`RUNNING`、`SUCCEEDED`、`PARTIAL_SUCCESS` 或 `FAILED` |
+| `display_title` | string | 面向用户的状态标题 |
+| `display_message` | string | 面向用户的当前状态说明 |
+| `current_step` | object | 当前执行阶段和展示进度 |
+| `location` | object | 当前业务位置 |
+| `next_step` | object/null | 下一执行阶段；任务结束时为 `null` |
+| `estimated_remaining_seconds` | integer | 预计剩余秒数，仅用于展示 |
+| `summary` | object | 任务统计信息，随任务类型变化 |
+| `user_notice` | object | 用户提示级别、提示码和文案 |
+| `last_updated_at` | string | 最近一次状态更新时间 |
+| `error` | object/null | 失败信息；正常状态为 `null` |
+
+### 9.3 Task0 和 Task1/Task2 的明细字段
+
+Task0 使用 `captures`：
+
+```json
+{
+  "captures": [
+    {
+      "target_id": "H2_INSPECT",
+      "target_label": "2 号货架",
+      "view": "UPPER",
+      "status": "COMPLETED",
+      "status_label": "已记录",
+      "message": "2 号货架上层信息已记录"
+    }
+  ]
+}
+```
+
+Task1 使用 `items` 表示订单商品，商品状态包括：
+`PENDING`、`LOCATING`、`PICKING`、`PICKED`、`PLACING`、`PLACED`。
+
+Task2 使用 `items` 表示缺货和补货商品，商品状态包括：
+`SHORTAGE_FOUND`、`LOCATING`、`PICKING`、`NAVIGATING_TO_SHELF`、`PLACING`、`REPLENISHED`。
+
+Task2 在完成货架巡检、确认缺货商品之前，`items` 可以是空数组。
+
 外部回调接口收到请求并成功处理后，应返回任意 `2xx`，建议响应：
 
 ```json

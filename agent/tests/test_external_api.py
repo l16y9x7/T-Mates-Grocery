@@ -150,3 +150,34 @@ async def test_external_rejects_busy_and_exposes_final_status() -> None:
     assert status.status_code == 200
     assert status.json()["status"] == "SUCCEEDED"
     assert status.json()["task_type"] == "TASK0_INVENTORY"
+    assert set(status.json()) == {
+        "schema_version",
+        "event_id",
+        "sequence",
+        "event_type",
+        "occurred_at",
+        "external_task_id",
+        "external_order_id",
+        "task_run_id",
+        "task_type",
+        "task_name",
+        "status",
+        "display_title",
+        "display_message",
+        "current_step",
+        "location",
+        "next_step",
+        "estimated_remaining_seconds",
+        "summary",
+        "user_notice",
+        "last_updated_at",
+        "error",
+        "captures",
+    }
+    assert set(status.json()["summary"]) == {
+        "inspection_points_total",
+        "inspection_points_completed",
+        "captures_total",
+        "captures_completed",
+        "captures_failed",
+    }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import json
 import logging
 from dataclasses import dataclass, field
@@ -122,17 +123,31 @@ class _CallbackWorker:
                 await self._send(client, payload)
 
     async def _send(self, client: httpx.AsyncClient, payload: dict[str, Any]) -> None:
+        body = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        timestamp = payload["occurred_at"]
         headers = {
             "Content-Type": "application/json",
             "X-Event-Id": payload["event_id"],
             "X-Task-Run-Id": payload["task_run_id"],
+            "X-Signature-Timestamp": timestamp,
         }
         if self.access_token:
             headers["Authorization"] = f"Bearer {self.access_token}"
+            signature = hmac.new(
+                self.access_token.encode("utf-8"),
+                f"{timestamp}.".encode("utf-8") + body,
+                hashlib.sha256,
+            ).hexdigest()
+            headers["X-Signature"] = f"sha256={signature}"
         attempts = self.settings.max_retries + 1
         for attempt in range(attempts):
             try:
-                response = await client.post(self.url, json=payload, headers=headers)
+                response = await client.post(self.url, content=body, headers=headers)
                 if 200 <= response.status_code < 300:
                     return
                 error = f"HTTP {response.status_code}"
@@ -205,18 +220,36 @@ class ExternalTaskService:
             if worker is not None:
                 await worker.close()
 
-    async def health(self) -> dict[str, Any]:
+    async def health(self, request_id: str | None = None) -> dict[str, Any]:
         task_status = {}
         for task_number in ("0", "1", "2"):
             task_status[task_number] = "READY" if await self._coordinator().task_ready(task_number) else "ERROR"
         active = self._coordinator().active_task_id
+        active_task = None
+        if active is not None and active in self._records:
+            record = self._records[active]
+            active_task = {
+                "task_type": record.task_type,
+                "task_name": record.task_name,
+                "task_run_id": record.task_id,
+            }
+        dependencies = [
+            {"name": f"task{task_number}", "status": task_status[task_number], "latency_ms": 0}
+            for task_number in ("0", "1", "2")
+        ]
+        if active is not None:
+            dependencies = []
         return {
+            "schema_version": "1.0",
+            "request_id": request_id or f"request-{uuid4().hex}",
+            "checked_at": _now(),
             "status": "BUSY" if active is not None else ("READY" if all(value == "READY" for value in task_status.values()) else "NOT_READY"),
             "accepting_tasks": active is None and any(value == "READY" for value in task_status.values()),
             "ready_for_task0": task_status["0"] == "READY",
             "ready_for_task1": task_status["1"] == "READY",
             "ready_for_task2": task_status["2"] == "READY",
-            "active_task": active,
+            "active_task": active_task,
+            "dependencies": dependencies,
         }
 
     async def submit(
@@ -318,9 +351,10 @@ class ExternalTaskService:
         @router.get("/health")
         async def external_health(
             authorization: str | None = Header(default=None),
+            request_id: str | None = Header(default=None, alias="X-Request-Id"),
         ) -> JSONResponse:
             self._authorize(authorization)
-            return JSONResponse(await self.health())
+            return JSONResponse(await self.health(request_id))
 
         @router.post("/tasks/0/runs", status_code=202)
         async def task0(
@@ -434,6 +468,7 @@ class ExternalTaskService:
             task_name=record.task_name,
             status=status,
         )
+        payload["last_updated_at"] = payload["occurred_at"]
         record.last_status = payload
         if record.callback_worker is not None:
             await record.callback_worker.enqueue(payload)
@@ -484,7 +519,7 @@ class ExternalTaskService:
             title = "取货完成" if status == "SUCCEEDED" else "取货部分完成" if status == "PARTIAL_SUCCESS" else "取货失败"
             return self._status(record, status, title, f"已完成 {placed}/{len(items)} 件商品", {"code": status, "label": title, "progress_percent": 100, "message": "订单处理已结束"}, None, {"total_items": len(items), "items_completed": placed, "items_in_progress": 0, "items_failed": len(items) - placed, "items_held": sum(item["picked"] and not item["placed"] for item in items)}, {"level": "SUCCESS" if status == "SUCCEEDED" else "WARNING" if status == "PARTIAL_SUCCESS" else "ERROR", "code": "TASK_COMPLETED", "message": title}, items=items)
         target_items = data.get("target_items", [])
-        items = [{"product_name": item["product_name"], "status": "REPLENISHED" if item.get("placed") else "PICKED" if item.get("picked") else "PENDING", "status_label": "已完成补货" if item.get("placed") else "已取到" if item.get("picked") else "等待处理", "picked": item.get("picked", False), "placed": item.get("placed", False), "message": "商品已补回货架" if item.get("placed") else "等待补货"} for item in target_items]
+        items = [{"sku_id": item.get("product_slot_id") or "", "product_name": item["product_name"], "status": "REPLENISHED" if item.get("placed") else "PICKED" if item.get("picked") else "PENDING", "status_label": "已完成补货" if item.get("placed") else "已取到" if item.get("picked") else "等待处理", "picked": item.get("picked", False), "placed": item.get("placed", False), "message": "商品已补回货架" if item.get("placed") else "等待补货"} for item in target_items]
         placed = sum(item["placed"] for item in items)
         if not items:
             status = "SUCCEEDED"
@@ -494,23 +529,50 @@ class ExternalTaskService:
             status = "SUCCEEDED" if placed == len(items) else "PARTIAL_SUCCESS" if placed else "FAILED"
             title = "补货完成" if status == "SUCCEEDED" else "补货部分完成" if status == "PARTIAL_SUCCESS" else "补货失败"
             message = f"已完成 {placed}/{len(items)} 件补货"
-        return self._status(record, status, title, message, {"code": status, "label": title, "progress_percent": 100, "message": "补货流程已结束"}, None, {"shortage_items_found": len(items), "replenishment_items_placed": placed, "held_items": sum(item["picked"] and not item["placed"] for item in items)}, {"level": "SUCCESS" if status == "SUCCEEDED" else "WARNING" if status == "PARTIAL_SUCCESS" else "ERROR", "code": "TASK_COMPLETED", "message": title}, items=items)
+        return self._status(record, status, title, message, {"code": status, "label": title, "progress_percent": 100, "message": "补货流程已结束"}, None, {"inspection_points_total": 0, "inspection_points_completed": 0, "shortage_items_found": len(items), "replenishment_items_picked": sum(item["picked"] for item in items), "replenishment_items_placed": placed, "held_items": sum(item["picked"] and not item["placed"] for item in items)}, {"level": "SUCCESS" if status == "SUCCEEDED" else "WARNING" if status == "PARTIAL_SUCCESS" else "ERROR", "code": "TASK_COMPLETED", "message": title}, items=items)
 
     def _failed_status(self, record: _ExternalTaskRecord, error: Exception) -> dict[str, Any]:
         message = getattr(error, "message", str(error))
         return self._status(record, "FAILED", f"{record.task_name}失败", message, {"code": "FAILED", "label": f"{record.task_name}失败", "progress_percent": 0, "message": message}, None, self._initial_summary(record), {"level": "ERROR", "code": "TASK_FAILED", "message": "任务未能完成，请稍后重试或联系工作人员"}, error={"error_code": getattr(error, "code", type(error).__name__), "message": message, "step": getattr(error, "step", None)})
 
     def _status(self, record: _ExternalTaskRecord, status: str, title: str, message: str, current_step: dict[str, Any], next_step: dict[str, Any] | None, summary: dict[str, Any], notice: dict[str, Any], **details: Any) -> dict[str, Any]:
-        payload = {"status": status, "display_title": title, "display_message": message, "current_step": current_step, "next_step": next_step, "location": {"code": "UNKNOWN", "label": "机器人任务区域"}, "summary": summary, "user_notice": notice, "last_updated_at": _now()}
+        updated_at = _now()
+        payload = {
+            "schema_version": "1.0",
+            "event_id": f"evt-{record.task_id}-{record.sequence}",
+            "sequence": record.sequence,
+            "event_type": "TASK_ACCEPTED" if status == "ACCEPTED" else "TASK_PROGRESS",
+            "occurred_at": updated_at,
+            "external_task_id": record.external_task_id,
+            "external_order_id": record.external_order_id,
+            "task_run_id": record.task_id,
+            "task_type": record.task_type,
+            "task_name": record.task_name,
+            "status": status,
+            "display_title": title,
+            "display_message": message,
+            "current_step": current_step,
+            "location": {"code": "UNKNOWN", "label": "机器人任务区域"},
+            "next_step": next_step,
+            "estimated_remaining_seconds": 0,
+            "summary": summary,
+            "user_notice": notice,
+            "last_updated_at": updated_at,
+            "error": None,
+        }
+        if record.task_number == "0":
+            payload["captures"] = []
+        else:
+            payload["items"] = []
         payload.update(details)
         return payload
 
     def _initial_summary(self, record: _ExternalTaskRecord) -> dict[str, Any]:
         if record.task_number == "0":
-            return {"inspection_points_total": 0, "inspection_points_completed": 0, "captures_total": 0, "captures_completed": 0}
+            return {"inspection_points_total": 0, "inspection_points_completed": 0, "captures_total": 0, "captures_completed": 0, "captures_failed": 0}
         if record.task_number == "1":
             return {"total_items": 2, "items_completed": 0, "items_in_progress": 0, "items_failed": 0, "items_held": 0}
-        return {"inspection_points_total": 0, "inspection_points_completed": 0, "shortage_items_found": 0, "replenishment_items_placed": 0, "held_items": 0}
+        return {"inspection_points_total": 0, "inspection_points_completed": 0, "shortage_items_found": 0, "replenishment_items_picked": 0, "replenishment_items_placed": 0, "held_items": 0}
 
     async def _internal_payload(
         self,

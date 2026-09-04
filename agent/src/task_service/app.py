@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from typing import Any
+from uuid import uuid4
 
 from fastapi import Body, FastAPI, Header, Request
 from fastapi.exceptions import RequestValidationError
@@ -94,14 +95,26 @@ def create_app(
             raise RuntimeError("task service lifespan has not started")
         return coordinator
 
-    async def unified_error_handler(_: Request, exc: TaskServiceError) -> JSONResponse:
+    async def unified_error_handler(request: Request, exc: TaskServiceError) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
-            content={"error_code": exc.code, "message": exc.message},
+            content={
+                "schema_version": "1.0",
+                "request_id": request.headers.get("X-Request-Id") or f"request-{uuid4().hex}",
+                "error_code": exc.code,
+                "message": exc.message,
+                "retryable": exc.status_code in {409, 429, 500, 502, 503, 504},
+            },
         )
 
-    async def domain_error_handler(_: Request, exc: DomainError) -> JSONResponse:
-        content = {"error_code": exc.code, "message": exc.message}
+    async def domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
+        content = {
+            "schema_version": "1.0",
+            "request_id": request.headers.get("X-Request-Id") or f"request-{uuid4().hex}",
+            "error_code": exc.code,
+            "message": exc.message,
+            "retryable": exc.status_code in {409, 429, 500, 502, 503, 504},
+        }
         if exc.step:
             content["failed_step"] = exc.step
         if getattr(exc, "failed_interface", None):
@@ -119,11 +132,17 @@ def create_app(
         return JSONResponse(status_code=exc.status_code, content=content)
 
     async def validation_error_handler(
-        _: Request, exc: RequestValidationError
+        request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         return JSONResponse(
             status_code=422,
-            content={"error_code": "INVALID_REQUEST", "message": str(exc.errors())},
+            content={
+                "schema_version": "1.0",
+                "request_id": request.headers.get("X-Request-Id") or f"request-{uuid4().hex}",
+                "error_code": "INVALID_REQUEST",
+                "message": str(exc.errors()),
+                "retryable": False,
+            },
         )
 
     app.add_exception_handler(TaskServiceError, unified_error_handler)
