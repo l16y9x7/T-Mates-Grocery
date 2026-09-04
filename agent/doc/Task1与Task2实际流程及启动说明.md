@@ -427,19 +427,19 @@ Task2 开始时检查：
 - 机器人相机；
 - `camera/list` 中 head 相机在线且 color 流在线。
 
-随后检查五个点的上下观察基准。当前一共需要 10 个目录：
+随后根据 `agent/output/task0/current.json` 选择当前完整扫描，并检查五个点的上下观察基准。当前一共需要 10 个目录：
 
 ```text
-agent/output/task0/H1_INSPECT_UPPER/
-agent/output/task0/H1_INSPECT_LOWER/
-agent/output/task0/H12_INSPECT_UPPER/
-agent/output/task0/H12_INSPECT_LOWER/
-agent/output/task0/H2_INSPECT_UPPER/
-agent/output/task0/H2_INSPECT_LOWER/
-agent/output/task0/H23_INSPECT_UPPER/
-agent/output/task0/H23_INSPECT_LOWER/
-agent/output/task0/H3_INSPECT_UPPER/
-agent/output/task0/H3_INSPECT_LOWER/
+agent/output/task0/runs/<scan_id>/H1_INSPECT_UPPER/
+agent/output/task0/runs/<scan_id>/H1_INSPECT_LOWER/
+agent/output/task0/runs/<scan_id>/H12_INSPECT_UPPER/
+agent/output/task0/runs/<scan_id>/H12_INSPECT_LOWER/
+agent/output/task0/runs/<scan_id>/H2_INSPECT_UPPER/
+agent/output/task0/runs/<scan_id>/H2_INSPECT_LOWER/
+agent/output/task0/runs/<scan_id>/H23_INSPECT_UPPER/
+agent/output/task0/runs/<scan_id>/H23_INSPECT_LOWER/
+agent/output/task0/runs/<scan_id>/H3_INSPECT_UPPER/
+agent/output/task0/runs/<scan_id>/H3_INSPECT_LOWER/
 ```
 
 每个目录必须有三个非空文件：
@@ -762,10 +762,10 @@ scripts/run-task.sh 0
 Task0 会访问五个巡检点，各保存 UPPER、LOWER 一份对齐 RGB-D，共 10 份。成功后检查：
 
 ```bash
-find output/task0 -maxdepth 2 -type f | sort
+find output/task0/runs -maxdepth 3 -type f | sort
 ```
 
-应看到 10 个目录，每个目录有 `rgb.jpg`、`depth_mm.npy`、`meta.json`。然后重新执行：
+当前 `scan_id` 下应看到 10 个目录，每个目录有 `rgb.jpg`、`depth_mm.npy`、`meta.json`，并且扫描根目录包含 `manifest.json`。然后重新执行：
 
 ```bash
 scripts/health-check.sh 192.168.200.66

@@ -29,8 +29,9 @@ python server.py
 
 ## Inspection Qwen Review
 
-页面顶部的“初始扫描货架行检查”读取 `../agent/output/task0` 中全部 Upper/Lower
-扫描图，调用共享 `row_detection`，并排显示原图和带 `ROW/RAIL` 的标注图。检测产物
+页面顶部的“初始扫描货架行检查”根据 `../agent/output/task0/current.json` 读取当前
+完整扫描中的全部 Upper/Lower 图像；尚无指针时兼容旧平铺目录。页面调用共享
+`row_detection`，并排显示原图和带 `ROW/RAIL` 的标注图。检测产物
 缓存在 `test_data/initial_scan_row_detection`；源 `rgb.jpg` 更新或视角不一致时会自动
 重新生成。
 

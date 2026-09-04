@@ -473,3 +473,35 @@ def test_task3_production_config_uses_task0_baselines_and_port_inputs() -> None:
     assert {
         point.target_id: point.location_id for point in task_settings.inspection_points
     } == expected_locations
+
+
+def test_task3_resolves_versioned_task0_baseline(tmp_path: Path) -> None:
+    task_settings = settings(tmp_path)
+    storage_root = Path(task_settings.baseline_dir)
+    scan_id = "0123456789abcdef0123456789abcdef"
+    scan_root = storage_root / "runs" / scan_id
+    task_settings.baseline_dir = str(scan_root)
+    create_baselines(task_settings)
+    task_settings.baseline_dir = str(storage_root)
+    (scan_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "scan_id": scan_id,
+                "complete": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (storage_root / "current.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "scan_id": scan_id,
+                "run_directory": f"runs/{scan_id}",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert Task3Orchestrator(task_settings, object()).baselines_ready()

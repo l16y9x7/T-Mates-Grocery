@@ -44,6 +44,7 @@ class Task0Mock:
         self.requests: list[httpx.Request] = []
         self.capture_number = 0
         self.invalid_capture = False
+        self.invalid_capture_number: int | None = None
         self.head_depth_online = True
 
     @property
@@ -77,9 +78,12 @@ class Task0Mock:
         if request.url.path in {"/navigation/navigate", "/pose/prepare"}:
             return httpx.Response(200, json={"status": "SUCCEEDED", "executed": True})
         if request.url.path == "/camera/rgbd":
-            if self.invalid_capture:
-                return httpx.Response(200, content=b"not-a-zip")
             self.capture_number += 1
+            if (
+                self.invalid_capture
+                or self.capture_number == self.invalid_capture_number
+            ):
+                return httpx.Response(200, content=b"not-a-zip")
             return httpx.Response(
                 200,
                 content=rgbd_archive(f"capture-{self.capture_number}"),
@@ -127,7 +131,7 @@ async def test_task0_captures_upper_and_lower_at_configured_points(tmp_path: Pat
 
     assert result.status == "SUCCEEDED"
     assert result.inspection_points == ["POINT_TOP", "POINT_BOTTOM"]
-    assert [capture.directory.rsplit("/", 1)[-1] for capture in result.captures] == [
+    assert [Path(capture.directory).name for capture in result.captures] == [
         "POINT_TOP_UPPER",
         "POINT_TOP_LOWER",
         "POINT_BOTTOM_LOWER",
@@ -188,6 +192,16 @@ async def test_task0_captures_upper_and_lower_at_configured_points(tmp_path: Pat
         assert Path(capture.rgb_path).is_file()
         assert Path(capture.depth_path).read_bytes().startswith(b"\x93NUMPY")
 
+    manifest = json.loads(Path(result.manifest_path).read_text(encoding="utf-8"))
+    pointer = json.loads(
+        (Path(task_settings.output_dir) / "current.json").read_text(encoding="utf-8")
+    )
+    assert manifest["scan_id"] == result.scan_id
+    assert manifest["complete"] is True
+    assert manifest["capture_count"] == 4
+    assert pointer["scan_id"] == result.scan_id
+    assert pointer["run_directory"] == f"runs/{result.scan_id}"
+
     log_directories = list((tmp_path / "logs").iterdir())
     assert len(log_directories) == 1
     events = [
@@ -225,23 +239,49 @@ async def test_task0_waits_before_every_capture(monkeypatch, tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_task0_replaces_same_point_pose_directory(tmp_path: Path) -> None:
+async def test_task0_publishes_new_immutable_scan_generation(tmp_path: Path) -> None:
     mock = Task0Mock()
     task_settings = settings(tmp_path, ["POINT_ONE"])
     client = Task0Client(task_settings, transport=mock.transport)
     orchestrator = Task0Orchestrator(task_settings, client)
     async with client:
-        await orchestrator.run(Task0Request(), "first")
-        upper = Path(task_settings.output_dir) / "POINT_ONE_UPPER"
-        (upper / "stale.txt").write_text("old", encoding="utf-8")
-        first_meta = (upper / "meta.json").read_text(encoding="utf-8")
-        await orchestrator.run(Task0Request(), "second")
+        first = await orchestrator.run(Task0Request(), "first")
+        first_upper = Path(first.captures[0].directory)
+        first_meta = (first_upper / "meta.json").read_text(encoding="utf-8")
+        second = await orchestrator.run(Task0Request(), "second")
 
-    assert not (upper / "stale.txt").exists()
-    assert (upper / "meta.json").read_text(encoding="utf-8") != first_meta
-    assert json.loads((upper / "meta.json").read_text(encoding="utf-8"))["marker"] == (
-        "capture-3"
+    second_upper = Path(second.captures[0].directory)
+    assert first.scan_id != second.scan_id
+    assert first_upper.is_dir()
+    assert (first_upper / "meta.json").read_text(encoding="utf-8") == first_meta
+    second_metadata = json.loads(
+        (second_upper / "meta.json").read_text(encoding="utf-8")
     )
+    assert second_metadata["marker"] == "capture-3"
+    pointer = json.loads(
+        (Path(task_settings.output_dir) / "current.json").read_text(encoding="utf-8")
+    )
+    assert pointer["scan_id"] == second.scan_id
+
+
+@pytest.mark.asyncio
+async def test_partial_scan_does_not_replace_published_generation(tmp_path: Path) -> None:
+    mock = Task0Mock()
+    task_settings = settings(tmp_path, ["POINT_ONE"])
+    client = Task0Client(task_settings, transport=mock.transport)
+    orchestrator = Task0Orchestrator(task_settings, client)
+    async with client:
+        first = await orchestrator.run(Task0Request(), "first")
+        mock.invalid_capture_number = mock.capture_number + 2
+        with pytest.raises(Task0ServiceError):
+            await orchestrator.run(Task0Request(), "partial")
+
+    pointer = json.loads(
+        (Path(task_settings.output_dir) / "current.json").read_text(encoding="utf-8")
+    )
+    assert pointer["scan_id"] == first.scan_id
+    runs_root = Path(task_settings.output_dir) / "runs"
+    assert not any(path.name.startswith(".staging-") for path in runs_root.iterdir())
 
 
 @pytest.mark.asyncio
@@ -260,6 +300,7 @@ async def test_invalid_archive_does_not_replace_existing_capture(tmp_path: Path)
     assert error.value.code == "INVALID_CAMERA_RESPONSE"
     assert error.value.step == "采集 POINT_ONE UPPER RGB-D"
     assert (upper / "sentinel.txt").read_text(encoding="utf-8") == "keep"
+    assert not (Path(task_settings.output_dir) / "current.json").exists()
 
 
 @pytest.mark.asyncio

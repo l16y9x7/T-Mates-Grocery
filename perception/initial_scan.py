@@ -21,6 +21,8 @@ DEFAULT_SLOT_MAPPING_PATH = (
 )
 INITIAL_SCAN_ROOT_ENVIRONMENT = "INITIAL_SCAN_ROOT"
 SLOT_MAPPING_ENVIRONMENT = "PRODUCT_HAND_OPTIONS_PATH"
+CURRENT_SCAN_POINTER_NAME = "current.json"
+CURRENT_SCAN_SCHEMA_VERSION = "1.0"
 
 SLOT_PATTERN = re.compile(r"^H[1-3]_L0?(?P<level>[1-5])_C\d{2}$")
 INSPECTION_TARGET_PATTERN = re.compile(r"^H(?:1|12|2|23|3)_INSPECT$")
@@ -46,9 +48,67 @@ class InitialScan:
     metadata: dict[str, Any]
 
 
+def _resolve_published_scan_root(storage_root: Path) -> Path:
+    pointer_path = storage_root / CURRENT_SCAN_POINTER_NAME
+    if not pointer_path.is_file():
+        return storage_root
+
+    try:
+        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise InitialScanError(
+            f"cannot read current Task0 scan pointer: {pointer_path}: {error}"
+        ) from error
+    if not isinstance(pointer, dict):
+        raise InitialScanError(
+            f"current Task0 scan pointer must be an object: {pointer_path}"
+        )
+    if pointer.get("schema_version") != CURRENT_SCAN_SCHEMA_VERSION:
+        raise InitialScanError(
+            f"unsupported current Task0 scan pointer: {pointer_path}"
+        )
+
+    scan_id = pointer.get("scan_id")
+    run_directory = pointer.get("run_directory")
+    if not isinstance(scan_id, str) or not scan_id:
+        raise InitialScanError(
+            f"current Task0 scan pointer has no scan_id: {pointer_path}"
+        )
+    if run_directory != f"runs/{scan_id}":
+        raise InitialScanError(
+            f"current Task0 scan directory does not match scan_id: {pointer_path}"
+        )
+
+    scan_root = (storage_root / Path(run_directory)).resolve()
+    runs_root = (storage_root / "runs").resolve()
+    if scan_root.parent != runs_root or not scan_root.is_dir():
+        raise InitialScanError(f"current Task0 scan directory is invalid: {scan_root}")
+
+    manifest_path = scan_root / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise InitialScanError(
+            f"cannot read current Task0 scan manifest: {manifest_path}: {error}"
+        ) from error
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != CURRENT_SCAN_SCHEMA_VERSION
+        or manifest.get("scan_id") != scan_id
+        or manifest.get("complete") is not True
+    ):
+        raise InitialScanError(
+            f"current Task0 scan manifest is invalid: {manifest_path}"
+        )
+    return scan_root
+
+
 def initial_scan_root() -> Path:
     configured = os.getenv(INITIAL_SCAN_ROOT_ENVIRONMENT, "").strip()
-    return Path(configured).expanduser() if configured else DEFAULT_INITIAL_SCAN_ROOT
+    storage_root = (
+        Path(configured).expanduser() if configured else DEFAULT_INITIAL_SCAN_ROOT
+    )
+    return _resolve_published_scan_root(storage_root)
 
 
 def slot_mapping_path() -> Path:
@@ -133,7 +193,11 @@ def resolve_initial_scan_directory(
     target_id = resolve_inspection_target_id(location_id, mapping_path=mapping_path)
     normalized_pose = normalize_scan_pose(pose_type, location_id)
     pose_suffix = "UPPER" if normalized_pose == "SHELF_VIEW_UPPER" else "LOWER"
-    scan_root = Path(root) if root is not None else initial_scan_root()
+    scan_root = (
+        _resolve_published_scan_root(Path(root))
+        if root is not None
+        else initial_scan_root()
+    )
     directory = scan_root / f"{target_id}_{pose_suffix}"
     return directory, target_id, normalized_pose
 

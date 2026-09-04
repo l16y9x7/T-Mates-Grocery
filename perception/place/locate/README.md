@@ -8,7 +8,7 @@ baseline/current SAM3 前排槽位对比，不再使用旧版 RGB-D 配准结果
 ## 当前接口契约
 
 `/perception/inspect` 负责判断异常货架与商品名称；本接口固定从
-`agent/output/task0` 读取正常场景 RGB-D，并像 `/perception/inspect` 一样从头部相机
+`agent/output/task0/current.json` 指向的完整扫描读取正常场景 RGB-D，并像 `/perception/inspect` 一样从头部相机
 获取当前场景 RGB-D。Task0 用于确定目标槽位；输入 `product_name` 只执行目标所在货架层，
 但该层全部 SAM3 配置组都会参与邻居选择。最终返回的参照物 bbox/mask 均位于当前
 头部相机图像坐标系。
@@ -27,7 +27,7 @@ baseline/current SAM3 前排槽位对比，不再使用旧版 RGB-D 配准结果
 `target_id` 映射到左右巡检点，再与视角组成目录名：
 
 ```text
-agent/output/task0/H1_B_L_INSPECT_LOWER/
+agent/output/task0/runs/<scan_id>/H1_B_L_INSPECT_LOWER/
 ├── rgb.jpg
 ├── depth_mm.npy
 └── meta.json
@@ -60,7 +60,7 @@ distortion_model = plumb_bob
   "bbox": [[210, 220, 300, 650], [440, 220, 530, 650]],
   "mask": ["<当前图同尺寸 PNG base64>", "<当前图同尺寸 PNG base64>"],
   "direction": "both",
-  "image_path": "agent/output/task0/H1_F_L_INSPECT_UPPER/rgb.jpg",
+  "image_path": "agent/output/task0/runs/<scan_id>/H1_F_L_INSPECT_UPPER/rgb.jpg",
   "current_image_path": "place/locate/debug/<record>/current_rgb.jpg",
   "level": "L2"
 }
@@ -149,7 +149,7 @@ row-major 的 `4×4` 数组，平移单位统一为毫米。
 初始扫描由 task0 按巡检点和上下视角保存：
 
 ```text
-agent/output/task0/<inspection_target_id>_<UPPER|LOWER>/
+agent/output/task0/runs/<scan_id>/<inspection_target_id>_<UPPER|LOWER>/
 ├── rgb.jpg
 ├── depth_mm.npy
 └── meta.json

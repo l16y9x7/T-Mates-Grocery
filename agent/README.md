@@ -159,7 +159,8 @@ uv run --frozen python -m test1_service \
 ## 任务说明
 
 - Task0 先到 `start`，再依次巡检五个点；每次拍摄前等待 2 秒，完成后
-  返回 `start`，并将 RGB-D 数据保存到 `output/task0/`。
+  返回 `start`。整轮 RGB-D 先暂存到 `output/task0/runs/<scan_id>/`，10 个视角
+  全部成功后再通过 `output/task0/current.json` 原子发布为当前基准。
 - Task1 从 SKU 服务 `GET /sku/get_all_names` 返回的当前商品池（现为 43 个 SKU）中模拟
   点单两个不同商品；Web 可预览并重新随机，执行时会重新读取目录并复核同一订单。通过
   navigation、pose、pick-place、SKU 四项健康检查后，继续完成 SKU 货位转换、左右手联合

@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
+from task0_service.storage import Task0StorageError, resolve_current_scan_root
 from task3_service.client import Task3Client
 from task3_service.models import (
     FindingContext,
@@ -77,9 +78,13 @@ class Task3Orchestrator:
         return self.baselines_ready() and await self.client.health_ready()
 
     def baselines_ready(self) -> bool:
+        try:
+            baseline_root = self._baseline_root()
+        except Task0StorageError:
+            return False
         return all(
-            self._baseline_path(point, pose).is_file()
-            and self._baseline_path(point, pose).stat().st_size > 0
+            self._baseline_path(point, pose, baseline_root).is_file()
+            and self._baseline_path(point, pose, baseline_root).stat().st_size > 0
             for point in self.settings.inspection_points
             for pose in (InspectionPose.UPPER, InspectionPose.LOWER)
         )
@@ -919,22 +924,36 @@ class Task3Orchestrator:
         await self.client.navigate(target_id, idempotency_key)
         navigation_state["target_id"] = target_id
 
+    def _baseline_root(self) -> Path:
+        return resolve_current_scan_root(self.settings.baseline_dir)
+
     def _baseline_path(
-        self, point: InspectionPoint, pose: InspectionPose
+        self,
+        point: InspectionPoint,
+        pose: InspectionPose,
+        baseline_root: Path | None = None,
     ) -> Path:
         return (
-            Path(self.settings.baseline_dir)
+            (baseline_root or self._baseline_root())
             / f"{point.target_id}_{pose.directory_suffix}"
             / "rgb.jpg"
         )
 
     def _require_baselines(self) -> None:
+        try:
+            baseline_root = self._baseline_root()
+        except Task0StorageError as exc:
+            raise Task3ServiceError(
+                "BASELINE_NOT_READY",
+                f"Task0 baseline publication is invalid: {exc}",
+                status_code=503,
+            ) from exc
         missing = [
-            str(self._baseline_path(point, pose))
+            str(self._baseline_path(point, pose, baseline_root))
             for point in self.settings.inspection_points
             for pose in (InspectionPose.UPPER, InspectionPose.LOWER)
-            if not self._baseline_path(point, pose).is_file()
-            or self._baseline_path(point, pose).stat().st_size == 0
+            if not self._baseline_path(point, pose, baseline_root).is_file()
+            or self._baseline_path(point, pose, baseline_root).stat().st_size == 0
         ]
         if missing:
             raise Task3ServiceError(

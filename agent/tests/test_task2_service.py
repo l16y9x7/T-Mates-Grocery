@@ -449,6 +449,38 @@ async def test_task2_requires_task0_baselines(tmp_path: Path) -> None:
     assert not requests_for(mock, "/perception/inspect")
 
 
+def test_task2_resolves_versioned_task0_baseline(tmp_path: Path) -> None:
+    task_settings = settings(tmp_path)
+    storage_root = Path(task_settings.baseline_dir)
+    scan_id = "0123456789abcdef0123456789abcdef"
+    scan_root = storage_root / "runs" / scan_id
+    task_settings.baseline_dir = str(scan_root)
+    create_baselines(task_settings)
+    task_settings.baseline_dir = str(storage_root)
+    (scan_root / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "scan_id": scan_id,
+                "complete": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (storage_root / "current.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "scan_id": scan_id,
+                "run_directory": f"runs/{scan_id}",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert Task2Orchestrator(task_settings, object()).baselines_ready()
+
+
 def test_task2_production_config_has_its_own_face_order() -> None:
     task_settings = TaskServiceSettings.load(CONFIG_DIR / "runtime.production.yaml")
 

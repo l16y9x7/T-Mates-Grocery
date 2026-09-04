@@ -8,7 +8,6 @@ import logging
 import os
 import re
 import shutil
-import tempfile
 import zipfile
 from datetime import datetime
 from io import BytesIO
@@ -23,6 +22,12 @@ from task0_service.models import (
     Task0Result,
     Task0ServiceError,
     Task0Settings,
+)
+from task0_service.storage import (
+    MANIFEST_NAME,
+    RUNS_DIRECTORY_NAME,
+    STORAGE_SCHEMA_VERSION,
+    publish_current_pointer,
 )
 
 
@@ -39,17 +44,27 @@ class Task0Orchestrator:
         self, request: Task0Request, operation_key: str | None = None
     ) -> Task0Result:
         task_run_id = operation_key or uuid4().hex
+        scan_id = uuid4().hex
         task_log = _Task0Log(self.settings, task_run_id, request)
         self.client.set_trace_callback(task_log.interface_event)
         captures: list[CaptureResult] = []
+        staging_scan_dir: Path | None = None
         total_captures = len(self.settings.inspection_points) * 2
         current_pose: InspectionPose | None = None
         step = "健康检查"
         try:
-            task_log.event("operation", "started", total_captures=total_captures)
+            task_log.event(
+                "operation",
+                "started",
+                scan_id=scan_id,
+                total_captures=total_captures,
+            )
             task_log.event("健康检查", "started")
             await self.client.check_all_health()
             task_log.event("健康检查", "succeeded")
+
+            step = "创建扫描暂存区"
+            staging_scan_dir = self._begin_scan(scan_id)
 
             step = "导航到开始点"
             task_log.event(
@@ -138,7 +153,12 @@ class Task0Orchestrator:
                     )
                     await asyncio.sleep(self.settings.capture_settle_seconds)
                     archive = await self.client.capture_rgbd()
-                    capture = self._store_capture(target_id, pose, archive)
+                    capture = self._store_capture(
+                        target_id,
+                        pose,
+                        archive,
+                        staging_scan_dir,
+                    )
                     captures.append(capture)
                     task_log.event(
                         "RGB-D采集",
@@ -173,15 +193,35 @@ class Task0Orchestrator:
                 target_id=self.settings.start_target_id,
                 phase="finish",
             )
+
+            step = "发布完整基准"
+            captures, manifest_path = self._publish_scan(
+                scan_id=scan_id,
+                task_run_id=task_run_id,
+                staging_scan_dir=staging_scan_dir,
+                captures=captures,
+            )
+            task_log.event(
+                "基准发布",
+                "succeeded",
+                scan_id=scan_id,
+                manifest_path=str(manifest_path),
+                captured_count=len(captures),
+            )
             result = Task0Result(
                 task_run_id=task_run_id,
+                scan_id=scan_id,
                 task_type="PREPARATION",
                 status="SUCCEEDED",
                 inspection_points=list(self.settings.inspection_points),
                 captures=captures,
+                manifest_path=str(manifest_path),
             )
             task_log.event(
-                "operation", "succeeded", captured_count=len(captures)
+                "operation",
+                "succeeded",
+                scan_id=scan_id,
+                captured_count=len(captures),
             )
             return result
         except Exception as exc:
@@ -198,46 +238,46 @@ class Task0Orchestrator:
             raise
         finally:
             self.client.set_trace_callback(None)
+            if staging_scan_dir is not None and staging_scan_dir.exists():
+                _remove_path_best_effort(staging_scan_dir)
+
+    def _begin_scan(self, scan_id: str) -> Path:
+        root = Path(self.settings.output_dir)
+        runs_root = root / RUNS_DIRECTORY_NAME
+        staging_scan_dir = runs_root / f".staging-{scan_id}"
+        try:
+            runs_root.mkdir(parents=True, exist_ok=True)
+            staging_scan_dir.mkdir(parents=False, exist_ok=False)
+        except OSError as exc:
+            raise Task0ServiceError(
+                "STORAGE_ERROR",
+                f"failed to create Task0 scan staging directory: {exc}",
+                status_code=500,
+            ) from exc
+        return staging_scan_dir
 
     def _store_capture(
-        self, target_id: str, pose: InspectionPose, archive: bytes
+        self,
+        target_id: str,
+        pose: InspectionPose,
+        archive: bytes,
+        staging_scan_dir: Path,
     ) -> CaptureResult:
         files = _validate_rgbd_archive(archive, expected_camera=self.settings.camera)
-        root = Path(self.settings.output_dir)
         directory_name = f"{target_id}_{pose.directory_suffix}"
-        target = root / directory_name
-        root.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(prefix=f".{directory_name}-", dir=root))
-        backup: Path | None = None
+        target = staging_scan_dir / directory_name
         try:
+            target.mkdir(parents=False, exist_ok=False)
             for name in REQUIRED_RGBD_FILES:
-                (temporary / name).write_bytes(files[name])
-            if target.exists() or target.is_symlink():
-                backup = root / f".{directory_name}.backup-{uuid4().hex}"
-                os.replace(target, backup)
-            try:
-                os.replace(temporary, target)
-            except Exception:
-                if backup is not None:
-                    os.replace(backup, target)
-                    backup = None
-                raise
-            if backup is not None:
-                _remove_path(backup)
-                backup = None
-        except Task0ServiceError:
-            raise
+                (target / name).write_bytes(files[name])
         except OSError as exc:
+            if target.exists():
+                _remove_path_best_effort(target)
             raise Task0ServiceError(
                 "STORAGE_ERROR",
                 f"failed to store RGB-D capture for {target_id}: {exc}",
                 status_code=500,
             ) from exc
-        finally:
-            if temporary.exists():
-                _remove_path(temporary)
-            if backup is not None and backup.exists() and not target.exists():
-                os.replace(backup, target)
 
         return CaptureResult(
             target_id=target_id,
@@ -247,6 +287,103 @@ class Task0Orchestrator:
             depth_path=str(target / "depth_mm.npy"),
             meta_path=str(target / "meta.json"),
         )
+
+    def _publish_scan(
+        self,
+        *,
+        scan_id: str,
+        task_run_id: str,
+        staging_scan_dir: Path,
+        captures: list[CaptureResult],
+    ) -> tuple[list[CaptureResult], Path]:
+        root = Path(self.settings.output_dir)
+        final_scan_dir = root / RUNS_DIRECTORY_NAME / scan_id
+        expected_captures = {
+            (target_id, pose)
+            for target_id in self.settings.inspection_points
+            for pose in (InspectionPose.UPPER, InspectionPose.LOWER)
+        }
+        actual_captures = {
+            (capture.target_id, capture.pose_type) for capture in captures
+        }
+        if (
+            len(captures) != len(expected_captures)
+            or actual_captures != expected_captures
+        ):
+            raise Task0ServiceError(
+                "INCOMPLETE_SCAN",
+                "Task0 scan cannot be published before every configured view is captured",
+                status_code=500,
+            )
+        completed_at = datetime.now().isoformat(timespec="milliseconds")
+        manifest = {
+            "schema_version": STORAGE_SCHEMA_VERSION,
+            "scan_id": scan_id,
+            "task_run_id": task_run_id,
+            "complete": True,
+            "completed_at": completed_at,
+            "camera": self.settings.camera,
+            "inspection_points": list(self.settings.inspection_points),
+            "capture_count": len(captures),
+            "captures": [
+                {
+                    "target_id": capture.target_id,
+                    "pose_type": capture.pose_type.value,
+                    "directory": Path(capture.directory).name,
+                    "files": {
+                        "rgb": Path(capture.rgb_path).name,
+                        "depth": Path(capture.depth_path).name,
+                        "meta": Path(capture.meta_path).name,
+                    },
+                }
+                for capture in captures
+            ],
+        }
+        published = False
+        try:
+            (staging_scan_dir / MANIFEST_NAME).write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(staging_scan_dir, final_scan_dir)
+            published = True
+            pointer_path = publish_current_pointer(
+                root,
+                {
+                    "schema_version": STORAGE_SCHEMA_VERSION,
+                    "scan_id": scan_id,
+                    "run_directory": f"{RUNS_DIRECTORY_NAME}/{scan_id}",
+                    "manifest": f"{RUNS_DIRECTORY_NAME}/{scan_id}/{MANIFEST_NAME}",
+                    "published_at": completed_at,
+                },
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            if published and final_scan_dir.exists():
+                _remove_path_best_effort(final_scan_dir)
+            raise Task0ServiceError(
+                "STORAGE_ERROR",
+                f"failed to publish complete Task0 scan: {exc}",
+                status_code=500,
+            ) from exc
+
+        published_captures = [
+            CaptureResult(
+                target_id=capture.target_id,
+                pose_type=capture.pose_type,
+                directory=str(final_scan_dir / Path(capture.directory).name),
+                rgb_path=str(
+                    final_scan_dir / Path(capture.directory).name / "rgb.jpg"
+                ),
+                depth_path=str(
+                    final_scan_dir / Path(capture.directory).name / "depth_mm.npy"
+                ),
+                meta_path=str(
+                    final_scan_dir / Path(capture.directory).name / "meta.json"
+                ),
+            )
+            for capture in captures
+        ]
+        return published_captures, final_scan_dir / MANIFEST_NAME
 
 
 def _validate_rgbd_archive(
@@ -315,6 +452,13 @@ def _remove_path(path: Path) -> None:
         path.unlink(missing_ok=True)
     elif path.exists():
         shutil.rmtree(path)
+
+
+def _remove_path_best_effort(path: Path) -> None:
+    try:
+        _remove_path(path)
+    except OSError:
+        LOGGER.exception("failed to clean Task0 storage path=%s", path)
 
 
 class _Task0Log:

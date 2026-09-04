@@ -29,9 +29,10 @@ Content-Type: application/json
 - `pose_type` 必填，支持 `""`、`SHELF_VIEW_UPPER` 和 `SHELF_VIEW_LOWER`，与
   `location_id` 一起用于查询当前画面候选 SKU。
 - `reference_item_area` 可省略。
-- HTTP 接口不接收 RGB 或深度字段。初始 RGB-D 固定读取
-  `agent/output/task0/<location_id>_UPPER|LOWER/`；当前 RGB-D 从 head camera
-  快照接口获取。
+- HTTP 接口不接收 RGB 或深度字段。初始 RGB-D 根据
+  `agent/output/task0/current.json` 读取
+  `agent/output/task0/runs/<scan_id>/<location_id>_UPPER|LOWER/`；尚无指针时兼容
+  旧的平铺目录。当前 RGB-D 从 head camera 快照接口获取。
 - 当前帧会先保存为临时目录中的 `rgb.jpg`、`depth_mm.npy` 和 `meta.json`。可通过
   `INSPECT_TEMP_DIR` 指定临时目录根路径；请求结束后自动清理。正式 SHORTAGE 的
   baseline/current RGB-D 和槽位诊断结果会另外持久化到

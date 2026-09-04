@@ -200,11 +200,12 @@ POST 127.0.0.1:8108/tasks/0/run {}
        奇数点：SHELF_VIEW_UPPER -> 等待 2 秒 -> 拍摄 -> SHELF_VIEW_LOWER -> 等待 2 秒 -> 拍摄
        偶数点：复用 SHELF_VIEW_LOWER -> 等待 2 秒 -> 拍摄 -> SHELF_VIEW_UPPER -> 等待 2 秒 -> 拍摄
   -> POST <robot_ip>:8081/navigation/navigate {"target_id":"start"}
-  -> 原子替换 output/task0/<巡检点>_<UPPER|LOWER>/ 下的三项数据
+  -> 将整轮数据发布到 output/task0/runs/<scan_id>/，写入 manifest.json
+  -> 原子替换 output/task0/current.json，使其指向新的完整基准
   <- Task0 SUCCEEDED
 ```
 
-相邻点的首个姿态与上一点末姿态相同时不会重复调用 `/pose/prepare`。每个 ZIP 必须包含非空 `rgb.jpg`、NumPy 格式 `depth_mm.npy` 和 JSON 对象 `meta.json`；无效的新数据不会覆盖已有基准。
+相邻点的首个姿态与上一点末姿态相同时不会重复调用 `/pose/prepare`。每个 ZIP 必须包含非空 `rgb.jpg`、NumPy 格式 `depth_mm.npy` 和 JSON 对象 `meta.json`；任一采集或返回起点失败时会删除本轮暂存数据，`current.json` 继续指向上一份完整基准。尚未生成 `current.json` 时仍兼容旧的平铺目录。
 
 ## 8. Task1 调用顺序
 
@@ -279,7 +280,7 @@ POST 127.0.0.1:8108/tasks/2/run {}
        GET <robot_ip>:8085/camera/health
        GET <robot_ip>:8085/camera/list
        GET 127.0.0.1:8086/health
-       检查 output/task0 下五点 × UPPER/LOWER 的 RGB、depth、meta 三件套
+       根据 output/task0/current.json 检查当前 scan_id 下五点 × UPPER/LOWER 的 RGB、depth、meta 三件套
   -> 对 H1/H12/H2/H23/H3 分别执行 UPPER、LOWER 位姿和 perception/inspect
   -> 按 slot_id 去重，并从 YAML 的 (target_id, hand) 绑定中规划补货批次
   -> 对每个批次：
@@ -338,7 +339,7 @@ Task3 的两件交换商品使用不同手。抓取明确执行失败时可按�
 
 #### `POST /tasks/0/run`
 
-请求体为 `{}`，支持可选 `Idempotency-Key`。流程先导航到 `start`，按 UPPER/LOWER 蛇形顺序采集并在每次拍摄前等待 2 秒，完成后返回 `start`。成功响应包含全部 16 项采集结果及其 `rgb_path`、`depth_path`、`meta_path`；同一进程已有任务时返回 HTTP `409 TASK_IN_PROGRESS`。
+请求体为 `{}`，支持可选 `Idempotency-Key`。流程先导航到 `start`，按 UPPER/LOWER 蛇形顺序采集并在每次拍摄前等待 2 秒，完成后返回 `start`。成功响应包含本轮 `scan_id`、`manifest_path`，以及全部 10 项采集结果及其 `rgb_path`、`depth_path`、`meta_path`；同一进程已有任务时返回 HTTP `409 TASK_IN_PROGRESS`。
 
 #### `GET /health`
 

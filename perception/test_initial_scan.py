@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from initial_scan import (
     InitialScanError,
@@ -53,6 +56,43 @@ class InitialScanTest(unittest.TestCase):
         )
 
         self.assertEqual(directory.name, "H2_INSPECT_UPPER")
+        self.assertEqual(target, "H2_INSPECT")
+        self.assertEqual(pose, "SHELF_VIEW_UPPER")
+
+    def test_versioned_task0_pointer_selects_complete_scan(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            scan_id = "0123456789abcdef0123456789abcdef"
+            scan_root = root / "runs" / scan_id
+            scan_root.mkdir(parents=True)
+            (scan_root / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "scan_id": scan_id,
+                        "complete": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "current.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "1.0",
+                        "scan_id": scan_id,
+                        "run_directory": f"runs/{scan_id}",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            directory, target, pose = resolve_initial_scan_directory(
+                "H2_INSPECT",
+                "UPPER",
+                root=root,
+            )
+
+        self.assertEqual(directory, scan_root / "H2_INSPECT_UPPER")
         self.assertEqual(target, "H2_INSPECT")
         self.assertEqual(pose, "SHELF_VIEW_UPPER")
 

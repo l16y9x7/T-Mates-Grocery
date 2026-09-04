@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from pick_place_service.models import normalize_product_name
+from task0_service.storage import Task0StorageError, resolve_current_scan_root
 from task2_service.client import Task2Client
 from task2_service.models import (
     Hand,
@@ -66,11 +67,15 @@ class Task2Orchestrator:
         return self.baselines_ready() and await self.client.health_ready()
 
     def baselines_ready(self) -> bool:
+        try:
+            baseline_root = self._baseline_root()
+        except Task0StorageError:
+            return False
         return all(
             path.is_file() and path.stat().st_size > 0
             for target_id in self.settings.inspection_points
             for pose in (InspectionPose.UPPER, InspectionPose.LOWER)
-            for path in self._baseline_files(target_id, pose)
+            for path in self._baseline_files(target_id, pose, baseline_root)
         )
 
     async def run(
@@ -1344,17 +1349,28 @@ class Task2Orchestrator:
         await self.client.navigate(target_id, idempotency_key)
         navigation_state["target_id"] = target_id
 
-    def _baseline_path(self, target_id: str, pose: InspectionPose) -> Path:
+    def _baseline_root(self) -> Path:
+        return resolve_current_scan_root(self.settings.baseline_dir)
+
+    def _baseline_path(
+        self,
+        target_id: str,
+        pose: InspectionPose,
+        baseline_root: Path | None = None,
+    ) -> Path:
         return (
-            Path(self.settings.baseline_dir)
+            (baseline_root or self._baseline_root())
             / f"{target_id}_{pose.directory_suffix}"
             / "rgb.jpg"
         )
 
     def _baseline_files(
-        self, target_id: str, pose: InspectionPose
+        self,
+        target_id: str,
+        pose: InspectionPose,
+        baseline_root: Path | None = None,
     ) -> tuple[Path, Path, Path]:
-        directory = self._baseline_path(target_id, pose).parent
+        directory = self._baseline_path(target_id, pose, baseline_root).parent
         return (
             directory / "rgb.jpg",
             directory / "depth_mm.npy",
@@ -1362,11 +1378,19 @@ class Task2Orchestrator:
         )
 
     def _require_baselines(self) -> None:
+        try:
+            baseline_root = self._baseline_root()
+        except Task0StorageError as exc:
+            raise Task2ServiceError(
+                "BASELINE_NOT_READY",
+                f"Task0 baseline publication is invalid: {exc}",
+                status_code=503,
+            ) from exc
         missing = [
             str(path)
             for target_id in self.settings.inspection_points
             for pose in (InspectionPose.UPPER, InspectionPose.LOWER)
-            for path in self._baseline_files(target_id, pose)
+            for path in self._baseline_files(target_id, pose, baseline_root)
             if not path.is_file() or path.stat().st_size == 0
         ]
         if missing:

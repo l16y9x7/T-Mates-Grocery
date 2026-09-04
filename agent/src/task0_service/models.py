@@ -150,10 +150,12 @@ class Task0Result(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_run_id: str
+    scan_id: str
     task_type: Literal["PREPARATION"]
     status: Literal["SUCCEEDED"]
     inspection_points: list[str]
     captures: list[CaptureResult]
+    manifest_path: str
 
 
 class Task0ServiceError(Exception):
