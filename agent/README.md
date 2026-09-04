@@ -13,6 +13,7 @@ Task0、Task1、Task2、Task3 由同一个 FastAPI 进程提供，旧的主 Agen
 | `scripts/setup.sh` | `scripts/setup.sh` | 按锁文件安装 Python 依赖 |
 | `scripts/pick-place.sh` | `scripts/pick-place.sh {start\|stop\|restart}` | 启动/停止 8086 取放编排服务 |
 | `scripts/tasks.sh` | `scripts/tasks.sh {start\|stop\|restart}` | 启动/停止 8108 统一任务服务（含 Web） |
+| `scripts/mock-external.sh` | `scripts/mock-external.sh {start\|stop\|restart}` | 启动/停止 8109 外部接口完整流程 Mock |
 | `scripts/services.sh` | `scripts/services.sh {start\|stop\|restart} [机器人IP]` | 使用指定机器人地址统一控制两个服务 |
 | `scripts/health-check.sh` | `scripts/health-check.sh [机器人IP]` | 检查本地服务、机器人及依赖健康状态 |
 | `scripts/run-task.sh` | `scripts/run-task.sh [--ensure-services] {0\|1\|2\|3\|health}` | 终端启动 Task0-3，或查询健康状态；加 `--ensure-services` 时若服务未就绪会先拉起 pick-place 和统一任务服务 |
@@ -50,8 +51,31 @@ scripts/setup.sh
 `POST /api/external/v1/tasks/2/runs` 和
 `GET /api/external/v1/tasks/{task_run_id}/status`。三个触发接口需要
 `Idempotency-Key`，成功返回 `202 Accepted`，任务进度通过配置的 HTTPS 回调地址上报。
-外部接口配置位于 `config/runtime.production.yaml` 的 `external` 节；按请求传入的
-回调地址必须同时配置 `callback_allowed_hosts` 白名单。
+外部接口配置位于 `config/runtime.production.yaml` 的 `external` 节；回调地址可以使用
+配置中的默认地址，也可以在请求中传入 `status_callback_url`。
+
+用于和其他后端联调时，可单独启动外部接口 Mock：
+
+```bash
+scripts/mock-external.sh start
+```
+
+Mock 默认监听 `0.0.0.0:8109`，接口路径和返回结构与外部接口设计文档一致。触发任务后
+立即返回 `202 Accepted`，再按完整 Task0、Task1、Task2 流程异步向请求中的
+`status_callback_url` 回调；未传时使用 `config/runtime.mock.yaml` 中的默认地址。
+
+完整流程的阶段顺序与文档一致：Task0 为 `ACCEPTED`、`HEALTH_CHECKING`、
+`NAVIGATING_TO_START`、逐货架 `INSPECTING`、逐视角 `CAPTURING`、
+`RETURNING_TO_START`、`SUCCEEDED`；Task1 为 `ACCEPTED`、`HEALTH_CHECKING`、
+`ORDER_CONFIRMED`、`RESOLVING_PRODUCTS`、`PLANNING`、逐商品
+`NAVIGATING_TO_SHELF`/`PICKING`、`NAVIGATING_TO_DELIVERY`、逐商品 `PLACING`、
+`FINISHING`、`SUCCEEDED`；Task2 为 `ACCEPTED`、`HEALTH_CHECKING`、
+逐货架 `INSPECTING_SHELF`、`IDENTIFYING_SHORTAGE`、`PLANNING_REPLENISHMENT`、
+`NAVIGATING_TO_REPLENISHMENT`、`PICKING_REPLENISHMENT`、`NAVIGATING_TO_SHELF`、
+逐商品 `PLACING_REPLENISHMENT`、`FINISHING`、`SUCCEEDED`。
+
+Mock 的默认阶段间隔为 1 秒，可在 `config/runtime.mock.yaml` 调整。Mock 不连接真实机器人、
+感知、SKU 或 pick-place 服务，任务状态只保存在进程内存中。
 
 Task0、Task2、Task3 的请求体为 `{}`。Task1 也可用 `{}` 让服务端从当前 SKU 商品池
 随机生成订单；Web 会先调用 `POST /api/task1/mock-order` 展示两件不同商品，允许重新随机，

@@ -47,7 +47,7 @@ async def test_external_task1_is_accepted_and_converted_to_internal_order() -> N
 
 
 @pytest.mark.asyncio
-async def test_external_requires_idempotency_key_and_rejects_untrusted_callback() -> None:
+async def test_external_requires_idempotency_key_and_accepts_callback_url() -> None:
     app = app_for()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://tasks.local"
@@ -55,7 +55,7 @@ async def test_external_requires_idempotency_key_and_rejects_untrusted_callback(
         missing_key = await client.post(
             "/api/external/v1/tasks/0/runs", json={"external_task_id": "prep-1"}
         )
-        untrusted_callback = await client.post(
+        callback_request = await client.post(
             "/api/external/v1/tasks/0/runs",
             headers={"Idempotency-Key": "prep-key"},
             json={
@@ -65,8 +65,7 @@ async def test_external_requires_idempotency_key_and_rejects_untrusted_callback(
         )
 
     assert missing_key.status_code == 400
-    assert untrusted_callback.status_code == 422
-    assert untrusted_callback.json()["error_code"] == "CALLBACK_URL_NOT_ALLOWED"
+    assert callback_request.status_code == 202
 
 
 @pytest.mark.asyncio

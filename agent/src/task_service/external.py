@@ -548,11 +548,6 @@ class ExternalTaskService:
         parsed = urlparse(value)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
             raise TaskServiceError("INVALID_CALLBACK_URL", "status_callback_url 必须是合法的 HTTP(S) 地址", status_code=422)
-        allowed = {host.lower() for host in self.settings.callback_allowed_hosts}
-        if requested and not allowed:
-            raise TaskServiceError("CALLBACK_URL_NOT_ALLOWED", "按请求传入的回调地址必须配置白名单", status_code=422)
-        if allowed and parsed.hostname.lower() not in allowed:
-            raise TaskServiceError("CALLBACK_URL_NOT_ALLOWED", "status_callback_url 不在允许的回调地址白名单中", status_code=422)
         return value
 
     def _authorize(self, authorization: str | None) -> None:

@@ -62,7 +62,6 @@ class ExternalServiceSettings(BaseModel):
     access_token: str | None = None
     callback_url: str | None = None
     callback_access_token: str | None = None
-    callback_allowed_hosts: list[str] = Field(default_factory=list)
     request_timeout_seconds: float = Field(gt=0, default=5)
     heartbeat_seconds: float = Field(gt=0, default=5)
     max_retries: int = Field(ge=0, default=3)

@@ -100,8 +100,6 @@ external:
   access_token: null
   callback_url: http://192.168.200.65:8765/api/callback
   callback_access_token: null
-  callback_allowed_hosts: 
-  - 192.168.200.65
   request_timeout_seconds: 5
   heartbeat_seconds: 5
   max_retries: 3

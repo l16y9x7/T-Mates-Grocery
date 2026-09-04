@@ -1,0 +1,16 @@
+mock_external:
+  host: 0.0.0.0
+  port: 8109
+  access_token: null
+  callback_url: null
+  callback_access_token: null
+  stage_delay_seconds: 1
+  request_timeout_seconds: 5
+  max_retries: 5
+  retry_backoff_seconds: 1
+  inspection_points:
+    - H1_INSPECT
+    - H12_INSPECT
+    - H2_INSPECT
+    - H23_INSPECT
+    - H3_INSPECT
