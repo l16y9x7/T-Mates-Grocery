@@ -157,19 +157,8 @@ class Task2Settings(BaseModel):
             raise ValueError("inspection_points must not contain empty values")
         if len(set(self.inspection_points)) != len(self.inspection_points):
             raise ValueError("inspection_points must not contain duplicates")
-        invalid_targets = sorted(
-            {
-                grasp.target_id
-                for option in self.product_hand_options.values()
-                for grasp in option.grasp_options
-                if grasp.target_id not in self.inspection_points
-            }
-        )
-        if invalid_targets:
-            raise ValueError(
-                "product hand options contain unknown inspection targets: "
-                + ", ".join(invalid_targets)
-            )
+        # 巡检点与抓取点是两套能力：巡检只走正对三个货架的点位，
+        # 商品抓放仍可使用 H12/H23 等连接处点位，不能要求二者完全相同。
         mapped_targets = {
             grasp.target_id
             for option in self.product_hand_options.values()

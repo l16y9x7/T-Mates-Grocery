@@ -23,9 +23,7 @@ class MockExternalSettings(BaseModel):
     inspection_points: list[str] = Field(
         default_factory=lambda: [
             "H1_INSPECT",
-            "H12_INSPECT",
             "H2_INSPECT",
-            "H23_INSPECT",
             "H3_INSPECT",
         ],
         min_length=1,
@@ -47,4 +45,3 @@ class MockExternalSettings(BaseModel):
         if not isinstance(section, dict):
             raise RuntimeError("mock_external config must be a YAML object")
         return cls.model_validate(section)
-

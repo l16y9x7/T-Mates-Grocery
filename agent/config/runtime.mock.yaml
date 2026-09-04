@@ -10,7 +10,5 @@ mock_external:
   retry_backoff_seconds: 1
   inspection_points:
     - H1_INSPECT
-    - H12_INSPECT
     - H2_INSPECT
-    - H23_INSPECT
     - H3_INSPECT

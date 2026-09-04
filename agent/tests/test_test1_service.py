@@ -264,7 +264,11 @@ def test_test1_loads_production_configuration() -> None:
 
     assert production.start_target_id == "start"
     assert production.capture_settle_seconds == 2
-    assert len(production.inspection_points) == 8
+    assert production.inspection_points == [
+        "H1_INSPECT",
+        "H2_INSPECT",
+        "H3_INSPECT",
+    ]
     assert production.services.navigation == "http://192.168.200.66:8081"
     assert production.services.pose == "http://192.168.200.66:8084"
     assert production.services.camera == "http://192.168.200.66:8085"

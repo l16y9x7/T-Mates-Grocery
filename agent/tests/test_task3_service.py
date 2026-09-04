@@ -455,20 +455,15 @@ def test_task3_production_config_uses_task0_baselines_and_port_inputs() -> None:
         CONFIG_DIR / "runtime.production.yaml"
     ).tasks.task3
 
-    assert len(task_settings.inspection_points) == 8
+    assert len(task_settings.inspection_points) == 3
     assert Path(task_settings.baseline_dir) == CONFIG_DIR.parent / "output" / "task0"
     assert task_settings.camera == "head"
     assert task_settings.services.perception == "http://127.0.0.1:8083"
     assert task_settings.services.camera.endswith(":8085")
     expected_locations = {
-        "H1_F_L_INSPECT": "H1_F_L1_C01",
-        "H1_F_R_INSPECT": "H1_F_L1_C04",
-        "H1_B_L_INSPECT": "H1_B_L1_C01",
-        "H1_B_R_INSPECT": "H1_B_L1_C04",
-        "H2_F_L_INSPECT": "H2_F_L1_C01",
-        "H2_F_R_INSPECT": "H2_F_L1_C04",
-        "H2_B_L_INSPECT": "H2_B_L1_C01",
-        "H2_B_R_INSPECT": "H2_B_L1_C04",
+        "H1_INSPECT": "H1_L01_C01",
+        "H2_INSPECT": "H2_L01_C01",
+        "H3_INSPECT": "H3_L01_C01",
     }
     assert {
         point.target_id: point.location_id for point in task_settings.inspection_points

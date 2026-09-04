@@ -481,19 +481,25 @@ def test_task2_resolves_versioned_task0_baseline(tmp_path: Path) -> None:
     assert Task2Orchestrator(task_settings, object()).baselines_ready()
 
 
-def test_task2_production_config_has_its_own_face_order() -> None:
+def test_task2_production_config_uses_shared_scan_points_and_connector_grasps() -> None:
     task_settings = TaskServiceSettings.load(CONFIG_DIR / "runtime.production.yaml")
 
     assert task_settings.tasks.task2.inspection_points == [
         "H1_INSPECT",
-        "H12_INSPECT",
         "H2_INSPECT",
-        "H23_INSPECT",
         "H3_INSPECT",
     ]
-    assert task_settings.tasks.task0.inspection_points[0] == "H1_INSPECT"
-    assert task_settings.tasks.task3.inspection_points[0].target_id == "H1_INSPECT"
+    assert task_settings.tasks.task0.inspection_points == task_settings.tasks.task2.inspection_points
+    assert [
+        point.target_id for point in task_settings.tasks.task3.inspection_points
+    ] == task_settings.tasks.task2.inspection_points
     assert task_settings.tasks.task2.product_hand_options_schema_version == "2.0"
+    grasp_targets = {
+        grasp.target_id
+        for option in task_settings.tasks.task2.product_hand_options.values()
+        for grasp in option.grasp_options
+    }
+    assert {"H12_INSPECT", "H23_INSPECT"}.issubset(grasp_targets)
 
 
 @pytest.mark.asyncio
