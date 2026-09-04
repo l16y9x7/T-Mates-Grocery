@@ -316,7 +316,7 @@
     "sam3_prompt": "frontmost green cup"
   },
   "美年达瓶装": {
-    "qwen3_prompt": "找到图片中货架上的美年达饮料，输出一个大的包含所有美年达的bbox。返回格式：{\"name\": \"美年达饮料堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图片中货架上的橙色美年达饮料，输出一个完整的包含所有橙色美年达的bbox。返回格式：{\"name\": \"美年达饮料堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost orange bottle"
   },
   "脉动猫薄荷瓶": {
