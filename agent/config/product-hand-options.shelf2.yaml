@@ -24,12 +24,12 @@ product_hand_options:
   H2_L04_C01: {product_name: "脉动观梅止渴饮", grasp_options: [{hands: [LEFT], target_id: H2_INSPECT}, {hands: [RIGHT], target_id: H12_INSPECT}]}
   H2_L04_C02: {product_name: "脉动芒果口味", grasp_options: [{hands: [LEFT], target_id: H2_INSPECT}, {hands: [RIGHT], target_id: H12_INSPECT}]}
   H2_L04_C03: {product_name: "脉动菠萝口味", grasp_options: [{hands: [LEFT], target_id: H2_INSPECT}, {hands: [RIGHT], target_id: H12_INSPECT}]}
-  H2_L04_C04: {product_name: "脉动猫薄荷瓶", grasp_options: [{hands: [RIGHT], target_id: H2_INSPECT}, {hands: [LEFT], target_id: H23_INSPECT}]}
+  # H2_L04_C04: {product_name: "脉动猫薄荷瓶", grasp_options: {hands: [LEFT], target_id: H23_INSPECT}}
   H2_L04_C05: {product_name: "尖叫", grasp_options: [{hands: [RIGHT], target_id: H2_INSPECT}, {hands: [LEFT], target_id: H23_INSPECT}]}
   H2_L04_C06: {product_name: "尖叫", grasp_options: [{hands: [RIGHT], target_id: H2_INSPECT}, {hands: [LEFT], target_id: H23_INSPECT}]}
   H2_L05_C01: {product_name: "脉动观梅止渴饮", grasp_options: [{hands: [LEFT], target_id: H2_INSPECT}, {hands: [RIGHT], target_id: H12_INSPECT}]}
   H2_L05_C02: {product_name: "脉动芒果口味", grasp_options: [{hands: [LEFT], target_id: H2_INSPECT}, {hands: [RIGHT], target_id: H12_INSPECT}]}
-  H2_L05_C03: {product_name: "尖叫", grasp_options: [{hands: [LEFT], target_id: H2_INSPECT}, {hands: [RIGHT], target_id: H12_INSPECT}]}
+  H2_L05_C03: {product_name: "尖叫", grasp_options: [{hands: [LEFT], target_id: H23_INSPECT}, {hands: [RIGHT], target_id: H12_INSPECT}]}
   H2_L05_C04: {product_name: "尖叫", grasp_options: [{hands: [RIGHT], target_id: H2_INSPECT}, {hands: [LEFT], target_id: H23_INSPECT}]}
   H2_L05_C05: {product_name: "水溶C100瓶装", grasp_options: [{hands: [RIGHT], target_id: H2_INSPECT}, {hands: [LEFT], target_id: H23_INSPECT}]}
   H2_L05_C06: {product_name: "水溶C100瓶装", grasp_options: [{hands: [RIGHT], target_id: H2_INSPECT}, {hands: [LEFT], target_id: H23_INSPECT}]}
