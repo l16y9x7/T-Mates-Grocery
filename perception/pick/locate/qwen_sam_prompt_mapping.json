@@ -412,7 +412,7 @@
     "sam3_prompt": "frontmost bottle"
   },
   "雪碧罐装": {
-    "qwen3_prompt": "找到图中货架上所有的绿色雪碧瓶，返回一个完整包含所有雪碧瓶的大bbox。最终返回格式：{\"name\": \"雪碧瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
+    "qwen3_prompt": "找到图中货架上所有的绿色雪碧易拉罐，返回一个完整包含所有雪碧易拉罐瓶的大bbox。最终返回格式：{\"name\": \"雪碧易拉罐瓶堆\", \"bbox\": [x1, y1, x2, y2]}",
     "sam3_prompt": "frontmost green can"
   },
   "高纤七色糙米": {
