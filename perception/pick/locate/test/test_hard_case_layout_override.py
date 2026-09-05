@@ -44,7 +44,7 @@ class SlotHardCaseViewTest(unittest.TestCase):
             "locations": ["H2_L03_C03"],
         }
 
-    def run_ordering(self, target_id: str, hand: str):
+    def run_ordering(self, target_id: str, hand: str, *, image_width: int | None = None):
         with (
             patch(
                 "pick.locate.main.split_instances_into_display_groups",
@@ -60,6 +60,7 @@ class SlotHardCaseViewTest(unittest.TestCase):
                 hand=hand,
                 slot_id="H2_L03_C03",
                 target_id=target_id,
+                image_width=image_width,
             )
 
     def assert_exact_slot_mapping(self, target_id: str, hand: str) -> None:
@@ -94,6 +95,74 @@ class SlotHardCaseViewTest(unittest.TestCase):
             self.run_ordering("H12_INSPECT", "right")
         self.assertEqual(context.exception.status_code, 422)
         self.assertIn("检测列数", str(context.exception.detail))
+
+    def test_excess_truncated_left_or_right_column_is_removed_before_mapping(self) -> None:
+        complete_columns = self.columns
+        for side, bbox in (
+            ("left", [0, 100, 20, 400]),
+            ("right", [620, 100, 640, 400]),
+        ):
+            with self.subTest(side=side):
+                edge_column = [LocatedInstance(bbox=bbox, mask="", score=0.9)]
+                self.columns = (
+                    [edge_column] + complete_columns
+                    if side == "left"
+                    else complete_columns + [edge_column]
+                )
+                instances, debug = self.run_ordering(
+                    "H12_INSPECT", "right", image_width=640
+                )
+
+                self.assertEqual([item.bbox for item in instances], [
+                    column[0].bbox for column in complete_columns
+                ])
+                self.assertEqual([item.mapped_slot_id for item in instances], [
+                    "H2_L03_C01", "H2_L03_C02", "H2_L03_C03"
+                ])
+                self.assertEqual(debug.selected_group_index, 3)
+                self.assertTrue(instances[2].is_selected)
+
+    def test_excess_full_edge_or_narrow_interior_column_still_fails_closed(self) -> None:
+        complete_columns = self.columns
+        for bbox, image_width in (
+            ([580, 100, 640, 400], 640),  # Full-shape bottle at the edge.
+            ([540, 100, 560, 400], 640),  # Narrow but not image-truncated.
+            ([620, 100, 640, 400], None),  # Cannot infer the image boundary.
+        ):
+            with self.subTest(bbox=bbox, image_width=image_width):
+                self.columns = complete_columns + [
+                    [LocatedInstance(bbox=bbox, mask="", score=0.9)]
+                ]
+                with self.assertRaises(HTTPException) as context:
+                    self.run_ordering("H12_INSPECT", "right", image_width=image_width)
+                self.assertEqual(context.exception.status_code, 422)
+                self.assertIn("visible=4, configured=3", str(context.exception.detail))
+
+    def test_exact_count_keeps_truncated_edge_column(self) -> None:
+        self.columns[-1] = [
+            LocatedInstance(bbox=[620, 100, 640, 400], mask="", score=0.9)
+        ]
+        instances, _ = self.run_ordering("H12_INSPECT", "right", image_width=640)
+        self.assertEqual(len(instances), 3)
+        self.assertEqual(instances[-1].bbox, self.columns[-1][0].bbox)
+        self.assertTrue(instances[-1].is_selected)
+
+    def test_both_truncated_edges_remove_narrower_first_only_up_to_overflow(self) -> None:
+        complete_columns = self.columns
+        left = [LocatedInstance(bbox=[0, 100, 10, 400], mask="", score=0.9)]
+        right = [LocatedInstance(bbox=[620, 100, 640, 400], mask="", score=0.9)]
+        for middle_count in (2, 3):
+            with self.subTest(middle_count=middle_count):
+                middle = complete_columns[:middle_count]
+                self.columns = [left] + middle + [right]
+                instances, _ = self.run_ordering(
+                    "H12_INSPECT", "right", image_width=640
+                )
+                expected = middle + [right] if middle_count == 2 else middle
+                self.assertEqual([item.bbox for item in instances], [
+                    column[0].bbox for column in expected
+                ])
+                self.assertEqual(len(instances), 3)
 
     def test_invalid_hand_target_view_fails_closed(self) -> None:
         with self.assertRaises(HTTPException) as context:

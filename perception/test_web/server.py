@@ -209,6 +209,7 @@ class LocateDebugProxyRequest(BaseModel):
     level: str
     hand: str
     slot_id: str | None = None
+    target_id: str | None = None
     mock_inventory: list[str] | None = None
     image_name: str | None = None
     image_base64: str | None = None
@@ -2969,6 +2970,8 @@ def run_locate_debug(request: LocateDebugProxyRequest) -> dict:
         payload["sam3_prompt"] = request.sam3_prompt
     if request.slot_id is not None and request.slot_id.strip():
         payload["slot_id"] = request.slot_id.strip().upper()
+    if request.target_id is not None and request.target_id.strip():
+        payload["target_id"] = request.target_id.strip().upper()
     if request.mock_inventory is not None:
         payload["mock_inventory"] = request.mock_inventory
     try:

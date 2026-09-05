@@ -180,6 +180,8 @@ HARD_CASE_FRONT_DISTANCE_GAP_RATIO = float(
 HARD_CASE_MASK_LOWER_CONTACT_QUANTILE = float(
     os.getenv("HARD_CASE_MASK_LOWER_CONTACT_QUANTILE", "0.80")
 )
+# Only excess edge columns may be removed; compare shape, not absolute size.
+HARD_CASE_EDGE_MAX_ASPECT_RATIO_TO_MEDIAN = 0.60
 MULTI_ROW_CONTACT_GAP_RATIO = float(
     os.getenv("MULTI_ROW_CONTACT_GAP_RATIO", "0.05")
 )
@@ -2608,6 +2610,68 @@ def split_instances_into_display_groups(
     return [[instance] for instance in ordered]
 
 
+def drop_excess_truncated_edge_groups(
+    display_groups: list[list[LocatedInstance]],
+    expected_count: int,
+    image_width: int | None,
+) -> list[list[LocatedInstance]]:
+    """Drop unusually narrow image-edge columns only to resolve a slot overflow."""
+    if (
+        expected_count < 1
+        or len(display_groups) <= expected_count
+        or image_width is None
+        or image_width <= 0
+    ):
+        return display_groups
+
+    bboxes = [union_instance_bboxes(group) for group in display_groups]
+    if any(right <= left or bottom <= top for left, top, right, bottom in bboxes):
+        return display_groups
+    aspect_ratios = [
+        (right - left) / (bottom - top) for left, top, right, bottom in bboxes
+    ]
+    # Use the original image boundary, never the Qwen crop boundary. A few
+    # pixels of SAM boundary error are tolerated, scaled with image resolution.
+    edge_margin = max(2.0, image_width * 0.005)
+    reference_ratios = [
+        ratio
+        for bbox, ratio in zip(bboxes, aspect_ratios)
+        if bbox[0] > edge_margin and bbox[2] < image_width - edge_margin
+    ]
+    if not reference_ratios:
+        return display_groups
+    reference_ratio = float(np.median(reference_ratios))
+    candidates: list[tuple[float, int, str]] = []
+    for index, side in ((0, "left"), (len(display_groups) - 1, "right")):
+        touches_edge = (
+            bboxes[index][0] <= edge_margin
+            if side == "left"
+            else bboxes[index][2] >= image_width - edge_margin
+        )
+        if touches_edge and (
+            aspect_ratios[index]
+            < reference_ratio * HARD_CASE_EDGE_MAX_ASPECT_RATIO_TO_MEDIAN
+        ):
+            candidates.append((aspect_ratios[index], index, side))
+
+    # Both ends can be truncated. Remove the narrower end first, and never
+    # remove more than the overflow or delete a narrow interior column.
+    removed_indices: set[int] = set()
+    for ratio, index, side in sorted(candidates)[: len(display_groups) - expected_count]:
+        removed_indices.add(index)
+        logger.info(
+            "pick/locate hard case 剔除贴边窄列 side=%s bbox=%s "
+            "aspect_ratio=%.4f reference_aspect_ratio=%.4f relative_ratio=%.4f "
+            "image_width=%s visible_before=%s visible_after=%s configured=%s",
+            side, bboxes[index], ratio, reference_ratio, ratio / reference_ratio,
+            image_width, len(display_groups), len(display_groups) - len(removed_indices),
+            expected_count,
+        )
+    return [
+        group for index, group in enumerate(display_groups) if index not in removed_indices
+    ]
+
+
 def detect_red_shelf_front_line(
     image: Image.Image,
 ) -> tuple[float, float] | None:
@@ -3379,6 +3443,7 @@ def apply_hard_case_ordering(
     target_id: str | None = None,
     shelf_front_line: tuple[float, float] | None = None,
     sku_row_lookup: Callable[[str], list[dict[str, Any]]] | None = None,
+    image_width: int | None = None,
 ) -> tuple[list[LocatedInstance], HardCaseDebugInfo | None]:
     resolved_sku_row_lookup = sku_row_lookup or lookup_sku_row
     slot_context = validate_slot_hard_case_context(
@@ -3453,6 +3518,10 @@ def apply_hard_case_ordering(
             for item in row
             if str(item.get("name", "")).strip() in config.members
         ]
+        display_groups = drop_excess_truncated_edge_groups(
+            display_groups, len(visible_slot_order), image_width
+        )
+        visible_count = len(display_groups)
         if visible_count != len(visible_slot_order):
             raise HTTPException(
                 status_code=422,
@@ -3917,6 +3986,7 @@ def locate_product_in_image(
             target_id=target_id,
             shelf_front_line=shelf_front_line,
             sku_row_lookup=sku_row_lookup,
+            image_width=original_image.width,
         )
     except HTTPException as error:
         if not capture_postprocess_errors:

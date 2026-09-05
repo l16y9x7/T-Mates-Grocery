@@ -332,6 +332,7 @@ async function runFullLocate() {
         level: document.querySelector("#locateLevel").value,
         hand: document.querySelector("#locateHand").value,
         slot_id: targetSlot,
+        target_id: document.querySelector("#locateTarget").value || undefined,
         mock_inventory: mockInventory,
         image_name: originalImageName,
         image_base64: originalImageDataUrl,
