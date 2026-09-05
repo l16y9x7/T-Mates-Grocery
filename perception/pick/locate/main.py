@@ -21,6 +21,7 @@ from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
+import cv2
 import requests
 import numpy as np
 from fastapi import APIRouter, FastAPI, HTTPException
@@ -182,6 +183,10 @@ HARD_CASE_MASK_LOWER_CONTACT_QUANTILE = float(
 MULTI_ROW_CONTACT_GAP_RATIO = float(
     os.getenv("MULTI_ROW_CONTACT_GAP_RATIO", "0.05")
 )
+# Boundary contact tolerates a 3 px segmentation gap on a 640x480 image.
+PICK_MASK_CONTACT_RADIUS = 3
+PICK_MIN_MASK_CONTACT_RATIO = 0.15
+PICK_DUPLICATE_MASK_IOU = 0.85
 MULTI_ROW_MASK_LOWER_CONTACT_QUANTILE = float(
     os.getenv("MULTI_ROW_MASK_LOWER_CONTACT_QUANTILE", "0.50")
 )
@@ -2926,6 +2931,131 @@ def keep_nearest_display_row(
     return selected or instances
 
 
+def keep_frontmost_by_mask_contact(
+    instances: list[LocatedInstance],
+) -> list[LocatedInstance]:
+    """Keep side-by-side masks; suppress rear masks only with contact evidence."""
+    if len(instances) < 2:
+        return instances
+
+    geometry: dict[int, tuple[np.ndarray, np.ndarray, np.ndarray, int, int]] = {}
+
+    def mask_geometry(
+        index: int,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int, int]:
+        if index not in geometry:
+            try:
+                encoded = instances[index].mask.split(",", 1)[-1]
+                mask_bytes = base64.b64decode(encoded, validate=True)
+                with Image.open(io.BytesIO(mask_bytes)) as image:
+                    mask = np.asarray(image.convert("L")) >= 128
+            except (ValueError, binascii.Error, UnidentifiedImageError, OSError) as error:
+                raise HTTPException(
+                    status_code=502, detail=f"SAM3 mask PNG 无效: {error}"
+                ) from error
+            radius = max(1, round(PICK_MASK_CONTACT_RADIUS * min(mask.shape) / 480))
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1)
+            )
+            binary = mask.astype(np.uint8)
+            boundary = mask & ~(
+                cv2.erode(
+                    binary,
+                    np.ones((3, 3), np.uint8),
+                    borderType=cv2.BORDER_CONSTANT,
+                    borderValue=0,
+                ) > 0
+            )
+            geometry[index] = (
+                mask,
+                boundary,
+                cv2.dilate(binary, kernel) > 0,
+                int(np.count_nonzero(mask)),
+                radius,
+            )
+        return geometry[index]
+
+    def distance(index: int) -> float:
+        value = instances[index].shelf_front_distance_ratio
+        return value if value is not None and math.isfinite(value) else math.inf
+
+    # Only a nearer mask can occlude another. A rear mask touching two front
+    # bottles must never merge those front bottles into one connected component.
+    ordered = sorted(
+        range(len(instances)),
+        key=lambda index: (
+            distance(index),
+            -(instances[index].score if instances[index].score is not None else -1.0),
+            instance_center_x(instances[index]),
+        ),
+    )
+    selected: list[int] = []
+    for position, index in enumerate(ordered):
+        mask, boundary, dilated, area, radius = mask_geometry(index)
+        candidate = instances[index]
+        # A suppressed middle bottle still provides evidence that a third
+        # touching bottle is farther back in the same occlusion chain.
+        for previous in ordered[:position]:
+            existing = instances[previous]
+            # Bboxes only bound the search. Their intersection alone never
+            # establishes either duplicate detections or front/back occlusion.
+            if (
+                max(candidate.bbox[0], existing.bbox[0])
+                > min(candidate.bbox[2], existing.bbox[2]) + radius
+                or max(candidate.bbox[1], existing.bbox[1])
+                > min(candidate.bbox[3], existing.bbox[3]) + radius
+            ):
+                continue
+            other, other_boundary, other_dilated, other_area, _ = mask_geometry(
+                previous
+            )
+            if mask.shape != other.shape:
+                continue
+            intersection = int(np.count_nonzero(mask & other))
+            union = area + other_area - intersection
+            mask_iou = intersection / union if union else 0.0
+            contact_pixels = min(
+                int(np.count_nonzero(boundary & other_dilated)),
+                int(np.count_nonzero(other_boundary & dilated)),
+            )
+            shorter_boundary = min(
+                int(np.count_nonzero(boundary)),
+                int(np.count_nonzero(other_boundary)),
+            )
+            contact_ratio = (
+                contact_pixels / shorter_boundary if shorter_boundary else 0.0
+            )
+            gap = (
+                distance(index) - distance(previous)
+                if math.isfinite(distance(index)) and math.isfinite(distance(previous))
+                else None
+            )
+            duplicate = mask_iou >= PICK_DUPLICATE_MASK_IOU
+            occluded = (
+                gap is not None
+                and gap > MULTI_ROW_CONTACT_GAP_RATIO
+                and contact_pixels >= 8
+                and contact_ratio >= PICK_MIN_MASK_CONTACT_RATIO
+            )
+            logger.info(
+                "Pick Locate mask relation candidate_bbox=%s previous_bbox=%s "
+                "mask_iou=%.4f contact_pixels=%s contact_ratio=%.4f "
+                "shelf_distance_gap=%s decision=%s",
+                candidate.bbox,
+                existing.bbox,
+                mask_iou,
+                contact_pixels,
+                contact_ratio,
+                gap,
+                "duplicate" if duplicate else "occluded" if occluded else "keep",
+            )
+            if duplicate or occluded:
+                break
+        else:
+            selected.append(index)
+    return [instances[index] for index in sorted(selected)]
+
+
 def keep_display_rows_for_inventory(
     instances: list[LocatedInstance],
     required_count: int,
@@ -2934,25 +3064,28 @@ def keep_display_rows_for_inventory(
 
     if not instances or required_count <= 0:
         return []
-    selected: list[LocatedInstance] = []
     rows = sorted({instance.display_row_index or 1 for instance in instances})
+    quality_candidates: list[LocatedInstance] = []
     for row_index in rows:
-        row_instances = keep_frontmost_in_overlap_chains(
-            [
-                instance
-                for instance in instances
-                if (instance.display_row_index or 1) == row_index
-            ]
+        quality_candidates.extend(
+            drop_smallest_mask_area_outlier(
+                [
+                    instance
+                    for instance in instances
+                    if (instance.display_row_index or 1) == row_index
+                ]
+            )
         )
-        row_instances = drop_smallest_mask_area_outlier(row_instances)
+    # Use the same mask-contact rule within and across display rows. In
+    # particular, tilted neighboring bottles may have overlapping bboxes even
+    # though their masks are separate and both sit at the shelf front.
+    candidates = keep_frontmost_by_mask_contact(quality_candidates)
+    selected: list[LocatedInstance] = []
+    for row_index in rows:
         available = [
             instance
-            for instance in row_instances
-            if not any(
-                bbox_overlap_by_smaller_area(instance.bbox, existing.bbox)
-                >= SAM_BBOX_OVERLAP_MIN_RATIO
-                for existing in selected
-            )
+            for instance in candidates
+            if (instance.display_row_index or 1) == row_index
         ]
         needed = required_count - len(selected)
         if len(available) > needed:
