@@ -82,19 +82,18 @@ def test_production_runtime_uses_one_yaml_and_external_product_map() -> None:
     assert Path(pick_place.calibration_files["head"]) == CONFIG_DIR / "camera/head.json"
 
 
-def test_production_runtime_uses_task2_specific_inspection_order() -> None:
+def test_production_runtime_uses_shared_three_point_inspection_order() -> None:
     raw = yaml.safe_load(RUNTIME_CONFIG.read_text(encoding="utf-8"))
     shared = raw["tasks"]["shared"]
     settings = TaskServiceSettings.load(RUNTIME_CONFIG).tasks
 
-    assert settings.task0.inspection_points == shared["inspection_points"]
-    assert settings.task2.inspection_points == [
+    assert shared["inspection_points"] == [
         "H1_INSPECT",
-        "H12_INSPECT",
         "H2_INSPECT",
-        "H23_INSPECT",
         "H3_INSPECT",
     ]
+    assert settings.task0.inspection_points == shared["inspection_points"]
+    assert settings.task2.inspection_points == shared["inspection_points"]
     assert [point.target_id for point in settings.task3.inspection_points] == shared[
         "inspection_points"
     ]
@@ -115,4 +114,4 @@ def test_production_runtime_uses_task2_specific_inspection_order() -> None:
     for task_name in ("task0", "task1", "task2", "task3", "test1"):
         task_section = raw["tasks"][task_name]
         assert "log_dir" not in task_section
-        assert ("inspection_points" in task_section) is (task_name == "task2")
+        assert "inspection_points" not in task_section

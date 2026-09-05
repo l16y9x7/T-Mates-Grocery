@@ -54,10 +54,12 @@ class FakeOrchestrator:
         if self.task_id == "0":
             return {
                 "task_run_id": key,
+                "scan_id": f"scan-{key}",
                 "task_type": "PREPARATION",
                 "status": "SUCCEEDED",
                 "inspection_points": [],
                 "captures": [],
+                "manifest_path": f"/tmp/scan-{key}/manifest.json",
             }
         if self.task_id == "1":
             return {
@@ -288,10 +290,16 @@ async def test_domain_error_keeps_failed_step() -> None:
         transport=httpx.ASGITransport(app=app_for(bindings)),
         base_url="http://tasks.local",
     ) as client:
-        response = await client.post("/tasks/1/run", json={})
+        response = await client.post(
+            "/tasks/1/run",
+            json={},
+            headers={"X-Request-Id": "domain-error-test"},
+        )
 
     assert response.status_code == 502
     assert response.json() == {
+        "schema_version": "1.0",
+        "request_id": "domain-error-test",
         "error_code": "EXECUTION_FAILED",
         "message": (
             "pick_place returned HTTP 502: /manipulation/release: "
@@ -300,6 +308,7 @@ async def test_domain_error_keeps_failed_step() -> None:
         "failed_step": "商品放置",
         "failed_interface": "manipulation_release",
         "url": "http://robot:8084/manipulation/release",
+        "retryable": True,
         "interface_metrics": [
             {
                 "interface": "pick_place/place",
@@ -386,8 +395,8 @@ async def test_web_uses_one_task_panel_and_common_sse_routes() -> None:
     assert "applyInterfaceCall(flowEvent)" in script
     assert "taskInterfaceCallValues.get(call.call_id)" in script
     assert "每次接口调用结束后显示本次耗时" in page.text
-    assert "/static/app.js?v=20260902-3" in page.text
-    assert "/static/styles.css?v=20260902-2" in page.text
+    assert "/static/app.js?v=20260903-1" in page.text
+    assert "/static/styles.css?v=20260903-1" in page.text
     assert page.headers["cache-control"] == "no-store"
     assert started.status_code == 200
     assert started.json()["task_id"] == "3"

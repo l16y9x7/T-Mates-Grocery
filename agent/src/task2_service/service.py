@@ -361,9 +361,9 @@ class Task2Orchestrator:
             re.fullmatch(r"H(?:1|12|2|23|3)_INSPECT", target_id)
             for target_id in self.settings.inspection_points
         ):
-            # The five new points observe one continuous three-shelf face.
-            # Inspect all of them before planning so a two-hand replenishment
-            # pair can be selected across shelf boundaries.
+            # The configured front-facing points observe one continuous
+            # three-shelf face. Inspect all of them before planning so a
+            # two-hand replenishment pair can still use connector grasp points.
             return [list(self.settings.inspection_points)]
         groups: list[list[str]] = []
         current_face: str | None = None

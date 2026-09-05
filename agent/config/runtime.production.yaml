@@ -51,10 +51,6 @@ tasks:
       pick_seconds: 90
       place_seconds: 90
   task2:
-    inspection_points:
-    - H1_INSPECT
-    - H2_INSPECT
-    - H3_INSPECT
     replenishment_pickup: replenishment_pickup
     timeouts:
       inspection_seconds: 30
