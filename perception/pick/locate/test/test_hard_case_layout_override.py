@@ -122,21 +122,73 @@ class SlotHardCaseViewTest(unittest.TestCase):
                 self.assertEqual(debug.selected_group_index, 3)
                 self.assertTrue(instances[2].is_selected)
 
-    def test_excess_full_edge_or_narrow_interior_column_still_fails_closed(self) -> None:
+    def test_unresolved_excess_columns_fall_back_to_hand_side(self) -> None:
         complete_columns = self.columns
         for bbox, image_width in (
             ([580, 100, 640, 400], 640),  # Full-shape bottle at the edge.
             ([540, 100, 560, 400], 640),  # Narrow but not image-truncated.
             ([620, 100, 640, 400], None),  # Cannot infer the image boundary.
         ):
-            with self.subTest(bbox=bbox, image_width=image_width):
-                self.columns = complete_columns + [
-                    [LocatedInstance(bbox=bbox, mask="", score=0.9)]
-                ]
-                with self.assertRaises(HTTPException) as context:
-                    self.run_ordering("H12_INSPECT", "right", image_width=image_width)
-                self.assertEqual(context.exception.status_code, 422)
-                self.assertIn("visible=4, configured=3", str(context.exception.detail))
+            for target_id, hand in (("H2_INSPECT", "left"), ("H12_INSPECT", "right")):
+                with self.subTest(bbox=bbox, image_width=image_width, hand=hand):
+                    self.columns = complete_columns + [
+                        [LocatedInstance(bbox=bbox, mask="", score=0.9)]
+                    ]
+                    with self.assertLogs("uvicorn.error", level="WARNING") as captured:
+                        instances, debug = self.run_ordering(
+                            target_id, hand, image_width=image_width
+                        )
+                    expected_columns = (
+                        self.columns[:3] if hand == "left" else self.columns[-3:]
+                    )
+                    self.assertEqual([item.bbox for item in instances], [
+                        column[0].bbox for column in expected_columns
+                    ])
+                    self.assertEqual([item.mapped_slot_id for item in instances], [
+                        "H2_L03_C01", "H2_L03_C02", "H2_L03_C03"
+                    ])
+                    self.assertEqual(debug.selected_group_index, 3)
+                    self.assertTrue(instances[2].is_selected)
+                    self.assertTrue(any(
+                        "hard case 超列兜底保留前N列" in message
+                        for message in captured.output
+                    ))
+                    expected_direction = "left_to_right" if hand == "left" else "right_to_left"
+                    self.assertTrue(any(
+                        f"selection_direction={expected_direction}" in message
+                        for message in captured.output
+                    ))
+
+    def test_hand_side_fallback_runs_after_truncated_left_column_is_removed(self) -> None:
+        complete_columns = self.columns
+        remaining_columns = complete_columns + [[instance(540)]]
+        self.columns = [
+            [LocatedInstance(bbox=[0, 100, 10, 400], mask="", score=0.9)]
+        ] + remaining_columns
+
+        for target_id, hand in (("H2_INSPECT", "left"), ("H12_INSPECT", "right")):
+            with self.subTest(hand=hand), self.assertLogs(
+                "uvicorn.error", level="INFO"
+            ) as captured:
+                instances, _ = self.run_ordering(target_id, hand, image_width=640)
+
+            expected_columns = (
+                remaining_columns[:3] if hand == "left" else remaining_columns[-3:]
+            )
+            self.assertEqual([item.bbox for item in instances], [
+                column[0].bbox for column in expected_columns
+            ])
+            self.assertTrue(instances[2].is_selected)
+            edge_log_index = next(
+                index for index, message in enumerate(captured.output)
+                if "剔除贴边窄列 side=left" in message
+            )
+            fallback_log_index = next(
+                index for index, message in enumerate(captured.output)
+                if "hard case 超列兜底保留前N列" in message
+            )
+            self.assertLess(edge_log_index, fallback_log_index)
+            self.assertEqual(captured.records[fallback_log_index].levelname, "WARNING")
 
     def test_exact_count_keeps_truncated_edge_column(self) -> None:
         self.columns[-1] = [

@@ -3522,6 +3522,29 @@ def apply_hard_case_ordering(
             display_groups, len(visible_slot_order), image_width
         )
         visible_count = len(display_groups)
+        if visible_count > len(visible_slot_order):
+            # After confident edge trimming, take N columns from the hand's
+            # side. Keep their image-left-to-right order for the slot view map.
+            if actual_hand == "left":
+                selection_direction = "left_to_right"
+                kept_groups = display_groups[: len(visible_slot_order)]
+                discarded_groups = display_groups[len(visible_slot_order) :]
+            else:
+                selection_direction = "right_to_left"
+                kept_groups = display_groups[-len(visible_slot_order) :]
+                discarded_groups = display_groups[: -len(visible_slot_order)]
+            logger.warning(
+                "pick/locate hard case 超列兜底保留前N列 target_id=%s hand=%s "
+                "selection_direction=%s "
+                "slot_id=%s visible=%s configured=%s visible_slot_order=%s "
+                "kept_bboxes=%s discarded_bboxes=%s",
+                normalized_target_id, actual_hand, selection_direction, target_location,
+                visible_count, len(visible_slot_order), visible_slot_order,
+                [union_instance_bboxes(group) for group in kept_groups],
+                [union_instance_bboxes(group) for group in discarded_groups],
+            )
+            display_groups = kept_groups
+            visible_count = len(display_groups)
         if visible_count != len(visible_slot_order):
             raise HTTPException(
                 status_code=422,
