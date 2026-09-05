@@ -7,6 +7,15 @@ ROOT="$(cd "$PROJECT/.." && pwd)"
 LOG_DIR="${LOG_DIR:-$ROOT/logs}"
 ROBOT_IP="192.168.200.66"
 CONDA_SH="${CONDA_SH:-$HOME/miniconda3/etc/profile.d/conda.sh}"
+RUNTIME_CONFIG_FILE="${RUNTIME_CONFIG_FILE:-$PROJECT/agent/config/runtime.production.yaml}"
+SKU_CATALOG_PATH="${SKU_CATALOG_PATH:-$PROJECT/perception/sku/products.json}"
+INITIAL_SCAN_ROOT="${INITIAL_SCAN_ROOT:-$PROJECT/agent/output/task0}"
+PRODUCT_HAND_OPTIONS_PATH="${PRODUCT_HAND_OPTIONS_PATH:-$PROJECT/agent/config/product-hand-options.yaml}"
+INSPECT_SKU_CATALOG_PATH="${INSPECT_SKU_CATALOG_PATH:-$SKU_CATALOG_PATH}"
+export RUNTIME_CONFIG_FILE
+export INITIAL_SCAN_ROOT
+export PRODUCT_HAND_OPTIONS_PATH
+export INSPECT_SKU_CATALOG_PATH
 export PATH="${HOME}/.local/bin:${PATH}"
 
 usage() {
@@ -35,6 +44,9 @@ done
 python3 -c 'import ipaddress, sys; ipaddress.IPv4Address(sys.argv[1])' "$ROBOT_IP" >/dev/null
 [[ -d "$PROJECT/agent" ]] || { echo "Missing agent directory under project root: $PROJECT" >&2; exit 1; }
 [[ -r "$CONDA_SH" ]] || { echo "Missing Conda activation script: $CONDA_SH" >&2; exit 1; }
+[[ -r "$RUNTIME_CONFIG_FILE" ]] || { echo "Missing runtime config: $RUNTIME_CONFIG_FILE" >&2; exit 1; }
+[[ -r "$SKU_CATALOG_PATH" ]] || { echo "Missing SKU catalog: $SKU_CATALOG_PATH" >&2; exit 1; }
+[[ -r "$PRODUCT_HAND_OPTIONS_PATH" ]] || { echo "Missing product hand options: $PRODUCT_HAND_OPTIONS_PATH" >&2; exit 1; }
 mkdir -p "$LOG_DIR"
 
 healthy() { curl -fsS --connect-timeout 3 --max-time 5 "$1" >/dev/null 2>&1; }
@@ -120,12 +132,12 @@ ensure_service GenPose2 http://127.0.0.1:8084/manipulation/health 8084 \
   "genpose2-$(date +%Y%m%d-%H%M%S).log" 180
 
 restart_service Perception 8083 \
-  "source '$CONDA_SH' && conda activate t_mates && cd '$PROJECT/perception' && exec env CAMERA_SERVICE_HOST='$ROBOT_IP' INFERENCE_SERVICE_HOST='127.0.0.1' python main.py" \
+  "source '$CONDA_SH' && conda activate t_mates && cd '$PROJECT/perception' && exec env CAMERA_SERVICE_HOST='$ROBOT_IP' INFERENCE_SERVICE_HOST='127.0.0.1' INITIAL_SCAN_ROOT='$INITIAL_SCAN_ROOT' PRODUCT_HAND_OPTIONS_PATH='$PRODUCT_HAND_OPTIONS_PATH' INSPECT_SKU_CATALOG_PATH='$INSPECT_SKU_CATALOG_PATH' python main.py" \
   "perception-$(date +%Y%m%d-%H%M%S).log" \
   http://127.0.0.1:8083/perception/health 90
 
 restart_service SKU 25540 \
-  "source '$CONDA_SH' && conda activate t_mates && cd '$PROJECT/perception/sku' && exec python api.py" \
+  "source '$CONDA_SH' && conda activate t_mates && cd '$PROJECT/perception/sku' && exec python api.py --catalog '$SKU_CATALOG_PATH'" \
   "sku-$(date +%Y%m%d-%H%M%S).log" \
   http://127.0.0.1:25540/sku/health 60
 
@@ -137,7 +149,7 @@ else
   echo "[restart] pick-place"
   stop_listener 8086
   launch pick-place \
-    "source '$CONDA_SH' && conda activate t_mates && cd '$PROJECT/agent' && export PYTHONPATH='$PROJECT/agent/src' ROBOT_IP='$ROBOT_IP' && exec python -m pick_place_service --config '$PROJECT/agent/config/runtime.production.yaml'" \
+    "source '$CONDA_SH' && conda activate t_mates && cd '$PROJECT/agent' && export PYTHONPATH='$PROJECT/agent/src' ROBOT_IP='$ROBOT_IP' && exec python -m pick_place_service --config '$RUNTIME_CONFIG_FILE'" \
     "pick-place-$(date +%Y%m%d-%H%M%S).log"
   wait_for "pick-place process" http://127.0.0.1:8086/openapi.json 90
   echo "[warn] pick-place health stays 503 until the robot services are reachable"
@@ -145,7 +157,7 @@ else
   echo "[restart] unified task service"
   stop_listener 8108
   launch Agent \
-    "source '$CONDA_SH' && conda activate t_mates && cd '$PROJECT/agent' && export PYTHONPATH='$PROJECT/agent/src' ROBOT_IP='$ROBOT_IP' && exec python -m task_service --config '$PROJECT/agent/config/runtime.production.yaml'" \
+    "source '$CONDA_SH' && conda activate t_mates && cd '$PROJECT/agent' && export PYTHONPATH='$PROJECT/agent/src' ROBOT_IP='$ROBOT_IP' && exec python -m task_service --config '$RUNTIME_CONFIG_FILE'" \
     "agent-$(date +%Y%m%d-%H%M%S).log"
   wait_for "Agent console" http://127.0.0.1:8108/ 90
 fi

@@ -1,0 +1,98 @@
+robot:
+  ip: 192.168.200.66
+  ports:
+    navigation: 8081
+    pose: 8084
+    camera: 8085
+local_services:
+  perception: http://127.0.0.1:8083
+  pose_estimation: http://127.0.0.1:8084
+  pick_place: http://127.0.0.1:8086
+  sku: http://127.0.0.1:25540
+servers:
+  tasks:
+    host: 0.0.0.0
+    port: 8108
+  pick_place:
+    host: 0.0.0.0
+    port: 8086
+tasks:
+  shared:
+    inspection_points:
+    - H2_INSPECT
+    # The shelf2 scene has no separate start/boundary stations. Reuse the
+    # delivery station for task start, completion, and failure recovery.
+    start_target_id: delivery_place
+    capture_settle_seconds: 2
+    camera: head
+    baseline_dir: ../output/task0-shelf2
+    task_boundary: delivery_place
+    product_hand_options_file: product-hand-options.shelf2.yaml
+    log_dir: ../log
+    timeouts:
+      connect_seconds: 3
+      health_seconds: 5
+      inspection_seconds: 180
+      sku_seconds: 10
+      navigation_seconds: 600
+      pose_seconds: 300
+      camera_seconds: 30
+      pick_seconds: 600
+      place_seconds: 600
+  task0:
+    output_dir: ../output/task0-shelf2
+  task1:
+    delivery_place: delivery_place
+    skip_product_names: []
+    defer_product_names: []
+    timeouts:
+      navigation_seconds: 90
+      pose_seconds: 30
+      pick_seconds: 90
+      place_seconds: 90
+  task2:
+    replenishment_pickup: replenishment_pickup
+    timeouts:
+      inspection_seconds: 30
+      navigation_seconds: 90
+      pose_seconds: 30
+      pick_seconds: 90
+      place_seconds: 90
+  task3: {}
+  test1:
+    output_dir: ../output/test1-shelf2
+pick_place:
+  pick_cameras:
+    left: left_wrist
+    right: right_wrist
+  shortage_pick_camera: head
+  place_camera: head
+  calibration_files:
+    head: camera/head.json
+    left_wrist: camera/left_wrist.json
+    right_wrist: camera/right_wrist.json
+  temp_dir: /tmp/pick-place-shelf2
+  log_dir: ../log
+  timeouts:
+    connect_seconds: 3
+    locate_seconds: 600
+    camera_seconds: 15
+    pose_seconds: 300
+    action_seconds: 600
+    check_seconds: 120
+    health_seconds: 5
+web:
+  request_timeout_seconds: 900
+  paths:
+    log_dir: ../log
+    locate_image_roots:
+    - ..
+    - /tmp
+external:
+  access_token: null
+  callback_url: http://192.168.200.65:8765/api/callback
+  callback_access_token: null
+  request_timeout_seconds: 5
+  heartbeat_seconds: 5
+  max_retries: 3
+  retry_backoff_seconds: 1

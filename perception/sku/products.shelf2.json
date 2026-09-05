@@ -1,0 +1,242 @@
+{
+  "schema_version": "2.0",
+  "catalog_version": "retail_perception_sku_shelf2_2026-09-05_v1",
+  "products": [
+    {
+      "sku_id": "SKU_067",
+      "name": "可口可乐罐装",
+      "images": [
+        "images/SKU_067.jpg"
+      ],
+      "locations": [
+        "H2_L01_C01",
+        "H2_L01_C02",
+        "H2_L01_C03"
+      ],
+      "inventory": [
+        "H2_L01_C01",
+        "H2_L01_C02",
+        "H2_L01_C03"
+      ]
+    },
+    {
+      "sku_id": "SKU_068",
+      "name": "雪碧罐装",
+      "images": [
+        "images/SKU_068.jpg"
+      ],
+      "locations": [
+        "H2_L01_C04",
+        "H2_L01_C05"
+      ],
+      "inventory": [
+        "H2_L01_C04",
+        "H2_L01_C05"
+      ]
+    },
+    {
+      "sku_id": "SKU_069",
+      "name": "芬达罐装",
+      "images": [
+        "images/SKU_069.jpg"
+      ],
+      "locations": [
+        "H2_L01_C06"
+      ],
+      "inventory": [
+        "H2_L01_C06"
+      ]
+    },
+    {
+      "sku_id": "SKU_070",
+      "name": "百事可乐瓶装",
+      "images": [
+        "images/SKU_070.jpg"
+      ],
+      "locations": [
+        "H2_L02_C01",
+        "H2_L02_C02"
+      ],
+      "inventory": [
+        "H2_L02_C01",
+        "H2_L02_C02"
+      ]
+    },
+    {
+      "sku_id": "SKU_071",
+      "name": "7喜瓶装",
+      "images": [
+        "images/SKU_071.jpg"
+      ],
+      "locations": [
+        "H2_L02_C03",
+        "H2_L02_C04"
+      ],
+      "inventory": [
+        "H2_L02_C03",
+        "H2_L02_C04"
+      ]
+    },
+    {
+      "sku_id": "SKU_072",
+      "name": "水溶C100瓶装",
+      "images": [
+        "images/SKU_072.jpg"
+      ],
+      "locations": [
+        "H2_L05_C05",
+        "H2_L05_C06"
+      ],
+      "inventory": [
+        "H2_L05_C05",
+        "H2_L05_C06"
+      ]
+    },
+    {
+      "sku_id": "SKU_074",
+      "name": "美年达瓶装",
+      "images": [
+        "images/SKU_074.jpg"
+      ],
+      "locations": [
+        "H2_L02_C05",
+        "H2_L02_C06"
+      ],
+      "inventory": [
+        "H2_L02_C05",
+        "H2_L02_C06"
+      ]
+    },
+    {
+      "sku_id": "SKU_078",
+      "name": "外星人电解质水椰子口味",
+      "images": [
+        "images/SKU_078.jpg"
+      ],
+      "locations": [
+        "H2_L03_C01"
+      ],
+      "inventory": [
+        "H2_L03_C01"
+      ]
+    },
+    {
+      "sku_id": "SKU_079",
+      "name": "外星人电解质水青柠口味",
+      "images": [
+        "images/SKU_079.jpg"
+      ],
+      "locations": [
+        "H2_L03_C02"
+      ],
+      "inventory": [
+        "H2_L03_C02"
+      ]
+    },
+    {
+      "sku_id": "SKU_080",
+      "name": "外星人电解质水白桃口味0糖",
+      "images": [
+        "images/SKU_080.jpg"
+      ],
+      "locations": [
+        "H2_L03_C03"
+      ],
+      "inventory": [
+        "H2_L03_C03"
+      ]
+    },
+    {
+      "sku_id": "SKU_082",
+      "name": "尖叫",
+      "images": [
+        "images/SKU_082.jpg"
+      ],
+      "locations": [
+        "H2_L04_C05",
+        "H2_L04_C06",
+        "H2_L05_C03",
+        "H2_L05_C04"
+      ],
+      "inventory": [
+        "H2_L04_C05",
+        "H2_L04_C06",
+        "H2_L05_C03",
+        "H2_L05_C04"
+      ]
+    },
+    {
+      "sku_id": "SKU_083",
+      "name": "百岁山矿泉水",
+      "images": [
+        "images/SKU_083.jpg"
+      ],
+      "locations": [
+        "H2_L03_C04",
+        "H2_L03_C05",
+        "H2_L03_C06"
+      ],
+      "inventory": [
+        "H2_L03_C04",
+        "H2_L03_C05",
+        "H2_L03_C06"
+      ]
+    },
+    {
+      "sku_id": "SKU_084",
+      "name": "脉动观梅止渴饮",
+      "images": [
+        "images/SKU_084.jpg"
+      ],
+      "locations": [
+        "H2_L04_C01",
+        "H2_L05_C01"
+      ],
+      "inventory": [
+        "H2_L04_C01",
+        "H2_L05_C01"
+      ]
+    },
+    {
+      "sku_id": "SKU_085",
+      "name": "脉动芒果口味",
+      "images": [
+        "images/SKU_085.jpg"
+      ],
+      "locations": [
+        "H2_L04_C02",
+        "H2_L05_C02"
+      ],
+      "inventory": [
+        "H2_L04_C02",
+        "H2_L05_C02"
+      ]
+    },
+    {
+      "sku_id": "SKU_086",
+      "name": "脉动菠萝口味",
+      "images": [
+        "images/SKU_086.jpg"
+      ],
+      "locations": [
+        "H2_L04_C03"
+      ],
+      "inventory": [
+        "H2_L04_C03"
+      ]
+    },
+    {
+      "sku_id": "SKU_087",
+      "name": "脉动猫薄荷瓶",
+      "images": [
+        "images/SKU_087.jpg"
+      ],
+      "locations": [
+        "H2_L04_C04"
+      ],
+      "inventory": [
+        "H2_L04_C04"
+      ]
+    }
+  ]
+}
