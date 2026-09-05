@@ -430,19 +430,6 @@
       ]
     },
     {
-      "sku_id": "SKU_087",
-      "name": "脉动猫薄荷瓶",
-      "images": [
-        "images/SKU_087.jpg"
-      ],
-      "locations": [
-        "H2_L04_C04"
-      ],
-      "inventory": [
-        "H2_L04_C04"
-      ]
-    },
-    {
       "sku_id": "SKU_091",
       "name": "舒肤佳香皂芦荟呵护香型",
       "images": [

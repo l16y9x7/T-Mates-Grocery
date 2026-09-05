@@ -13,6 +13,9 @@ IMAGES_ROOT = ROOT / "images_new"
 SKU_PATTERN = re.compile(r"^SKU_\d{3}$")
 LOCATION_PATTERN = re.compile(r"^H[1-3]_L0[1-5]_C\d{2}$")
 PRODUCT_FIELDS = {"sku_id", "name", "images", "locations", "inventory"}
+# These slots remain physically occupied on the shelf but intentionally do not
+# belong to an orderable SKU. Include them only when checking row continuity.
+NON_ORDERABLE_SLOTS = {"H2_L04_C04"}
 
 
 def load_json(filename: str) -> dict:
@@ -120,9 +123,13 @@ def main() -> None:
         location for location, count in Counter(all_locations).items() if count > 1
     ]
     require(not duplicate_locations, f"位置被多个 SKU 占用: {duplicate_locations}")
+    require(
+        not (set(all_locations) & NON_ORDERABLE_SLOTS),
+        "不可点单货位不能出现在 SKU 目录中",
+    )
 
     row_columns: dict[str, list[int]] = {}
-    for location in all_locations:
+    for location in [*all_locations, *NON_ORDERABLE_SLOTS]:
         row_id, column = location.rsplit("_C", 1)
         row_columns.setdefault(row_id, []).append(int(column))
     for row_id, columns in row_columns.items():

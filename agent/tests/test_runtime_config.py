@@ -76,7 +76,7 @@ def test_production_runtime_uses_one_yaml_and_external_product_map() -> None:
         "left": "left_wrist",
         "right": "right_wrist",
     }
-    assert len(settings.tasks.task1.product_hand_options) == 74
+    assert len(settings.tasks.task1.product_hand_options) == 73
     assert settings.tasks.task1.skip_product_names == []
     assert settings.tasks.task1.defer_product_names == []
     assert Path(pick_place.calibration_files["head"]) == CONFIG_DIR / "camera/head.json"

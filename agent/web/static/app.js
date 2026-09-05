@@ -179,7 +179,7 @@ operationModeButtons.forEach((button) => {
 
 const TASK_INFO = {
   0: { title: "采集准备", description: "采集货架巡检点的头部 RGB-D 基准数据" },
-  1: { title: "订单分拣", description: "从模拟点单系统选择两件商品，并完成货架抓取和交付台放置" },
+  1: { title: "订单分拣", description: "从模拟点单系统选择一至两件商品，并完成货架抓取和交付台放置" },
   2: { title: "缺货补货", description: "巡检缺货商品并从补货台抓取后放回货架" },
   3: { title: "乱放纠正", description: "识别错放商品并交换两件商品的货架位置" },
 };
@@ -646,8 +646,8 @@ function selectedTaskId() {
 function task1OrderPayload() {
   if (!currentMockOrder) throw new Error("请先生成模拟订单");
   const productNames = selectedMockOrderProducts();
-  if (productNames.some((name) => !name)) throw new Error("请选择商品 1 和商品 2");
-  if (new Set(productNames).size !== 2) throw new Error("商品 1 和商品 2 不能相同");
+  if (productNames.length < 1 || productNames.length > 2) throw new Error("请选择一件或两件商品");
+  if (new Set(productNames).size !== productNames.length) throw new Error("商品 1 和商品 2 不能相同");
   return {
     order_source: "mock_random",
     order_id: currentMockOrder.order_id,
@@ -656,12 +656,18 @@ function task1OrderPayload() {
 }
 
 function selectedMockOrderProducts() {
+  return selectedMockOrderProductValues().filter(Boolean);
+}
+
+function selectedMockOrderProductValues() {
   return mockOrderProductSelectors.map((select) => select.value.trim());
 }
 
 function mockOrderSelectionIsValid() {
   const productNames = selectedMockOrderProducts();
-  return productNames.every(Boolean) && new Set(productNames).size === 2;
+  return productNames.length >= 1
+    && productNames.length <= 2
+    && new Set(productNames).size === productNames.length;
 }
 
 function setMockOrderStatus(message, state = "") {
@@ -686,8 +692,9 @@ function normalizeMockOrder(value) {
   if (
     !orderIdValue
     || source !== "mock_random"
-    || products.length !== 2
-    || availableProducts.length < 2
+    || products.length < 1
+    || products.length > 2
+    || availableProducts.length < 1
     || new Set(availableProducts).size !== availableProducts.length
   ) {
     throw new Error("模拟点单接口返回格式不正确");
@@ -721,12 +728,19 @@ function renderMockOrderProducts(productNames) {
 
 function populateMockOrderSelectors(order) {
   mockOrderProductSelectors.forEach((select, index) => {
-    const options = order.available_product_names.map((name) => {
+    const options = [];
+    if (index === 1) {
+      const emptyOption = document.createElement("option");
+      emptyOption.value = "";
+      emptyOption.textContent = "不选择（仅取一件）";
+      options.push(emptyOption);
+    }
+    options.push(...order.available_product_names.map((name) => {
       const option = document.createElement("option");
       option.value = name;
       option.textContent = name;
       return option;
-    });
+    }));
     select.replaceChildren(...options);
     select.value = order.product_names[index] || "";
   });
@@ -734,7 +748,7 @@ function populateMockOrderSelectors(order) {
 }
 
 function updateMockOrderOptionAvailability() {
-  const [firstProduct, secondProduct] = selectedMockOrderProducts();
+  const [firstProduct, secondProduct] = selectedMockOrderProductValues();
   [...mockOrderProduct1.options].forEach((option) => {
     option.disabled = Boolean(
       option.value && option.value === secondProduct && option.value !== firstProduct
@@ -752,8 +766,11 @@ function renderMockOrder(order) {
   renderMockOrderProducts(order.product_names);
   mockOrderId.textContent = order.order_id;
   mockOrderCatalogSize.textContent = order.catalog_size === null ? "-" : `${order.catalog_size} 个 SKU`;
+  const productCount = order.product_names.length;
   setMockOrderStatus(
-    order.selection_mode === "manual" ? "手动选择 · 2 件" : "已随机 · 2 件",
+    order.selection_mode === "manual"
+      ? `手动选择 · ${productCount} 件`
+      : `已随机 · ${productCount} 件`,
     "success",
   );
 }
@@ -762,10 +779,10 @@ function applyManualMockOrderSelection() {
   if (!currentMockOrder) return;
   updateMockOrderOptionAvailability();
   const productNames = selectedMockOrderProducts();
-  if (productNames.some((name) => !name)) {
-    setMockOrderStatus("请选择两件商品", "failure");
-    setTaskError("请选择商品 1 和商品 2");
-  } else if (new Set(productNames).size !== 2) {
+  if (productNames.length < 1 || productNames.length > 2) {
+    setMockOrderStatus("请至少选择一件商品", "failure");
+    setTaskError("请选择商品 1，商品 2 可以不选");
+  } else if (new Set(productNames).size !== productNames.length) {
     setMockOrderStatus("商品不能重复", "failure");
     setTaskError("商品 1 和商品 2 不能相同");
   } else {
@@ -775,7 +792,7 @@ function applyManualMockOrderSelection() {
       selection_mode: "manual",
     };
     renderMockOrderProducts(productNames);
-    setMockOrderStatus("手动选择 · 2 件", "success");
+    setMockOrderStatus(`手动选择 · ${productNames.length} 件`, "success");
     setTaskError();
   }
   syncTaskControls();
@@ -1003,7 +1020,7 @@ function showMockOrderEvent(event) {
   const productNames = event.product_names
     .filter((name) => typeof name === "string" && name.trim())
     .map((name) => name.trim());
-  if (productNames.length !== 2) return;
+  if (productNames.length < 1 || productNames.length > 2) return;
   const candidate = {
     order_id: event.order_id || currentMockOrder?.order_id,
     source: "mock_random",

@@ -76,10 +76,10 @@ class Task1TriggerRequest(CallbackRequest):
     @field_validator("items")
     @classmethod
     def validate_items(cls, value: list[ExternalOrderItem]) -> list[ExternalOrderItem]:
-        if len(value) != 2:
-            raise ValueError("items must contain exactly two products")
-        if len({item.sku_id.upper() for item in value}) != 2:
-            raise ValueError("items must contain two distinct sku_id values")
+        if len(value) not in {1, 2}:
+            raise ValueError("items must contain one or two products")
+        if len({item.sku_id.upper() for item in value}) != len(value):
+            raise ValueError("items must contain distinct sku_id values")
         return value
 
 
@@ -571,7 +571,8 @@ class ExternalTaskService:
         if record.task_number == "0":
             return {"inspection_points_total": 0, "inspection_points_completed": 0, "captures_total": 0, "captures_completed": 0, "captures_failed": 0}
         if record.task_number == "1":
-            return {"total_items": 2, "items_completed": 0, "items_in_progress": 0, "items_failed": 0, "items_held": 0}
+            item_count = len(record.request.items)  # type: ignore[union-attr]
+            return {"total_items": item_count, "items_completed": 0, "items_in_progress": 0, "items_failed": 0, "items_held": 0}
         return {"inspection_points_total": 0, "inspection_points_completed": 0, "shortage_items_found": 0, "replenishment_items_picked": 0, "replenishment_items_placed": 0, "held_items": 0}
 
     async def _internal_payload(

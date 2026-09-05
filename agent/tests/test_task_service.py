@@ -443,3 +443,29 @@ async def test_web_starts_task1_through_the_unified_route() -> None:
     request = bindings["1"].last_request
     assert request.order_id == "preview-order"
     assert request.product_names == manual_products
+
+
+@pytest.mark.asyncio
+async def test_web_starts_task1_with_one_manually_selected_product() -> None:
+    bindings = orchestrators()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app_for(bindings)),
+        base_url="http://tasks.local",
+    ) as client:
+        preview = await client.post("/api/task1/mock-order", json={})
+        selected_product = preview.json()["available_product_names"][0]
+        started = await client.post(
+            "/api/tasks/1/start",
+            json={
+                "order_source": "mock_random",
+                "order_id": preview.json()["order_id"],
+                "product_names": [selected_product],
+            },
+        )
+        event_stream = await client.get(started.json()["events_url"])
+
+    assert started.status_code == 200
+    assert "event: result" in event_stream.text
+    request = bindings["1"].last_request
+    assert request.order_id == "preview-order"
+    assert request.product_names == [selected_product]

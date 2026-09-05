@@ -23,7 +23,7 @@ from task1_service.models import (
     Task1Settings,
     Task1Timeouts,
 )
-from task1_service.service import Task1Orchestrator
+from task1_service.service import Task1Orchestrator, shelf_level
 from manipulation_policy import SPECIAL_SHELF_NUDGE_PRODUCT
 from task_service.settings import TaskServiceSettings
 
@@ -368,14 +368,14 @@ def test_production_config_loads_complete_product_hand_options() -> None:
     with options_path.open("r", encoding="utf-8") as options_file:
         options = ProductHandOptionsFile.model_validate(yaml.safe_load(options_file))
 
-    assert len(options.product_hand_options) == 74
+    assert len(options.product_hand_options) == 73
     assert options.product_hand_options["H3_L01_C01"].product_name == "NFC桔汁"
     assert options.product_hand_options["H1_L04_C02"].product_name == "心相印厨房纸巾"
 
     task_settings = TaskServiceSettings.load(
         CONFIG_DIR / "runtime.production.yaml"
     ).tasks.task1
-    assert len(task_settings.product_hand_options) == 74
+    assert len(task_settings.product_hand_options) == 73
     assert task_settings.product_hand_options["H3_L01_C01"] == ["LEFT", "RIGHT"]
     assert task_settings.product_target_ids["H3_L01_C01"] == "H3_INSPECT"
     assert len(task_settings.product_grasp_options["H1_L01_C04"]) == 2
@@ -393,13 +393,7 @@ def test_production_config_loads_complete_product_hand_options() -> None:
         ("H2_INSPECT", ["LEFT"]),
         ("H12_INSPECT", ["RIGHT"]),
     ]
-    assert [
-        (option.target_id, [hand.value for hand in option.hands])
-        for option in task_settings.product_grasp_options["H2_L04_C04"]
-    ] == [
-        ("H2_INSPECT", ["RIGHT"]),
-        ("H23_INSPECT", ["LEFT"]),
-    ]
+    assert "H2_L04_C04" not in task_settings.product_grasp_options
     assert task_settings.services.pose.endswith(":8084")
 
     catalog = json.loads(
@@ -407,7 +401,8 @@ def test_production_config_loads_complete_product_hand_options() -> None:
             encoding="utf-8"
         )
     )["products"]
-    assert len(catalog) == 43
+    assert len(catalog) == 42
+    assert all(product["name"] != "脉动猫薄荷瓶" for product in catalog)
     assert all(
         any(
             task_settings.product_grasp_options.get(location)
@@ -661,13 +656,53 @@ async def test_task1_executes_the_order_previewed_in_the_web_console() -> None:
     assert [target.product_name for target in result.target_items] == result.product_names
 
 
+@pytest.mark.asyncio
+async def test_task1_executes_a_single_product_order() -> None:
+    mock = Task1Mock()
+    client = Task1Client(settings(), transport=mock.transport)
+    request = Task1Request(
+        order_id="single-product-order",
+        product_names=["可口可乐罐装"],
+    )
+
+    async with client:
+        result = await Task1Orchestrator(settings(), client).run(request)
+
+    assert result.product_names == ["可口可乐罐装"]
+    assert len(result.target_items) == 1
+    assert result.target_items[0].picked is True
+    assert result.target_items[0].placed is True
+    assert result.order is not None
+    assert result.order.product_names == ["可口可乐罐装"]
+    assert [
+        payload(outbound)["product_name"]
+        for outbound in mock.requests
+        if outbound.url.path == "/pick"
+    ] == ["可口可乐罐装"]
+    assert len(
+        [outbound for outbound in mock.requests if outbound.url.path == "/place"]
+    ) == 1
+    assert not [
+        outbound for outbound in mock.requests if outbound.url.path == "/pick/both"
+    ]
+
+
 @pytest.mark.parametrize(
     "product_names",
-    [[], ["可口可乐罐装"], ["可口可乐罐装", "可口可乐罐装"]],
+    [[], ["可口可乐罐装", "可口可乐罐装"]],
 )
 def test_task1_request_rejects_invalid_mock_orders(product_names: list[str]) -> None:
     with pytest.raises(ValueError):
         Task1Request(product_names=product_names)
+
+
+def test_task1_request_accepts_a_single_product_preview() -> None:
+    request = Task1Request(
+        order_id="single-product-order",
+        product_names=["可口可乐罐装"],
+    )
+
+    assert request.product_names == ["可口可乐罐装"]
 
 
 def test_task1_request_rejects_blank_mock_order_id() -> None:
@@ -808,10 +843,10 @@ def test_task1_prefers_same_target_and_level_for_parallel_pick() -> None:
                 "H2_L04_C02": [
                     GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT")
                 ],
-                "H2_L05_C03": [
+                "H2_L05_C02": [
                     GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT")
                 ],
-                "H2_L05_C04": [
+                "H2_L05_C06": [
                     GraspOption(hands=[Hand.RIGHT], target_id="H2_INSPECT")
                 ],
             }
@@ -830,7 +865,7 @@ def test_task1_prefers_same_target_and_level_for_parallel_pick() -> None:
         TargetItem(
             product_name="五层商品",
             sku_id="SKU",
-            product_slot_id="H2_L05_C04",
+            product_slot_id="H2_L05_C06",
             target_id="",
             shelf_level="L5",
             hand=Hand.LEFT,
@@ -839,18 +874,166 @@ def test_task1_prefers_same_target_and_level_for_parallel_pick() -> None:
 
     planned = orchestrator._plan_grasps(
         targets,
-        [["H2_L04_C02", "H2_L05_C03"], ["H2_L05_C04"]],
+        [["H2_L04_C02", "H2_L05_C02"], ["H2_L05_C06"]],
     )
 
     assert [target.product_slot_id for target in targets] == [
-        "H2_L05_C03",
-        "H2_L05_C04",
+        "H2_L05_C02",
+        "H2_L05_C06",
     ]
     assert [target.shelf_level for target in targets] == ["L5", "L5"]
     assert planned == [
         ("H2_INSPECT", Hand.LEFT),
         ("H2_INSPECT", Hand.RIGHT),
     ]
+
+
+@pytest.mark.parametrize(
+    ("hand", "expected_slot"),
+    [
+        (Hand.LEFT, "H2_L04_C01"),
+        (Hand.RIGHT, "H2_L04_C06"),
+    ],
+)
+def test_task1_selects_inventory_column_preferred_by_assigned_hand(
+    hand: Hand, expected_slot: str
+) -> None:
+    inventory = ["H2_L04_C03", "H2_L04_C06", "H2_L04_C01"]
+    task_settings = settings().model_copy(
+        update={
+            "product_grasp_options": {
+                slot: [GraspOption(hands=[hand], target_id="H2_INSPECT")]
+                for slot in inventory
+            }
+        }
+    )
+    orchestrator = Task1Orchestrator(task_settings, None)  # type: ignore[arg-type]
+    target = TargetItem(
+        product_name="多货位商品",
+        sku_id="SKU",
+        product_slot_id=inventory[0],
+        target_id="",
+        shelf_level="L4",
+        hand=Hand.LEFT,
+    )
+
+    planned = orchestrator._plan_grasps([target], [inventory])
+
+    assert target.product_slot_id == expected_slot
+    assert planned == [("H2_INSPECT", hand)]
+
+
+@pytest.mark.parametrize(
+    ("slot", "options", "expected"),
+    [
+        (
+            "H2_L04_C03",
+            [
+                GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT"),
+                GraspOption(hands=[Hand.RIGHT], target_id="H12_INSPECT"),
+            ],
+            ("H12_INSPECT", Hand.RIGHT),
+        ),
+        (
+            "H2_L05_C04",
+            [
+                GraspOption(hands=[Hand.RIGHT], target_id="H2_INSPECT"),
+                GraspOption(hands=[Hand.LEFT], target_id="H23_INSPECT"),
+            ],
+            ("H23_INSPECT", Hand.LEFT),
+        ),
+        (
+            "H2_L03_C03",
+            [
+                GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT"),
+                GraspOption(hands=[Hand.RIGHT], target_id="H12_INSPECT"),
+            ],
+            ("H2_INSPECT", Hand.LEFT),
+        ),
+    ],
+)
+def test_task1_avoids_h2_centerline_only_on_levels_four_and_five(
+    slot: str,
+    options: list[GraspOption],
+    expected: tuple[str, Hand],
+) -> None:
+    task_settings = settings().model_copy(
+        update={"product_grasp_options": {slot: options}}
+    )
+    orchestrator = Task1Orchestrator(task_settings, None)  # type: ignore[arg-type]
+    target = TargetItem(
+        product_name="中间列商品",
+        sku_id="SKU",
+        product_slot_id=slot,
+        target_id="",
+        shelf_level=shelf_level(slot),
+        hand=Hand.LEFT,
+    )
+
+    planned = orchestrator._plan_grasps([target], [[slot]])
+
+    assert planned == [expected]
+
+
+def test_task1_centerline_preference_overrides_same_point_parallel_pick() -> None:
+    slots = ["H2_L05_C03", "H2_L05_C04"]
+    task_settings = settings().model_copy(
+        update={
+            "product_grasp_options": {
+                slots[0]: [
+                    GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT"),
+                    GraspOption(hands=[Hand.RIGHT], target_id="H12_INSPECT"),
+                ],
+                slots[1]: [
+                    GraspOption(hands=[Hand.RIGHT], target_id="H2_INSPECT"),
+                    GraspOption(hands=[Hand.LEFT], target_id="H23_INSPECT"),
+                ],
+            }
+        }
+    )
+    orchestrator = Task1Orchestrator(task_settings, None)  # type: ignore[arg-type]
+    targets = [
+        TargetItem(
+            product_name=f"商品{index}",
+            sku_id=f"SKU-{index}",
+            product_slot_id=slot,
+            target_id="",
+            shelf_level="L5",
+            hand=Hand.LEFT,
+        )
+        for index, slot in enumerate(slots, start=1)
+    ]
+
+    planned = orchestrator._plan_grasps(targets, [[slots[0]], [slots[1]]])
+
+    assert planned == [
+        ("H12_INSPECT", Hand.RIGHT),
+        ("H23_INSPECT", Hand.LEFT),
+    ]
+
+
+def test_task1_centerline_grasp_remains_available_as_fallback() -> None:
+    slot = "H2_L04_C03"
+    task_settings = settings().model_copy(
+        update={
+            "product_grasp_options": {
+                slot: [GraspOption(hands=[Hand.LEFT], target_id="H2_INSPECT")]
+            }
+        }
+    )
+    orchestrator = Task1Orchestrator(task_settings, None)  # type: ignore[arg-type]
+    target = TargetItem(
+        product_name="只能从中间抓的商品",
+        sku_id="SKU",
+        product_slot_id=slot,
+        target_id="",
+        shelf_level="L4",
+        hand=Hand.LEFT,
+    )
+
+    planned = orchestrator._plan_grasps([target], [[slot]])
+
+    assert planned == [("H2_INSPECT", Hand.LEFT)]
 
 
 def test_parallel_pick_eligibility_does_not_require_different_product_names() -> None:

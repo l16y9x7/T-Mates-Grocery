@@ -86,9 +86,21 @@ class SkuApiTest(unittest.TestCase):
         response = self.client.get("/sku/get_all_names")
         self.assertEqual(response.status_code, 200)
         names = response.json()
-        self.assertEqual(len(names), 43)
+        self.assertEqual(len(names), 42)
         self.assertEqual(names[0], "NFC桔汁")
         self.assertEqual(names[-1], "心相印厨房纸巾")
+        self.assertNotIn("脉动猫薄荷瓶", names)
+
+    def test_non_orderable_physical_product_is_not_searchable(self) -> None:
+        by_name = self.client.get(
+            "/sku/search_by_name", params={"name": "脉动猫薄荷瓶"}
+        )
+        by_slot = self.client.get(
+            "/sku/search_by_location", params={"location": "H2_L04_C04"}
+        )
+
+        self.assertEqual(by_name.status_code, 404)
+        self.assertEqual(by_slot.status_code, 404)
 
     def test_get_candidate_sku_for_same_row(self) -> None:
         response = self.client.request(

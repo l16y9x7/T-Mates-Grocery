@@ -55,6 +55,10 @@ PRODUCT_SKUS: dict[str, str] = {
     "心相印厨房纸巾": "SKU_107",
 }
 
+# Keep these names in LAYOUT so the physical columns retain their real slot
+# IDs, but do not publish them through the orderable SKU catalog.
+NON_ORDERABLE_PRODUCTS = {"脉动猫薄荷瓶"}
+
 
 # 层号从上到下；每个数组元素对应一个物理陈列列，允许相邻列为同一 SKU。
 LAYOUT: dict[str, dict[int, list[str]]] = {
@@ -197,6 +201,8 @@ def build() -> dict[str, object]:
     existing_images = load_existing_images()
     products = []
     for name, sku_id in PRODUCT_SKUS.items():
+        if name in NON_ORDERABLE_PRODUCTS:
+            continue
         images = existing_images.get(name) or [f"images/{sku_id}.jpg"]
         products.append(
             {

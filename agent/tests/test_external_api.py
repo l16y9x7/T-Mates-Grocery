@@ -47,6 +47,28 @@ async def test_external_task1_is_accepted_and_converted_to_internal_order() -> N
 
 
 @pytest.mark.asyncio
+async def test_external_task1_accepts_a_single_product_order() -> None:
+    bindings = orchestrators()
+    app = app_for(bindings)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://tasks.local"
+    ) as client:
+        response = await client.post(
+            "/api/external/v1/task1/orders",
+            headers={"Idempotency-Key": "single-order-key"},
+            json={
+                "external_task_id": "single-order-1",
+                "external_order_id": "single-order-1",
+                "items": [{"sku_id": "SKU_001"}],
+            },
+        )
+        await asyncio.sleep(0)
+
+    assert response.status_code == 202
+    assert bindings["1"].last_request.product_names == ["NFC桔汁"]
+
+
+@pytest.mark.asyncio
 async def test_external_requires_idempotency_key_and_accepts_callback_url() -> None:
     app = app_for()
     async with httpx.AsyncClient(

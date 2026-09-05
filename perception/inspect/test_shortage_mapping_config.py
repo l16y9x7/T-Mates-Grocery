@@ -13,10 +13,11 @@ except ImportError:
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+NON_ORDERABLE_SLOTS = {"H2_L04_C04": "脉动猫薄荷瓶"}
 
 
 class ShortageMappingConfigTest(unittest.TestCase):
-    def test_slots_names_and_grasp_targets_match_catalog(self) -> None:
+    def test_slots_names_and_grasp_targets_are_consistent_with_catalog(self) -> None:
         mapping = load_mapping_config()
         catalog_payload = json.loads(
             (REPO_ROOT / "perception" / "sku" / "products.json").read_text(
@@ -48,6 +49,7 @@ class ShortageMappingConfigTest(unittest.TestCase):
                 "H3_INSPECT",
             ],
         )
+        mapped_non_orderable_slots: dict[str, str] = {}
         for target_id, levels in mapping.items():
             mapped_pairs = {
                 (slot_id, name)
@@ -71,11 +73,22 @@ class ShortageMappingConfigTest(unittest.TestCase):
                     )
                 )
             }
-            self.assertEqual({slot for slot, _ in mapped_pairs}, expected_slots)
-            self.assertEqual(
-                {slot: name for slot, name in mapped_pairs},
-                {slot: catalog[slot] for slot in expected_slots},
+            physical_only_pairs = {
+                (slot, name)
+                for slot, name in mapped_pairs
+                if NON_ORDERABLE_SLOTS.get(slot) == name
+            }
+            mapped_non_orderable_slots.update(physical_only_pairs)
+            orderable_pairs = mapped_pairs - physical_only_pairs
+            self.assertLessEqual(
+                {slot for slot, _ in orderable_pairs}, expected_slots
             )
+            mapped_orderable_slots = {slot for slot, _ in orderable_pairs}
+            self.assertEqual(
+                {slot: name for slot, name in orderable_pairs},
+                {slot: catalog[slot] for slot in mapped_orderable_slots},
+            )
+        self.assertEqual(mapped_non_orderable_slots, NON_ORDERABLE_SLOTS)
 
 
 if __name__ == "__main__":

@@ -310,9 +310,9 @@ class Task1Client:
                 "INVALID_RESPONSE", "SKU name list must contain only non-empty strings"
             )
         names = list(dict.fromkeys(name.strip() for name in raw_names))
-        if len(names) < 2:
+        if not names:
             raise Task1ServiceError(
-                "INVALID_RESPONSE", "SKU name list must contain at least two unique names"
+                "INVALID_RESPONSE", "SKU name list must contain at least one unique name"
             )
         return names
 

@@ -256,11 +256,11 @@ class Task1Request(BaseModel):
         if value is None:
             return None
         normalized = [name.strip() for name in value]
-        if len(normalized) != 2:
-            raise ValueError("mock order must contain exactly two products")
+        if len(normalized) not in {1, 2}:
+            raise ValueError("mock order must contain one or two products")
         if any(not name for name in normalized):
             raise ValueError("mock order product names must not be empty")
-        if len(set(normalized)) != 2:
+        if len(set(normalized)) != len(normalized):
             raise ValueError("mock order products must be distinct")
         return normalized
 
@@ -387,8 +387,8 @@ class MockOrderInfo(BaseModel):
 
     order_id: str = Field(min_length=1)
     source: Literal["mock_random"]
-    catalog_size: int = Field(ge=2)
-    product_names: list[str] = Field(min_length=2, max_length=2)
+    catalog_size: int = Field(ge=1)
+    product_names: list[str] = Field(min_length=1, max_length=2)
 
 
 class Task1Result(BaseModel):

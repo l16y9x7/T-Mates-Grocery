@@ -1,9 +1,9 @@
 """Mock ordering-system adapter used by Task 1.
 
 The adapter deliberately loads the SKU catalog for every order so the running
-SKU service remains the source of truth.  A caller may also pass the two names
-shown in the web console; those names are revalidated against the current
-catalog before the order is accepted.
+SKU service remains the source of truth. A caller may also pass one or two
+names shown in the web console; those names are revalidated against the
+current catalog before the order is accepted.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ CatalogLoader = Callable[[], Awaitable[Sequence[str]]]
 
 @dataclass(frozen=True)
 class MockOrder:
-    """One two-product order returned by :class:`MockOrderSystem`."""
+    """One one- or two-product order returned by :class:`MockOrderSystem`."""
 
     order_id: str
     source: str
@@ -31,7 +31,7 @@ class MockOrder:
 
 
 class MockOrderSystem:
-    """Create a two-product mock order from the active SKU catalog."""
+    """Create a one- or two-product mock order from the active SKU catalog."""
 
     def __init__(
         self,
@@ -47,17 +47,23 @@ class MockOrderSystem:
         requested_product_names: Sequence[str] | None = None,
         order_id: str | None = None,
     ) -> MockOrder:
-        """Return a random order or validate the two products selected in the UI."""
+        """Return a two-product random order or validate a manual order."""
 
         catalog = self._normalize_catalog(await self._catalog_loader())
-        if len(catalog) < 2:
+        if not catalog:
             raise Task1ServiceError(
                 "MOCK_ORDER_CATALOG_UNAVAILABLE",
-                "mock order catalog must contain at least two unique product names",
+                "mock order catalog must contain at least one unique product name",
                 status_code=422,
             )
 
         if requested_product_names is None:
+            if len(catalog) < 2:
+                raise Task1ServiceError(
+                    "MOCK_ORDER_CATALOG_UNAVAILABLE",
+                    "random mock orders require at least two unique product names",
+                    status_code=422,
+                )
             sampled = set(self._rng.sample(catalog, 2))
             # Sampling decides which products are selected; catalog order keeps
             # downstream behavior deterministic for a fixed selected pair.
@@ -117,20 +123,24 @@ class MockOrderSystem:
         if isinstance(requested_product_names, (str, bytes)):
             raise Task1ServiceError(
                 "INVALID_MOCK_ORDER_PRODUCTS",
-                "mock order must contain exactly two product names",
+                "mock order must contain one or two product names",
                 status_code=422,
             )
 
         requested = list(requested_product_names)
-        if len(requested) != 2 or any(not isinstance(name, str) for name in requested):
+        if len(requested) not in {1, 2} or any(
+            not isinstance(name, str) for name in requested
+        ):
             raise Task1ServiceError(
                 "INVALID_MOCK_ORDER_PRODUCTS",
-                "mock order must contain exactly two product names",
+                "mock order must contain one or two product names",
                 status_code=422,
             )
 
         normalized = [name.strip() for name in requested]
-        if any(not name for name in normalized) or len(set(normalized)) != 2:
+        if any(not name for name in normalized) or len(set(normalized)) != len(
+            normalized
+        ):
             raise Task1ServiceError(
                 "INVALID_MOCK_ORDER_PRODUCTS",
                 "mock order product names must be non-empty and distinct",

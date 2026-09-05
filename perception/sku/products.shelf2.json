@@ -224,19 +224,6 @@
       "inventory": [
         "H2_L04_C03"
       ]
-    },
-    {
-      "sku_id": "SKU_087",
-      "name": "脉动猫薄荷瓶",
-      "images": [
-        "images/SKU_087.jpg"
-      ],
-      "locations": [
-        "H2_L04_C04"
-      ],
-      "inventory": [
-        "H2_L04_C04"
-      ]
     }
   ]
 }

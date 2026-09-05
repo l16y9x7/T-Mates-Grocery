@@ -373,7 +373,7 @@ class Task1Orchestrator:
                 picked_count=picked_count,
                 placed_count=placed_count,
                 failed_attempt_count=len(action_failures),
-                partial=placed_count < 2,
+                partial=placed_count < len(product_names),
                 uncertain_hands=[hand.value for hand in sorted(uncertain_hands)],
                 interface_metrics=[
                     metric.model_dump(mode="json")
@@ -489,6 +489,84 @@ class Task1Orchestrator:
         )
         return [(target_id, Hand(hand)) for hand in hands]
 
+    def _inventory_grasp_choices(
+        self, slots: list[str]
+    ) -> list[tuple[str, str, Hand]]:
+        """Order inventory slots by the column preferred by each hand."""
+
+        capability_order: dict[tuple[str, Hand], int] = {}
+        choices: list[tuple[str, str, Hand]] = []
+        for slot in slots:
+            for target_id, hand in self._grasp_choices(slot):
+                capability_order.setdefault(
+                    (target_id, hand), len(capability_order)
+                )
+                choices.append((slot, target_id, hand))
+
+        def priority(choice: tuple[str, str, Hand]) -> tuple[int, int, int, str]:
+            slot, target_id, hand = choice
+            column = int(slot.rsplit("_C", 1)[1])
+            preferred_column = column if hand is Hand.LEFT else -column
+            return (
+                capability_order[(target_id, hand)],
+                preferred_column,
+                SHELF_LEVEL_PRIORITY[shelf_level(slot)],
+                slot,
+            )
+
+        return sorted(choices, key=priority)
+
+    @staticmethod
+    def _is_centerline_grasp_choice(choice: tuple[str, str, Hand]) -> bool:
+        """Return whether an L4/L5 H2 grasp reaches near the body centerline."""
+
+        slot, target_id, hand = choice
+        if target_id != "H2_INSPECT" or shelf_level(slot) not in {"L4", "L5"}:
+            return False
+        column = int(slot.rsplit("_C", 1)[1])
+        return (hand is Hand.LEFT and column == 3) or (
+            hand is Hand.RIGHT and column == 4
+        )
+
+    @staticmethod
+    def _select_grasp_plan(
+        choices: list[list[tuple[str, str, Hand]]],
+    ) -> list[tuple[str, str, Hand]] | None:
+        if len(choices) != 2:
+            return [item[0] for item in choices]
+
+        # Prefer a pair that can share both navigation and shelf pose so its
+        # left/right pick requests can run concurrently. Fall back to the
+        # same-target and finally the serial two-target carrying plans.
+        for require_same_target, require_same_level in (
+            (True, True),
+            (True, False),
+            (False, False),
+        ):
+            for first in choices[0]:
+                for second in choices[1]:
+                    if first[0] == second[0] or first[2] == second[2]:
+                        continue
+                    if require_same_target and first[1] != second[1]:
+                        continue
+                    if (
+                        require_same_level
+                        and shelf_level(first[0]) != shelf_level(second[0])
+                    ):
+                        continue
+                    return [first, second]
+
+        selected_pair = next(
+            (
+                (first, second)
+                for first in choices[0]
+                for second in choices[1]
+                if first[0] != second[0]
+            ),
+            None,
+        )
+        return list(selected_pair) if selected_pair is not None else None
+
     def _plan_grasps(
         self,
         targets: list[TargetItem],
@@ -498,11 +576,7 @@ class Task1Orchestrator:
             [target.product_slot_id] for target in targets
         ]
         choices = [
-            [
-                (slot, target_id, hand)
-                for slot in slots
-                for target_id, hand in self._grasp_choices(slot)
-            ]
+            self._inventory_grasp_choices(slots)
             for slots in candidates
         ]
         if any(not item for item in choices):
@@ -511,52 +585,27 @@ class Task1Orchestrator:
                 "one or more products have no grasp option",
                 status_code=422,
             )
-        if len(choices) == 2:
-            # Prefer a pair that can share both navigation and shelf pose so its
-            # left/right pick requests can run concurrently. Fall back to the
-            # previous same-target and two-target carrying plans when needed.
-            for require_same_target, require_same_level in (
-                (True, True),
-                (True, False),
-                (False, False),
-            ):
-                for first in choices[0]:
-                    for second in choices[1]:
-                        if first[0] == second[0] or first[2] == second[2]:
-                            continue
-                        if require_same_target and first[1] != second[1]:
-                            continue
-                        if (
-                            require_same_level
-                            and shelf_level(first[0]) != shelf_level(second[0])
-                        ):
-                            continue
-                        targets[0].product_slot_id = first[0]
-                        targets[0].shelf_level = shelf_level(first[0])
-                        targets[1].product_slot_id = second[0]
-                        targets[1].shelf_level = shelf_level(second[0])
-                        return [(first[1], first[2]), (second[1], second[2])]
-            # No distinct left/right pair exists. A serial two-trip plan is still
-            # valid, but the two requested products cannot refer to one physical
-            # slot even when the SKU service returns overlapping candidates.
-            selected_pair = next(
-                (
-                    (first, second)
-                    for first in choices[0]
-                    for second in choices[1]
-                    if first[0] != second[0]
-                ),
-                None,
+
+        if not choices:
+            return []
+        preferred_choices = []
+        for item in choices:
+            away_from_centerline = [
+                choice
+                for choice in item
+                if not self._is_centerline_grasp_choice(choice)
+            ]
+            preferred_choices.append(away_from_centerline or item)
+
+        selected = self._select_grasp_plan(preferred_choices)
+        if selected is None and preferred_choices != choices:
+            selected = self._select_grasp_plan(choices)
+        if selected is None:
+            raise Task1ServiceError(
+                "NO_FEASIBLE_HAND_ASSIGNMENT",
+                "two products have no distinct physical slot assignment",
+                status_code=422,
             )
-            if selected_pair is None:
-                raise Task1ServiceError(
-                    "NO_FEASIBLE_HAND_ASSIGNMENT",
-                    "two products have no distinct physical slot assignment",
-                    status_code=422,
-                )
-            selected = list(selected_pair)
-        else:
-            selected = [item[0] for item in choices]
         # No left/right pair exists: execute the one-item-per-trip path.
         for target, (slot, _, _) in zip(targets, selected):
             target.product_slot_id = slot
