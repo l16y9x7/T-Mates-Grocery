@@ -20,9 +20,7 @@ tasks:
   shared:
     inspection_points:
     - H1_INSPECT
-    - H12_INSPECT
     - H2_INSPECT
-    - H23_INSPECT
     - H3_INSPECT
     start_target_id: start
     capture_settle_seconds: 2
@@ -55,9 +53,7 @@ tasks:
   task2:
     inspection_points:
     - H1_INSPECT
-    - H12_INSPECT
     - H2_INSPECT
-    - H23_INSPECT
     - H3_INSPECT
     replenishment_pickup: replenishment_pickup
     timeouts:

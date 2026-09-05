@@ -5,12 +5,14 @@ import binascii
 import hashlib
 import io
 import json
+import logging
 import math
 import mimetypes
 import os
 import re
 import sys
 import tempfile
+import time
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -301,6 +303,7 @@ HARD_CASE_GROUPS: dict[str, HardCaseGroupConfig] = {
 
 app = FastAPI(title="Sorting Pick Locate", version="2.0.0")
 router = APIRouter()
+logger = logging.getLogger("uvicorn.error")
 
 
 class LocateRequest(BaseModel):
@@ -421,6 +424,56 @@ class LocateResponse(BaseModel):
     image_path: str
 
 
+def locate_request_log_summary(request: LocateRequest) -> dict[str, Any]:
+    """Return request parameters without writing image or prompt bodies to logs."""
+    summary: dict[str, Any] = {
+        "task_type": request.task_type,
+        "product_name": request.product_name,
+        "level": request.level,
+        "hand": request.hand,
+        "slot_id": request.slot_id,
+        "target_id": request.target_id,
+        "image_name": request.image_name,
+        "image_provided": request.image_base64 is not None,
+        "image_base64_chars": len(request.image_base64 or ""),
+        "depth_image_name": request.depth_image_name,
+        "depth_image_provided": request.depth_image_base64 is not None,
+        "depth_image_base64_chars": len(request.depth_image_base64 or ""),
+        "depth_is_bigendian": request.depth_is_bigendian,
+        "qwen3_prompt_override": bool((request.qwen3_prompt or "").strip()),
+        "qwen3_prompt_chars": len(request.qwen3_prompt or ""),
+        "sam3_prompt_override": bool((request.sam3_prompt or "").strip()),
+        "sam3_prompt_chars": len(request.sam3_prompt or ""),
+        "previous_picked_bboxes": request.previous_picked_bboxes,
+    }
+    if isinstance(request, LocateDebugRequest):
+        summary["mock_inventory"] = request.mock_inventory
+    return summary
+
+
+def locate_debug_response_log_summary(
+    response: LocateDebugResponse,
+) -> dict[str, Any]:
+    """Return the useful locate result fields without masks, images, or prompts."""
+    selected = response.selected_instance
+    return {
+        "sku_id": response.sku_id,
+        "product_name": response.product_name,
+        "image_name": response.image_name,
+        "image_size": response.image_size,
+        "raw_qwen_bbox_count": len(response.raw_qwen_bboxes),
+        "qwen_bbox_count": len(response.qwen_bboxes),
+        "raw_sam_instance_count": len(response.raw_sam_instances),
+        "final_instance_count": len(response.instances),
+        "selected_instance_index": response.selected_instance_index,
+        "selected_slot_id": selected.mapped_slot_id if selected is not None else None,
+        "selected_bbox": selected.bbox if selected is not None else None,
+        "hard_case": response.hard_case is not None,
+        "error": response.error,
+        "error_status_code": response.error_status_code,
+    }
+
+
 def get_latest_rgb(camera: str = "left") -> Path:
     """只读取相机快照接口；不可用或内容无效时返回 HTTP 400。"""
     normalized_camera = camera.strip().lower()
@@ -439,9 +492,13 @@ def fetch_camera_snapshot(camera: str = "left") -> Path | None:
     """获取并验证相机快照；任何读取错误都返回 None。"""
     normalized_camera = camera.strip().lower()
     camera_url = CAMERA_SNAPSHOT_URLS.get(normalized_camera)
-    print("CAMERA_URL:", camera_url)
     if camera_url is None:
         raise HTTPException(status_code=400, detail="camera 只能是 left、right 或 head")
+    logger.info(
+        "Pick Locate camera snapshot request camera=%s url=%s",
+        normalized_camera,
+        camera_url,
+    )
     try:
         response = requests.get(
             camera_url,
@@ -449,16 +506,32 @@ def fetch_camera_snapshot(camera: str = "left") -> Path | None:
         )
         response.raise_for_status()
         image_bytes = response.content
-    except requests.RequestException:
+    except requests.RequestException as error:
+        logger.warning(
+            "Pick Locate camera snapshot failed camera=%s error=%s",
+            normalized_camera,
+            error,
+        )
         return None
 
     if not image_bytes or len(image_bytes) > 20 * 1024 * 1024:
+        logger.warning(
+            "Pick Locate camera snapshot invalid size camera=%s bytes=%s",
+            normalized_camera,
+            len(image_bytes),
+        )
         return None
     try:
         with Image.open(io.BytesIO(image_bytes)) as source_image:
             image_format = (source_image.format or "").upper()
             source_image.verify()
-    except (UnidentifiedImageError, OSError, ValueError):
+    except (UnidentifiedImageError, OSError, ValueError) as error:
+        logger.warning(
+            "Pick Locate camera snapshot invalid image camera=%s bytes=%s error=%s",
+            normalized_camera,
+            len(image_bytes),
+            error,
+        )
         return None
 
     suffix = {"JPEG": ".jpg", "PNG": ".png"}.get(image_format)
@@ -470,8 +543,21 @@ def fetch_camera_snapshot(camera: str = "left") -> Path | None:
     try:
         CAMERA_SNAPSHOT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
         write_bytes_atomically(snapshot_path, image_bytes)
-    except OSError:
+    except OSError as error:
+        logger.warning(
+            "Pick Locate camera snapshot save failed camera=%s path=%s error=%s",
+            normalized_camera,
+            snapshot_path,
+            error,
+        )
         return None
+    logger.info(
+        "Pick Locate camera snapshot succeeded camera=%s bytes=%s format=%s path=%s",
+        normalized_camera,
+        len(image_bytes),
+        image_format,
+        snapshot_path,
+    )
     return snapshot_path
 
 
@@ -1581,7 +1667,14 @@ def call_qwen3(
             ]
         )
     content.append(qwen_image_content(image_bytes, media_type))
-    print(f"[Locate Qwen3] prompt before request:\n{prompt}", flush=True)
+    logger.info(
+        "Pick Locate Qwen3 request model=%s prompt_chars=%s image_bytes=%s "
+        "reference_image=%s",
+        QWEN3_MODEL,
+        len(prompt),
+        len(image_bytes),
+        reference_image.logical_name if reference_image is not None else None,
+    )
     response = requests.post(
         QWEN3_URL,
         json={
@@ -1602,6 +1695,10 @@ def call_qwen3(
     content = payload["choices"][0]["message"]["content"]
     if not isinstance(content, str):
         raise TypeError("Qwen3 message content 不是字符串")
+    logger.info(
+        "Pick Locate Qwen3 response received content_chars=%s",
+        len(content),
+    )
     return content
 
 
@@ -1756,9 +1853,20 @@ def get_stable_qwen_bboxes(
                 if reference_image is not None
                 else call_qwen3(prompt, image_source)
             )
-            samples.append((sample_index, parse_qwen_detections(content)))
+            detections = parse_qwen_detections(content)
+            samples.append((sample_index, detections))
+            logger.info(
+                "Pick Locate Qwen3 sample succeeded sample=%s detection_count=%s",
+                sample_index,
+                len(detections),
+            )
         except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as error:
             errors.append(f"第 {sample_index} 次: {error}")
+            logger.warning(
+                "Pick Locate Qwen3 sample failed sample=%s error=%s",
+                sample_index,
+                error,
+            )
 
     if len(samples) < 2:
         detail = "; ".join(errors) or "成功采样不足两次"
@@ -1770,6 +1878,13 @@ def get_stable_qwen_bboxes(
             status_code=404,
             detail=f"Qwen3 没有产生跨采样 IoU > {QWEN_CONSENSUS_IOU} 的稳定 bbox",
         )
+    logger.info(
+        "Pick Locate Qwen3 consensus completed successful_samples=%s "
+        "failed_samples=%s bbox_count=%s",
+        len(samples),
+        len(errors),
+        len(bboxes),
+    )
     return QwenConsensusBBoxes(bboxes, samples)
 
 
@@ -1850,10 +1965,18 @@ def map_crop_box_between_sizes(
 def call_sam3(prompt: str, crop_image: Image.Image) -> list[dict[str, Any]]:
     buffer = io.BytesIO()
     crop_image.save(buffer, format="JPEG", quality=95)
+    image_bytes = buffer.getvalue()
+    logger.info(
+        "Pick Locate SAM3 request crop_size=%sx%s image_bytes=%s prompt_chars=%s",
+        crop_image.width,
+        crop_image.height,
+        len(image_bytes),
+        len(prompt),
+    )
     try:
         response = requests.post(
             SAM3_URL,
-            files={"image": ("qwen_crop.jpg", buffer.getvalue(), "image/jpeg")},
+            files={"image": ("qwen_crop.jpg", image_bytes, "image/jpeg")},
             data={
                 "prompt": prompt,
                 "threshold": SAM3_THRESHOLD,
@@ -1871,6 +1994,10 @@ def call_sam3(prompt: str, crop_image: Image.Image) -> list[dict[str, Any]]:
     instances = payload.get("instances") if isinstance(payload, dict) else None
     if not isinstance(instances, list):
         raise HTTPException(status_code=502, detail="SAM3 响应缺少 instances 数组")
+    logger.info(
+        "Pick Locate SAM3 response received instance_count=%s",
+        len(instances),
+    )
     return instances
 
 
@@ -3439,6 +3566,25 @@ def locate_product_in_image(
     inference_image, inference_image_bytes = prepare_rgb_inference_image(
         original_image
     )
+    logger.info(
+        "Pick Locate inference started task_type=%s product_name=%s sku_id=%s "
+        "level=%s hand=%s slot_id=%s target_id=%s image_name=%s "
+        "image_size=%sx%s hard_case=%s inventory_slots=%s "
+        "inventory_row_mapping=%s",
+        task_type,
+        canonical_name,
+        product.get("sku_id"),
+        normalized_level,
+        hand,
+        slot_id,
+        target_id,
+        image_path.name,
+        original_image.width,
+        original_image.height,
+        hard_case is not None,
+        inventory_slots,
+        inventory_row_mapping,
+    )
 
     qwen_reference_image = (
         fetch_sku_reference_image(product)
@@ -3523,6 +3669,14 @@ def locate_product_in_image(
         raise HTTPException(status_code=404, detail="SAM3 没有找到目标商品实例")
 
     raw_sam_instances = list(located_instances)
+    logger.info(
+        "Pick Locate detections collected product_name=%s stable_qwen_bbox_count=%s "
+        "raw_qwen_detection_count=%s raw_sam_instance_count=%s",
+        canonical_name,
+        len(qwen_bbox_records),
+        len(raw_qwen_bbox_records),
+        len(raw_sam_instances),
+    )
     upper_confidence_pick = (
         hard_case is None
         and uses_upper_confidence_pick(canonical_name, task_type)
@@ -3671,6 +3825,18 @@ def locate_product_in_image(
         index
         for index, instance in enumerate(located_instances, start=1)
         if instance is selected_instance
+    )
+    logger.info(
+        "Pick Locate selection completed product_name=%s final_instance_count=%s "
+        "selected_instance_index=%s selected_slot_id=%s selected_bbox=%s "
+        "selected_depth_mm=%s shelf_front_distance_ratio=%s",
+        canonical_name,
+        len(located_instances),
+        selected_instance_index,
+        selected_instance.mapped_slot_id,
+        selected_instance.bbox,
+        selected_instance.depth_mm,
+        selected_instance.shelf_front_distance_ratio,
     )
 
     return LocateDebugResponse(
@@ -3974,17 +4140,92 @@ def make_locate_response(debug_response: LocateDebugResponse) -> LocateResponse:
 
 @router.post("/perception/pick/locate", response_model=LocateResponse)
 def locate_product(request: LocateRequest) -> LocateResponse:
-    return make_locate_response(locate_product_debug(request))
+    endpoint = "/perception/pick/locate"
+    request_summary = locate_request_log_summary(request)
+    started_at = time.perf_counter()
+    logger.info(
+        "Pick Locate request received endpoint=%s input=%s",
+        endpoint,
+        json.dumps(request_summary, ensure_ascii=False),
+    )
+    try:
+        debug_response = locate_product_debug(request)
+        response = make_locate_response(debug_response)
+    except HTTPException as error:
+        logger.warning(
+            "Pick Locate request failed endpoint=%s duration_ms=%.1f "
+            "status_code=%s detail=%s",
+            endpoint,
+            (time.perf_counter() - started_at) * 1000,
+            error.status_code,
+            error.detail,
+        )
+        raise
+    except Exception:
+        logger.exception(
+            "Pick Locate request crashed endpoint=%s duration_ms=%.1f",
+            endpoint,
+            (time.perf_counter() - started_at) * 1000,
+        )
+        raise
+    logger.info(
+        "Pick Locate request succeeded endpoint=%s duration_ms=%.1f result=%s",
+        endpoint,
+        (time.perf_counter() - started_at) * 1000,
+        json.dumps(
+            {
+                **locate_debug_response_log_summary(debug_response),
+                "response_slot_id": response.slot_id,
+                "response_bbox": response.bbox,
+                "image_path": response.image_path,
+            },
+            ensure_ascii=False,
+        ),
+    )
+    return response
 
 
 @router.post("/perception/pick/locate/debug", response_model=LocateDebugResponse)
 def locate_product_debug_api(request: LocateDebugRequest) -> LocateDebugResponse:
-    return locate_product_debug(
-        request,
-        capture_inference_errors=True,
-        allow_prompt_overrides=True,
-        mock_inventory=request.mock_inventory,
+    endpoint = "/perception/pick/locate/debug"
+    request_summary = locate_request_log_summary(request)
+    started_at = time.perf_counter()
+    logger.info(
+        "Pick Locate request received endpoint=%s input=%s",
+        endpoint,
+        json.dumps(request_summary, ensure_ascii=False),
     )
+    try:
+        response = locate_product_debug(
+            request,
+            capture_inference_errors=True,
+            allow_prompt_overrides=True,
+            mock_inventory=request.mock_inventory,
+        )
+    except HTTPException as error:
+        logger.warning(
+            "Pick Locate request failed endpoint=%s duration_ms=%.1f "
+            "status_code=%s detail=%s",
+            endpoint,
+            (time.perf_counter() - started_at) * 1000,
+            error.status_code,
+            error.detail,
+        )
+        raise
+    except Exception:
+        logger.exception(
+            "Pick Locate request crashed endpoint=%s duration_ms=%.1f",
+            endpoint,
+            (time.perf_counter() - started_at) * 1000,
+        )
+        raise
+    logger.info(
+        "Pick Locate request completed endpoint=%s duration_ms=%.1f result=%s",
+        endpoint,
+        (time.perf_counter() - started_at) * 1000,
+        json.dumps(locate_debug_response_log_summary(response), ensure_ascii=False),
+    )
+    return response
 
 
 app.include_router(router)
